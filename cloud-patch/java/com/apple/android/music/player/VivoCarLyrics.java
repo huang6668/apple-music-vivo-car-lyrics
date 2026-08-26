@@ -1,0 +1,753 @@
+package com.apple.android.music.player;
+
+import android.app.Application;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Html;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class VivoCarLyrics {
+    private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
+    private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
+    private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
+    private static final String EXTRA_LINE = "music.media.extras.LYRIC";
+    private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
+    private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
+
+    private static final int STATUS_SUCCESS = 0;
+    private static final int STATUS_NO_LYRICS = 1;
+    private static final int STATUS_LOADING = 2;
+    private static final int STATUS_FAILED = 3;
+    private static final int MAX_LOAD_ATTEMPTS = 15;
+    private static final long LOAD_RETRY_MS = 200L;
+    private static final long LINE_POLL_MS = 250L;
+
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final AtomicLong GENERATION = new AtomicLong();
+    private static final Object STATE_LOCK = new Object();
+    private static final Pattern LRC_TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
+
+    private static volatile Object currentManager;
+    private static volatile String currentTrackKey = "";
+    private static volatile Object currentPlaybackItem;
+    private static volatile long[] lineTimes = new long[0];
+    private static volatile String[] lineTexts = new String[0];
+    private static volatile String wholeLyrics = "";
+    private static String lastLine;
+    private static String lastWhole;
+    private static int lastStatus = Integer.MIN_VALUE;
+
+    private VivoCarLyrics() {
+    }
+
+    public static void onCurrentItemChanged(Object playbackManager, Object newQueueItem) {
+        try {
+            long generation = GENERATION.incrementAndGet();
+            currentManager = playbackManager;
+            currentTrackKey = queueKey(newQueueItem);
+            currentPlaybackItem = null;
+            lineTimes = new long[0];
+            lineTexts = new String[0];
+            wholeLyrics = "";
+            resetPublishCache();
+            publishExtras(playbackManager, "");
+
+            if (newQueueItem == null) {
+                requestPublish(playbackManager, "", "-1", STATUS_NO_LYRICS, generation);
+                return;
+            }
+
+            long expectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
+            MAIN.postDelayed(new LoadTask(playbackManager, generation, expectedQueueId, 0), LOAD_RETRY_MS);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static void onMetadataUpdated(Object playbackManager, Object queueItem) {
+        try {
+            String key = queueKey(queueItem);
+            if (!key.isEmpty() && !key.equals(currentTrackKey)) {
+                onCurrentItemChanged(playbackManager, queueItem);
+                return;
+            }
+            long generation = GENERATION.get();
+            MAIN.postDelayed(new MetadataReapplyTask(playbackManager, generation), 100L);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static void onPlaybackError(Object playbackManager) {
+        try {
+            long generation = GENERATION.incrementAndGet();
+            currentManager = playbackManager;
+            currentPlaybackItem = null;
+            lineTimes = new long[0];
+            lineTexts = new String[0];
+            wholeLyrics = "";
+            resetPublishCache();
+            requestPublish(playbackManager, "", "-1", STATUS_FAILED, generation);
+            MAIN.postDelayed(new MetadataReapplyTask(playbackManager, generation), 150L);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static final class MetadataReapplyTask implements Runnable {
+        private final Object manager;
+        private final long generation;
+
+        MetadataReapplyTask(Object manager, long generation) {
+            this.manager = manager;
+            this.generation = generation;
+        }
+
+        @Override
+        public void run() {
+            if (!isCurrent(manager, generation) || metadataHasCarKeys(manager)) {
+                return;
+            }
+
+            String line;
+            String whole;
+            int status;
+            synchronized (STATE_LOCK) {
+                line = lastLine;
+                whole = lastWhole;
+                status = lastStatus;
+                lastLine = null;
+                lastWhole = null;
+                lastStatus = Integer.MIN_VALUE;
+            }
+            if (status != Integer.MIN_VALUE) {
+                requestPublish(manager, line == null ? "" : line, whole == null ? "" : whole,
+                        status, generation);
+            }
+        }
+    }
+
+    private static final class LoadTask implements Runnable {
+        private final Object manager;
+        private final long generation;
+        private final long expectedQueueId;
+        private final int attempt;
+
+        LoadTask(Object manager, long generation, long expectedQueueId, int attempt) {
+            this.manager = manager;
+            this.generation = generation;
+            this.expectedQueueId = expectedQueueId;
+            this.attempt = attempt;
+        }
+
+        @Override
+        public void run() {
+            if (!isCurrent(manager, generation)) {
+                return;
+            }
+
+            try {
+                Object playbackItem = currentPlaybackItem(manager);
+                long queueId = longValue(invokeOptional(playbackItem, "getQueueId"), 0L);
+                if (playbackItem == null || (expectedQueueId > 0L && queueId > 0L && expectedQueueId != queueId)) {
+                    retryOrFail();
+                    return;
+                }
+
+                currentPlaybackItem = playbackItem;
+                requestPublish(manager, "", "", STATUS_LOADING, generation);
+
+                boolean hasLyrics = booleanValue(invokeOptional(playbackItem, "hasLyrics"));
+                boolean hasCustomLyrics = booleanValue(invokeOptional(playbackItem, "hasCustomLyrics"));
+                if (hasCustomLyrics) {
+                    String custom = stringValue(invokeOptional(playbackItem, "getCustomLyrics"));
+                    if (!custom.trim().isEmpty()) {
+                        consumeRawLyrics(manager, generation, custom, controllerDuration(manager));
+                        return;
+                    }
+                }
+
+                if (!hasLyrics && !hasCustomLyrics) {
+                    requestPublish(manager, "", "-1", STATUS_NO_LYRICS, generation);
+                    return;
+                }
+
+                loadWithAppleViewModel(manager, generation, playbackItem);
+            } catch (Throwable ignored) {
+                retryOrFail();
+            }
+        }
+
+        private void retryOrFail() {
+            if (!isCurrent(manager, generation)) {
+                return;
+            }
+            if (attempt + 1 < MAX_LOAD_ATTEMPTS) {
+                MAIN.postDelayed(new LoadTask(manager, generation, expectedQueueId, attempt + 1), LOAD_RETRY_MS);
+            } else {
+                requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+            }
+        }
+    }
+
+    private static void loadWithAppleViewModel(Object manager, long generation, Object playbackItem) throws Exception {
+        Application application = appleApplication();
+        Class<?> viewModelClass = Class.forName("com.apple.android.music.player.viewmodel.PlayerLyricsViewModel");
+        Constructor<?> constructor = viewModelClass.getConstructor(Application.class);
+        Object viewModel = constructor.newInstance(application);
+        Object liveData = invokeRequired(viewModel, "getLyricsResult");
+        Class<?> observerType = Class.forName("androidx.lifecycle.L");
+        LyricsObserver handler = new LyricsObserver(manager, generation, playbackItem, liveData, observerType);
+        Object observer = Proxy.newProxyInstance(observerType.getClassLoader(), new Class<?>[]{observerType}, handler);
+        handler.observer = observer;
+        Method observeForever = liveData.getClass().getMethod("observeForever", observerType);
+        observeForever.invoke(liveData, observer);
+        invokeRequired(viewModel, "loadLyrics", playbackItem);
+    }
+
+    private static final class LyricsObserver implements InvocationHandler {
+        private final Object manager;
+        private final long generation;
+        private final Object playbackItem;
+        private final Object liveData;
+        private final Class<?> observerType;
+        private Object observer;
+        private boolean consumed;
+
+        LyricsObserver(Object manager, long generation, Object playbackItem, Object liveData, Class<?> observerType) {
+            this.manager = manager;
+            this.generation = generation;
+            this.playbackItem = playbackItem;
+            this.liveData = liveData;
+            this.observerType = observerType;
+        }
+
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) {
+            String name = method.getName();
+            if ("hashCode".equals(name)) {
+                return System.identityHashCode(proxy);
+            }
+            if ("equals".equals(name)) {
+                return args != null && args.length == 1 && proxy == args[0];
+            }
+            if ("toString".equals(name)) {
+                return "VivoCarLyricsObserver";
+            }
+            if (!"onChanged".equals(name) || consumed || args == null || args.length == 0 || args[0] == null) {
+                return null;
+            }
+
+            consumed = true;
+            removeObserver();
+            if (!isCurrent(manager, generation)) {
+                return null;
+            }
+
+            try {
+                Object pair = args[0];
+                Object songInfoPtr = invokeRequired(pair, "component1");
+                Object error = invokeRequired(pair, "component2");
+                if (error != null) {
+                    requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+                } else if (songInfoPtr == null) {
+                    String custom = stringValue(invokeOptional(playbackItem, "getCustomLyrics"));
+                    if (custom.trim().isEmpty()) {
+                        requestPublish(manager, "", "-1", STATUS_NO_LYRICS, generation);
+                    } else {
+                        consumeRawLyrics(manager, generation, custom, controllerDuration(manager));
+                    }
+                } else {
+                    consumeSongInfo(manager, generation, songInfoPtr);
+                }
+            } catch (Throwable ignored) {
+                requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+            }
+            return null;
+        }
+
+        private void removeObserver() {
+            try {
+                Method remove = liveData.getClass().getMethod("removeObserver", observerType);
+                remove.invoke(liveData, observer);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static void consumeSongInfo(Object manager, long generation, Object songInfoPtr) throws Exception {
+        Object songInfo = invokeRequired(songInfoPtr, "get");
+        Object sections = invokeRequired(songInfo, "getSections");
+        Class<?> lineAccessClass = Class.forName("com.apple.android.music.ttml.i");
+        Object lineAccess = constructCompatible(lineAccessClass, sections);
+        int count = intValue(invokeRequired(lineAccess, "b"), 0);
+        ArrayList<Long> times = new ArrayList<Long>();
+        ArrayList<String> texts = new ArrayList<String>();
+
+        for (int index = 0; index < count; index++) {
+            Object linePtr = invokeRequired(lineAccess, "a", Integer.valueOf(index));
+            Object line = invokeRequired(linePtr, "get");
+            long begin = Math.max(0L, longValue(invokeRequired(line, "getBegin"), 0L));
+            String text = plainText(stringValue(invokeRequired(line, "getHtmlLineText")));
+            appendLine(times, texts, begin, text);
+        }
+
+        long duration = controllerDuration(manager);
+        if (duration <= 0L) {
+            duration = longValue(invokeOptional(songInfo, "getDuration"), 0L);
+        }
+        publishLines(manager, generation, times, texts, duration);
+    }
+
+    private static void consumeRawLyrics(Object manager, long generation, String raw, long duration) {
+        ArrayList<Long> times = new ArrayList<Long>();
+        ArrayList<String> texts = new ArrayList<String>();
+        String[] rows = raw.replace("\r", "").split("\n");
+        for (String row : rows) {
+            Matcher matcher = LRC_TIME.matcher(row);
+            String clean = plainText(matcher.replaceAll(""));
+            matcher.reset();
+            boolean found = matcher.find();
+            matcher.reset();
+            while (matcher.find()) {
+                long minutes = Long.parseLong(matcher.group(1));
+                long seconds = Long.parseLong(matcher.group(2));
+                long fraction = fractionMillis(matcher.group(3));
+                appendLine(times, texts, minutes * 60000L + seconds * 1000L + fraction, clean);
+            }
+            if (!found && !clean.isEmpty()) {
+                times.add(Long.valueOf(0L));
+                texts.add(clean);
+            }
+        }
+        publishLines(manager, generation, times, texts, duration);
+    }
+
+    private static void publishLines(Object manager, long generation, List<Long> sourceTimes,
+                                     List<String> sourceTexts, long duration) {
+        if (!isCurrent(manager, generation)) {
+            return;
+        }
+        if (sourceTexts.isEmpty()) {
+            requestPublish(manager, "", "-1", STATUS_NO_LYRICS, generation);
+            return;
+        }
+
+        long[] times = new long[sourceTimes.size()];
+        String[] texts = sourceTexts.toArray(new String[sourceTexts.size()]);
+        boolean hasIncreasingTime = false;
+        for (int index = 0; index < times.length; index++) {
+            times[index] = sourceTimes.get(index).longValue();
+            if (index > 0 && times[index] > times[index - 1]) {
+                hasIncreasingTime = true;
+            }
+        }
+        if (times.length > 1 && !hasIncreasingTime) {
+            long step = duration > 0L ? Math.max(1000L, duration / times.length) : 5000L;
+            for (int index = 0; index < times.length; index++) {
+                times[index] = index * step;
+            }
+        }
+
+        StringBuilder lrc = new StringBuilder();
+        for (int index = 0; index < texts.length; index++) {
+            lrc.append(formatTime(times[index])).append(texts[index]);
+            if (index + 1 < texts.length) {
+                lrc.append('\n');
+            }
+        }
+
+        lineTimes = times;
+        lineTexts = texts;
+        wholeLyrics = lrc.toString();
+        String currentLine = lineForPosition(controllerPosition(manager), times, texts);
+        requestPublish(manager, currentLine, wholeLyrics, STATUS_SUCCESS, generation);
+        MAIN.postDelayed(new LineTick(manager, generation), LINE_POLL_MS);
+    }
+
+    private static final class LineTick implements Runnable {
+        private final Object manager;
+        private final long generation;
+
+        LineTick(Object manager, long generation) {
+            this.manager = manager;
+            this.generation = generation;
+        }
+
+        @Override
+        public void run() {
+            if (!isCurrent(manager, generation)) {
+                return;
+            }
+            long[] times = lineTimes;
+            String[] texts = lineTexts;
+            if (times.length == 0 || texts.length == 0) {
+                return;
+            }
+            String currentLine = lineForPosition(controllerPosition(manager), times, texts);
+            requestPublish(manager, currentLine, wholeLyrics, STATUS_SUCCESS, generation);
+            MAIN.postDelayed(this, LINE_POLL_MS);
+        }
+    }
+
+    private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+        String clean = text.trim();
+        int last = times.size() - 1;
+        if (last >= 0 && times.get(last).longValue() == time) {
+            texts.set(last, texts.get(last) + " / " + clean);
+            return;
+        }
+        times.add(Long.valueOf(time));
+        texts.add(clean);
+    }
+
+    private static void requestPublish(final Object manager, final String line, final String whole,
+                                       final int status, final long generation) {
+        if (!isCurrent(manager, generation)) {
+            return;
+        }
+        synchronized (STATE_LOCK) {
+            if (status == lastStatus && safeEquals(line, lastLine) && safeEquals(whole, lastWhole)) {
+                return;
+            }
+            lastLine = line;
+            lastWhole = whole;
+            lastStatus = status;
+        }
+
+        Runnable publish = new Runnable() {
+            @Override
+            public void run() {
+                if (!isCurrent(manager, generation)) {
+                    return;
+                }
+                try {
+                    publishMetadata(manager, line, whole, status);
+                    publishExtras(manager, line);
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+
+        Handler handler = serviceHandler(manager);
+        if (handler != null && Looper.myLooper() != handler.getLooper()) {
+            handler.post(publish);
+        } else {
+            publish.run();
+        }
+    }
+
+    private static void publishMetadata(Object manager, String line, String whole, int status) throws Exception {
+        Object mediaItem = invokeRequired(manager, "a");
+        if (mediaItem == null) {
+            return;
+        }
+        Object metadata = getFieldValue(mediaItem, "d");
+        Bundle existing = (Bundle) getFieldValue(metadata, "I");
+        Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
+        extras.putString(META_LINE, line == null ? "" : line);
+        extras.putString(META_WHOLE, whole == null ? "" : whole);
+        extras.putLong(META_STATUS, (long) status);
+
+        Object metadataBuilder = invokeRequired(metadata, "a");
+        setFieldValue(metadataBuilder, "I", extras);
+        Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
+        Object mediaItemBuilder = invokeRequired(mediaItem, "a");
+        setFieldValue(mediaItemBuilder, "k", newMetadata);
+        Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
+        invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
+    }
+
+    private static boolean metadataHasCarKeys(Object manager) {
+        try {
+            Object mediaItem = invokeRequired(manager, "a");
+            if (mediaItem == null) {
+                return false;
+            }
+            Object metadata = getFieldValue(mediaItem, "d");
+            Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            return extras != null && extras.containsKey(META_STATUS) && extras.containsKey(META_WHOLE);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void publishExtras(Object manager, String line) {
+        try {
+            Object sessionManager = getFieldValue(manager, "a");
+            Bundle extras = new Bundle();
+            extras.putBoolean(EXTRA_ALLOWED, true);
+            extras.putString(EXTRA_LINE, line == null ? "" : line);
+            extras.putBoolean(EXTRA_NOTICE, true);
+            invokeRequired(sessionManager, "j", extras);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Object currentPlaybackItem(Object manager) throws Exception {
+        Object mediaItem = invokeRequired(manager, "a");
+        if (mediaItem == null) {
+            return null;
+        }
+        Object metadata = getFieldValue(mediaItem, "d");
+        Class<?> converter = Class.forName("com.apple.android.music.player.O");
+        Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
+        return method.invoke(null, metadata);
+    }
+
+    private static Application appleApplication() throws Exception {
+        Class<?> companion = Class.forName("com.apple.android.music.AppleMusicApplication$a");
+        Object application = invokeStaticOptional(companion, "c");
+        if (!(application instanceof Application)) {
+            application = invokeStaticOptional(companion, "a");
+        }
+        if (!(application instanceof Application)) {
+            throw new IllegalStateException("Apple Music application is unavailable");
+        }
+        return (Application) application;
+    }
+
+    private static long controllerPosition(Object manager) {
+        return controllerLong(manager, "getCurrentPosition");
+    }
+
+    private static long controllerDuration(Object manager) {
+        return controllerLong(manager, "getDuration");
+    }
+
+    private static long controllerLong(Object manager, String method) {
+        try {
+            Object sessionManager = getFieldValue(manager, "a");
+            Object controller = getFieldValue(sessionManager, "h");
+            return longValue(invokeRequired(controller, method), 0L);
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+    }
+
+    private static Handler serviceHandler(Object manager) {
+        try {
+            Object handler = getFieldValue(manager, "b");
+            return handler instanceof Handler ? (Handler) handler : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String queueKey(Object queueItem) {
+        if (queueItem == null) {
+            return "";
+        }
+        long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
+        Object item = invokeOptional(queueItem, "getItem");
+        String id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
+        if (id.isEmpty()) {
+            id = stringValue(invokeOptional(item, "getPersistentId"));
+        }
+        String title = stringValue(invokeOptional(item, "getTitle"));
+        return queueId + "|" + id + "|" + title;
+    }
+
+    private static String lineForPosition(long position, long[] times, String[] texts) {
+        int low = 0;
+        int high = times.length - 1;
+        int result = -1;
+        while (low <= high) {
+            int middle = (low + high) >>> 1;
+            if (times[middle] <= position) {
+                result = middle;
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
+        }
+        return result >= 0 && result < texts.length ? texts[result] : "";
+    }
+
+    private static String formatTime(long millis) {
+        long safe = Math.max(0L, millis);
+        long minutes = safe / 60000L;
+        long seconds = (safe % 60000L) / 1000L;
+        long centiseconds = (safe % 1000L) / 10L;
+        return String.format(Locale.US, "[%02d:%02d.%02d]", minutes, seconds, centiseconds);
+    }
+
+    private static long fractionMillis(String fraction) {
+        if (fraction == null || fraction.isEmpty()) {
+            return 0L;
+        }
+        if (fraction.length() == 1) {
+            return Long.parseLong(fraction) * 100L;
+        }
+        if (fraction.length() == 2) {
+            return Long.parseLong(fraction) * 10L;
+        }
+        return Long.parseLong(fraction.substring(0, 3));
+    }
+
+    private static String plainText(String html) {
+        if (html == null || html.isEmpty()) {
+            return "";
+        }
+        try {
+            return Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString().replace('\u00a0', ' ').trim();
+        } catch (Throwable ignored) {
+            return html.replaceAll("<[^>]+>", "").trim();
+        }
+    }
+
+    private static boolean isCurrent(Object manager, long generation) {
+        return manager != null && manager == currentManager && generation == GENERATION.get();
+    }
+
+    private static void resetPublishCache() {
+        synchronized (STATE_LOCK) {
+            lastLine = null;
+            lastWhole = null;
+            lastStatus = Integer.MIN_VALUE;
+        }
+    }
+
+    private static boolean safeEquals(Object left, Object right) {
+        return left == right || (left != null && left.equals(right));
+    }
+
+    private static Object invokeRequired(Object target, String name, Object... args) throws Exception {
+        if (target == null) {
+            throw new NullPointerException(name + " target");
+        }
+        Method method = findCompatibleMethod(target.getClass(), name, args, false);
+        return method.invoke(target, args);
+    }
+
+    private static Object invokeOptional(Object target, String name, Object... args) {
+        try {
+            return invokeRequired(target, name, args);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Object invokeStaticOptional(Class<?> type, String name, Object... args) {
+        try {
+            Method method = findCompatibleMethod(type, name, args, true);
+            return method.invoke(null, args);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Method findCompatibleMethod(Class<?> type, String name, Object[] args, boolean requireStatic)
+            throws NoSuchMethodException {
+        for (Class<?> cursor = type; cursor != null; cursor = cursor.getSuperclass()) {
+            Method[] methods = cursor.getDeclaredMethods();
+            for (Method method : methods) {
+                if (!method.getName().equals(name) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                if (requireStatic && !Modifier.isStatic(method.getModifiers())) {
+                    continue;
+                }
+                if (parametersMatch(method.getParameterTypes(), args)) {
+                    method.setAccessible(true);
+                    return method;
+                }
+            }
+        }
+        throw new NoSuchMethodException(type.getName() + "." + name);
+    }
+
+    private static boolean parametersMatch(Class<?>[] parameterTypes, Object[] args) {
+        for (int index = 0; index < parameterTypes.length; index++) {
+            Object argument = args[index];
+            if (argument == null) {
+                if (parameterTypes[index].isPrimitive()) {
+                    return false;
+                }
+                continue;
+            }
+            Class<?> parameter = wrap(parameterTypes[index]);
+            if (!parameter.isInstance(argument)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Class<?> wrap(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == Integer.TYPE) return Integer.class;
+        if (type == Long.TYPE) return Long.class;
+        if (type == Boolean.TYPE) return Boolean.class;
+        if (type == Float.TYPE) return Float.class;
+        if (type == Double.TYPE) return Double.class;
+        if (type == Short.TYPE) return Short.class;
+        if (type == Byte.TYPE) return Byte.class;
+        if (type == Character.TYPE) return Character.class;
+        return type;
+    }
+
+    private static Object constructCompatible(Class<?> type, Object argument) throws Exception {
+        for (Constructor<?> constructor : type.getDeclaredConstructors()) {
+            Class<?>[] parameters = constructor.getParameterTypes();
+            if (parameters.length == 1 && (argument == null || wrap(parameters[0]).isInstance(argument))) {
+                constructor.setAccessible(true);
+                return constructor.newInstance(argument);
+            }
+        }
+        throw new NoSuchMethodException(type.getName() + " constructor");
+    }
+
+    private static Object getFieldValue(Object target, String name) throws Exception {
+        Field field = findField(target.getClass(), name);
+        return field.get(target);
+    }
+
+    private static void setFieldValue(Object target, String name, Object value) throws Exception {
+        Field field = findField(target.getClass(), name);
+        field.set(target, value);
+    }
+
+    private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
+        for (Class<?> cursor = type; cursor != null; cursor = cursor.getSuperclass()) {
+            try {
+                Field field = cursor.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException ignored) {
+            }
+        }
+        throw new NoSuchFieldException(type.getName() + "." + name);
+    }
+
+    private static boolean booleanValue(Object value) {
+        return value instanceof Boolean && ((Boolean) value).booleanValue();
+    }
+
+    private static int intValue(Object value, int fallback) {
+        return value instanceof Number ? ((Number) value).intValue() : fallback;
+    }
+
+    private static long longValue(Object value, long fallback) {
+        return value instanceof Number ? ((Number) value).longValue() : fallback;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+}
