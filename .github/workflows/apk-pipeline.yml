@@ -43,15 +43,21 @@ jobs:
           printf '%s  %s\n' "$expected" "$RUNNER_TEMP/payload.tar" | sha256sum -c -
           tar -xf "$RUNNER_TEMP/payload.tar" -C payload
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Install Android build tools
+        shell: bash
         run: |
           set -Eeuo pipefail
-          sdkmanager "build-tools;${BUILD_TOOLS_VERSION}"
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          [[ -n "$sdk_root" ]] || { echo "Android SDK path is unavailable" >&2; exit 1; }
+          sdkmanager_bin="$(find "$sdk_root/cmdline-tools" -type f -name sdkmanager -perm -111 -print | sort -V | tail -n 1)"
+          [[ -x "$sdkmanager_bin" ]] || { echo "sdkmanager was not found under $sdk_root" >&2; exit 1; }
+          yes | "$sdkmanager_bin" --licenses >/dev/null || true
+          "$sdkmanager_bin" "build-tools;${BUILD_TOOLS_VERSION}"
           echo "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS_VERSION}" >> "$GITHUB_PATH"
 
       - name: Install analysis tools
