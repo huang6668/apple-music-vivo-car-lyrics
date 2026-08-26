@@ -1,0 +1,30 @@
+diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_classes2/com/apple/android/music/player/P.smali
+--- a/smali_classes2/com/apple/android/music/player/P.smali
++++ b/smali_classes2/com/apple/android/music/player/P.smali
+@@ -2553,6 +2553,8 @@
+     .line 3
+     invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
+ 
++    invoke-static {p0, p3}, Lcom/apple/android/music/player/VivoCarLyrics;->onCurrentItemChanged(Ljava/lang/Object;Ljava/lang/Object;)V
++
+     .line 4
+     .line 5
+     .line 6
+@@ -2647,6 +2649,8 @@
+     .line 8
+     invoke-static {p2, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
+ 
++    invoke-static {p0, p2}, Lcom/apple/android/music/player/VivoCarLyrics;->onMetadataUpdated(Ljava/lang/Object;Ljava/lang/Object;)V
++
+     .line 9
+     .line 10
+     .line 11
+@@ -2924,6 +2928,8 @@
+     .line 8
+     invoke-static {p2, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
+ 
++    invoke-static {p0}, Lcom/apple/android/music/player/VivoCarLyrics;->onPlaybackError(Ljava/lang/Object;)V
++
+     .line 9
+     .line 10
+     .line 11
