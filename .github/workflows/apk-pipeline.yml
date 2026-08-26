@@ -1,0 +1,122 @@
+name: APK analysis and rebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Apply a reviewed patch and build a test APK
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-music-vivo-car-lyrics
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      APK_NAME: apple-music-6-5-2.apk
+      APKTOOL_VERSION: '2.11.1'
+      JADX_VERSION: '1.5.1'
+      BUILD_TOOLS_VERSION: '35.0.0'
+      APKTOOL_SHA256: ${{ vars.APKTOOL_2_11_1_SHA256 }}
+      JADX_SHA256: ${{ vars.JADX_1_5_1_SHA256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Recreate private payload archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f payload.sha256
+          mkdir -p payload
+          cat payload.tar.part.* > "$RUNNER_TEMP/payload.tar"
+          expected="$(awk 'NR == 1 {print tolower($1)}' payload.sha256)"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  %s\n' "$expected" "$RUNNER_TEMP/payload.tar" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/payload.tar" -C payload
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android build tools
+        run: |
+          set -Eeuo pipefail
+          sdkmanager "build-tools;${BUILD_TOOLS_VERSION}"
+          echo "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install analysis tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools" payload/out/report
+
+          curl --fail --location --retry 3 \
+            "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" \
+            -o "$tools/apktool.jar"
+          curl --fail --location --retry 3 \
+            "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
+            -o "$tools/jadx.zip"
+
+          apktool_actual="$(sha256sum "$tools/apktool.jar" | awk '{print $1}')"
+          jadx_actual="$(sha256sum "$tools/jadx.zip" | awk '{print $1}')"
+          printf 'apktool_%s.jar  %s\njadx-%s.zip  %s\n' \
+            "$APKTOOL_VERSION" "$apktool_actual" \
+            "$JADX_VERSION" "$jadx_actual" \
+            | tee payload/out/report/tool-sha256.txt
+
+          if [[ -n "${APKTOOL_SHA256:-}" ]]; then
+            [[ "${APKTOOL_SHA256,,}" == "$apktool_actual" ]] || {
+              echo "apktool SHA-256 mismatch" >&2
+              exit 1
+            }
+          fi
+          if [[ -n "${JADX_SHA256:-}" ]]; then
+            [[ "${JADX_SHA256,,}" == "$jadx_actual" ]] || {
+              echo "jadx SHA-256 mismatch" >&2
+              exit 1
+            }
+          fi
+
+          unzip -q "$tools/jadx.zip" -d "$tools/jadx"
+          chmod +x "$tools/jadx/bin/jadx"
+          echo "APKTOOL_JAR=$tools/apktool.jar" >> "$GITHUB_ENV"
+          echo "JADX_BIN=$tools/jadx/bin/jadx" >> "$GITHUB_ENV"
+
+      - name: Reconstruct and verify original APK
+        run: scripts/ci/reconstruct.sh "$APK_NAME"
+        working-directory: payload
+
+      - name: Decode and locate MediaSession/lyrics paths
+        run: scripts/ci/analyze.sh
+        working-directory: payload
+
+      - name: Apply reviewed patches
+        if: ${{ inputs.rebuild }}
+        run: scripts/ci/apply-patches.sh
+        working-directory: payload
+
+      - name: Rebuild, align and debug-sign
+        if: ${{ inputs.rebuild }}
+        run: scripts/ci/rebuild.sh
+        working-directory: payload
+
+      - name: Upload reports and build output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-results-${{ github.run_number }}
+          path: payload/out/
+          retention-days: 7
+          if-no-files-found: warn
+          compression-level: 0
