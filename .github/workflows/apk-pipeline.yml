@@ -107,6 +107,55 @@ jobs:
         run: scripts/ci/analyze.sh
         working-directory: payload
 
+      - name: Prepare focused patching report
+        shell: bash
+        working-directory: payload
+        run: |
+          set -Eeuo pipefail
+          report=out/report
+          focused=out/focused
+          mkdir -p "$focused/files"
+
+          pattern='MediaPlaybackService|MediaSession|MediaMetadata|setMetadata|setExtras|HAS_LYRICS|lyrics|Lyrics|TimedText|Ttml'
+          roots=(
+            work/jadx/sources/com/apple/android/music
+            work/apktool/smali/com/apple/android/music
+            work/apktool/smali_classes2/com/apple/android/music
+            work/apktool/smali_classes3/com/apple/android/music
+            work/apktool/smali_classes4/com/apple/android/music
+          )
+
+          existing_roots=()
+          for root in "${roots[@]}"; do
+            [[ -d "$root" ]] && existing_roots+=("$root")
+          done
+
+          : > "$report/focused-paths.txt"
+          if ((${#existing_roots[@]} > 0)); then
+            grep -RIlE "$pattern" "${existing_roots[@]}" \
+              | LC_ALL=C sort -u \
+              | head -n 600 \
+              > "$report/focused-paths.txt" || true
+
+            grep -RInE -C 16 "$pattern" "${existing_roots[@]}" \
+              > "$report/focused-context.txt" || true
+          fi
+
+          while IFS= read -r source; do
+            [[ -f "$source" ]] || continue
+            mkdir -p "$focused/files/$(dirname "$source")"
+            cp "$source" "$focused/files/$source"
+          done < "$report/focused-paths.txt"
+
+          cp "$report"/*.txt "$focused/" 2>/dev/null || true
+          cp "$report"/*.log "$focused/" 2>/dev/null || true
+          tar -C "$focused" -czf "$report/focused-sources.tar.gz" files
+          rm -rf "$focused/files"
+          rm -f "$report/decode-sources.tar.gz"
+
+          find "$report" -maxdepth 1 -type f -printf '%f\t%s bytes\n' \
+            | LC_ALL=C sort > "$report/report-files.txt"
+
       - name: Apply reviewed patches
         if: ${{ inputs.rebuild }}
         run: scripts/ci/apply-patches.sh
