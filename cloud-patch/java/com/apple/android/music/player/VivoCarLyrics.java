@@ -49,6 +49,12 @@ public final class VivoCarLyrics {
     private static String lastLine;
     private static String lastWhole;
     private static int lastStatus = Integer.MIN_VALUE;
+    private static String metadataWhole;
+    private static int metadataStatus = Integer.MIN_VALUE;
+    private static boolean publishQueued;
+    private static long pendingGeneration = -1L;
+    private static Object pendingManager;
+    private static boolean pendingForceMetadata;
 
     private VivoCarLyrics() {
     }
@@ -104,6 +110,43 @@ public final class VivoCarLyrics {
         }
     }
 
+    /** Called from the media-session seek path so a drag jumps to the requested lyric immediately. */
+    public static void onSeek(Object playbackManager, long position) {
+        try {
+            long generation = GENERATION.get();
+            if (!isCurrent(playbackManager, generation) || lineTimes.length == 0 || lineTexts.length == 0) {
+                return;
+            }
+            requestLinePublish(playbackManager, lineForPosition(position, lineTimes, lineTexts), generation, true);
+            MAIN.postDelayed(new SeekRefreshTask(playbackManager, generation), 120L);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Fallback for callers that do not have the target position available. */
+    public static void onSeek(Object playbackManager) {
+        onSeek(playbackManager, controllerPosition(playbackManager));
+    }
+
+    private static final class SeekRefreshTask implements Runnable {
+        private final Object manager;
+        private final long generation;
+
+        SeekRefreshTask(Object manager, long generation) {
+            this.manager = manager;
+            this.generation = generation;
+        }
+
+        @Override
+        public void run() {
+            if (!isCurrent(manager, generation) || lineTimes.length == 0 || lineTexts.length == 0) {
+                return;
+            }
+            requestLinePublish(manager,
+                    lineForPosition(controllerPosition(manager), lineTimes, lineTexts), generation);
+        }
+    }
+
     private static final class MetadataReapplyTask implements Runnable {
         private final Object manager;
         private final long generation;
@@ -126,13 +169,10 @@ public final class VivoCarLyrics {
                 line = lastLine;
                 whole = lastWhole;
                 status = lastStatus;
-                lastLine = null;
-                lastWhole = null;
-                lastStatus = Integer.MIN_VALUE;
             }
             if (status != Integer.MIN_VALUE) {
                 requestPublish(manager, line == null ? "" : line, whole == null ? "" : whole,
-                        status, generation);
+                        status, generation, true);
             }
         }
     }
@@ -395,9 +435,18 @@ public final class VivoCarLyrics {
                 return;
             }
             String currentLine = lineForPosition(controllerPosition(manager), times, texts);
-            requestPublish(manager, currentLine, wholeLyrics, STATUS_SUCCESS, generation);
+            requestLinePublish(manager, currentLine, generation);
             MAIN.postDelayed(this, LINE_POLL_MS);
         }
+    }
+
+    private static void requestLinePublish(Object manager, String line, long generation) {
+        requestLinePublish(manager, line, generation, false);
+    }
+
+    private static void requestLinePublish(Object manager, String line, long generation,
+                                           boolean forceMetadata) {
+        requestPublish(manager, line, wholeLyrics, STATUS_SUCCESS, generation, forceMetadata);
     }
 
     private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
@@ -416,27 +465,68 @@ public final class VivoCarLyrics {
 
     private static void requestPublish(final Object manager, final String line, final String whole,
                                        final int status, final long generation) {
+        requestPublish(manager, line, whole, status, generation, false);
+    }
+
+    private static void requestPublish(final Object manager, final String line, final String whole,
+                                       final int status, final long generation,
+                                       final boolean forceMetadata) {
         if (!isCurrent(manager, generation)) {
             return;
         }
         synchronized (STATE_LOCK) {
-            if (status == lastStatus && safeEquals(line, lastLine) && safeEquals(whole, lastWhole)) {
+            if (!forceMetadata && status == lastStatus && safeEquals(line, lastLine)
+                    && safeEquals(whole, lastWhole)) {
                 return;
             }
             lastLine = line;
             lastWhole = whole;
             lastStatus = status;
+            pendingManager = manager;
+            pendingGeneration = generation;
+            pendingForceMetadata = pendingForceMetadata || forceMetadata;
+            if (publishQueued) {
+                return;
+            }
+            publishQueued = true;
         }
 
         Runnable publish = new Runnable() {
             @Override
             public void run() {
-                if (!isCurrent(manager, generation)) {
+                String latestLine;
+                String latestWhole;
+                int latestStatus;
+                Object latestManager;
+                long latestGeneration;
+                boolean forceLatestMetadata;
+                synchronized (STATE_LOCK) {
+                    latestManager = pendingManager;
+                    latestGeneration = pendingGeneration;
+                    latestLine = lastLine;
+                    latestWhole = lastWhole;
+                    latestStatus = lastStatus;
+                    forceLatestMetadata = pendingForceMetadata;
+                    pendingForceMetadata = false;
+                    publishQueued = false;
+                }
+                if (!isCurrent(latestManager, latestGeneration)) {
                     return;
                 }
                 try {
-                    publishMetadata(manager, line, whole, status);
-                    publishExtras(manager, line);
+                    boolean metadataNeeded = forceLatestMetadata
+                            || latestStatus != STATUS_SUCCESS
+                            || latestStatus != metadataStatus
+                            || !safeEquals(latestWhole, metadataWhole)
+                            || !metadataHasCarKeys(latestManager);
+                    if (metadataNeeded
+                            && publishMetadata(latestManager, latestLine, latestWhole, latestStatus)) {
+                        synchronized (STATE_LOCK) {
+                            metadataWhole = latestWhole;
+                            metadataStatus = latestStatus;
+                        }
+                    }
+                    publishExtras(latestManager, latestLine);
                 } catch (Throwable ignored) {
                 }
             }
@@ -450,10 +540,10 @@ public final class VivoCarLyrics {
         }
     }
 
-    private static void publishMetadata(Object manager, String line, String whole, int status) throws Exception {
+    private static boolean publishMetadata(Object manager, String line, String whole, int status) throws Exception {
         Object mediaItem = invokeRequired(manager, "a");
         if (mediaItem == null) {
-            return;
+            return false;
         }
         Object metadata = getFieldValue(mediaItem, "d");
         Bundle existing = (Bundle) getFieldValue(metadata, "I");
@@ -469,6 +559,7 @@ public final class VivoCarLyrics {
         setFieldValue(mediaItemBuilder, "k", newMetadata);
         Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
         invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
+        return true;
     }
 
     private static boolean metadataHasCarKeys(Object manager) {
@@ -618,6 +709,9 @@ public final class VivoCarLyrics {
             lastLine = null;
             lastWhole = null;
             lastStatus = Integer.MIN_VALUE;
+            metadataWhole = null;
+            metadataStatus = Integer.MIN_VALUE;
+            pendingForceMetadata = false;
         }
     }
 
