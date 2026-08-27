@@ -17,7 +17,8 @@ patch --batch --forward --strip=1 --directory=work/apktool < "$patch_file"
 for marker in \
   'VivoCarLyrics;->onCurrentItemChanged' \
   'VivoCarLyrics;->onMetadataUpdated' \
-  'VivoCarLyrics;->onPlaybackError'; do
+  'VivoCarLyrics;->onPlaybackError' \
+  'VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V'; do
   grep -Fq "$marker" "$target" || {
     echo "Patched Smali marker missing: $marker" >&2
     exit 1
