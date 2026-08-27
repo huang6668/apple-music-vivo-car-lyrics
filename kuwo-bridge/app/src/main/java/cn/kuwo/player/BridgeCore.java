@@ -196,8 +196,8 @@ final class BridgeCore {
         sessionManager = (MediaSessionManager) context.getSystemService(Context.MEDIA_SESSION_SERVICE);
         sourceStatus = "已连接通知读取服务";
         try {
-            sessionManager.addOnActiveSessionsChangedListener(activeSessionsListener, main,
-                    new ComponentName(context, AppleMusicNotificationListener.class));
+            sessionManager.addOnActiveSessionsChangedListener(activeSessionsListener,
+                    new ComponentName(context, AppleMusicNotificationListener.class), main);
         } catch (Throwable error) {
             sourceStatus = "媒体会话监听失败: " + error.getClass().getSimpleName();
         }
@@ -505,7 +505,7 @@ final class BridgeCore {
         if (hasManualLyricsForCurrentTrack()) {
             return wholeLyrics;
         }
-        Bundle extras = source == null ? null : source.getBundle(META_EXTRAS);
+        Bundle extras = metadataExtras(source);
         String sourceWhole = extras == null ? "" : safeString(extras.getString(META_WHOLE));
         if (!TextUtils.equals(sourceLyrics, sourceWhole)) {
             sourceLyrics = sourceWhole;
@@ -531,7 +531,7 @@ final class BridgeCore {
             return result >= 0 && result < lyricLines.length ? lyricLines[result] : "";
         }
         MediaMetadata metadata = appleController == null ? null : appleController.getMetadata();
-        Bundle extras = metadata == null ? null : metadata.getBundle(META_EXTRAS);
+        Bundle extras = metadataExtras(metadata);
         return extras == null ? "" : safeString(extras.getString(META_LINE));
     }
 
@@ -542,6 +542,17 @@ final class BridgeCore {
     private synchronized boolean hasManualLyricsForCurrentTrack() {
         return !manualLyrics.trim().isEmpty()
                 && TextUtils.equals(manualLyricsTrackKey, trackKey);
+    }
+
+    private static Bundle metadataExtras(MediaMetadata metadata) {
+        if (metadata == null) {
+            return null;
+        }
+        try {
+            return metadata.getDescription().getExtras();
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private synchronized void parseLyrics(String raw) {
