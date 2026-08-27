@@ -1,0 +1,55 @@
+name: Build KuWo media bridge prototype
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        run: gradle --no-daemon --stacktrace -p kuwo-bridge :app:assembleDebug
+
+      - name: Verify APK
+        run: |
+          set -Eeuo pipefail
+          apk="kuwo-bridge/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$apk" | tee kuwo-bridge-badging.txt
+          grep -Fq "package: name='cn.kuwo.player'" kuwo-bridge-badging.txt
+          grep -Fq "versionName='1.0-bridge'" kuwo-bridge-badging.txt
+          sha256sum "$apk" | tee kuwo-bridge-sha256.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuwo-bridge-${{ github.run_number }}
+          path: |
+            kuwo-bridge/app/build/outputs/apk/debug/app-debug.apk
+            kuwo-bridge-badging.txt
+            kuwo-bridge-sha256.txt
+          retention-days: 14
+          compression-level: 0
