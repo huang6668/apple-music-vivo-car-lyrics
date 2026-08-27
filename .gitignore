@@ -1,0 +1,10 @@
+out/
+work/
+payload.tar
+payload.tar.part.*
+*.apk
+*.aab
+*.keystore
+*.jks
+input/*.apk
+!input/parts/
