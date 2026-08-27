@@ -28,3 +28,11 @@ diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_class
      .line 9
      .line 10
      .line 11
+@@ -4801,6 +4807,8 @@
+     .line 3
+     invoke-interface {v0, p1, p2}, Lcom/apple/android/music/playback/controller/MediaPlayerController;->seekToPosition(J)V
+
++    invoke-static {p0, p1, p2}, Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V
++
+     .line 4
+     new-instance p1, Lcom/apple/android/music/player/P$v;
