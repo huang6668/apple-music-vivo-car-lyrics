@@ -58,7 +58,7 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
-  'vivo-car-atomic-lyrics-fix-r2-2026-08-28' \
+  'vivo-car-atomic-lyrics-fix-r3-2026-08-28' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
   'ucar.media.metadata.LYRICS_STATUS' \
@@ -70,6 +70,7 @@ HELPER_MARKERS=(
   'vivomusicmix.extra.key.meidia_id' \
   'vivomusicmix.extra.key.lyric' \
   'vivomusicmix.media.metadata.support_event' \
+  'com.vivo.musicwidgetmix' \
   'android.media.metadata.MEDIA_ID' \
   'com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID' \
   'com.apple.android.music.playback.metadata.ITEM_QUEUE_ID'
@@ -195,23 +196,55 @@ import re
 import sys
 
 root = sys.argv[1]
-paths = glob.glob(root + "/smali*/com/apple/android/music/player/P.smali")
-if len(paths) != 1:
-    raise SystemExit("Expected exactly one final MediaPlaybackManager P.smali, found %d" % len(paths))
-text = open(paths[0], encoding="utf-8").read()
-methods = {
-    "onCurrentItemChanged": r"Lcom/apple/android/music/player/VivoCarLyrics;->onCurrentItemChanged\(Ljava/lang/Object;Ljava/lang/Object;\)V",
-    "onMetadataUpdated": r"Lcom/apple/android/music/player/VivoCarLyrics;->onMetadataUpdated\(Ljava/lang/Object;Ljava/lang/Object;\)V",
-    "onPlaybackError": r"Lcom/apple/android/music/player/VivoCarLyrics;->onPlaybackError\(Ljava/lang/Object;\)V",
-    "onSeek": r"Lcom/apple/android/music/player/VivoCarLyrics;->onSeek\(Ljava/lang/Object;J\)V",
-}
-for name, method in methods.items():
-    count = len(re.findall(r"^\s*invoke-static(?:/range)?\s+\{[^}]*\},\s*" + method + r"\s*$", text, re.M))
-    if count != 1:
-        raise SystemExit("Final P.smali must call %s exactly once (found %d)" % (name, count))
+manager_paths = glob.glob(root + "/smali*/com/apple/android/music/player/P.smali")
+if len(manager_paths) != 1:
+    raise SystemExit("Expected exactly one final MediaPlaybackManager P.smali, found %d" % len(manager_paths))
+text = open(manager_paths[0], encoding="utf-8").read()
+connection_paths = glob.glob(root + "/smali*/com/apple/android/music/player/c0.smali")
+if len(connection_paths) != 1:
+    raise SystemExit("Expected exactly one final MediaSession callback c0.smali, found %d" % len(connection_paths))
+connection_text = open(connection_paths[0], encoding="utf-8").read()
+
+checks = (
+    (text,
+     "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
+     "Lcom/apple/android/music/player/VivoCarLyrics;->onCurrentItemChanged(Ljava/lang/Object;Ljava/lang/Object;)V"),
+    (text,
+     "public final onMetadataUpdated(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
+     "Lcom/apple/android/music/player/VivoCarLyrics;->onMetadataUpdated(Ljava/lang/Object;Ljava/lang/Object;)V"),
+    (text,
+     "public final onPlaybackError(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/MediaPlayerException;)V",
+     "Lcom/apple/android/music/player/VivoCarLyrics;->onPlaybackError(Ljava/lang/Object;)V"),
+    (text,
+     "public final seekTo(J)V",
+     "Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V"),
+    (connection_text,
+     "public final e(LE3/B2;LE3/B2$e;)V",
+     "Lcom/apple/android/music/player/VivoCarLyrics;->onAtomicControllerConnected(Ljava/lang/String;)V"),
+)
+
+for source, signature, call in checks:
+    blocks = re.findall(
+        r"(?ms)^\.method " + re.escape(signature) + r"\n.*?^\.end method$",
+        source,
+    )
+    if len(blocks) != 1:
+        raise SystemExit("Expected exactly one final Smali method: %s (found %d)" %
+                         (signature, len(blocks)))
+    invocation = (r"^\s*invoke-static(?:/range)?\s+\{[^}]*\},\s*" +
+                  re.escape(call) + r"\s*$")
+    method_count = len(re.findall(invocation, blocks[0], re.M))
+    file_count = len(re.findall(invocation, source, re.M))
+    if method_count != 1 or file_count != 1:
+        raise SystemExit(
+            "Final hook must occur exactly once in %s: %s (method=%d, file=%d)" %
+            (signature, call, method_count, file_count)
+        )
 PY
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/c0.smali' -print -quit)" \
+  > out/report/final-connection-smali-path.txt
 unzip -Z1 out/apple-music-vivo-car-lyrics-debug.apk \
   | grep -E '^classes[0-9]*\.dex$' \
   > out/report/patched-dex-files.txt

@@ -15,11 +15,12 @@
 2. 先记录 APK 的包名、versionName、versionCode、SHA-256 和原签名。
 3. 只使用 GitHub Actions 安装 Java、Android SDK、apktool、jadx 和构建工具，不要在本机下载构建环境。
 4. 第一次运行只做分析，不重建。下载并检查 focused report。
-5. 根据新版本语义重新定位以下四个 Hook：
+5. 根据新版本语义重新定位以下五个 Hook：
    - 当前歌曲变化
    - 元数据重新发布
    - 播放错误
    - seekToPosition 最终调用
+   - Media3 onPostConnect，并从 controller info 读取控制器包名
 6. 重新验证 VivoCarLyrics.java 使用的全部私有类、方法和字段。混淆名称或 DEX 路径变化时必须修改，不能照抄 6.5.2 的 P.smali 行号。
 7. 保持 vivo 协议字段：
    - ucar.media.metadata.LYRICS_LINE

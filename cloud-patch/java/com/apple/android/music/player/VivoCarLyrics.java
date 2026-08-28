@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r2-2026-08-28";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r3-2026-08-28";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -32,6 +32,7 @@ public final class VivoCarLyrics {
     private static final String ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id";
     private static final String ATOMIC_LYRIC = "vivomusicmix.extra.key.lyric";
     private static final String ATOMIC_SUPPORT_EVENTS = "vivomusicmix.media.metadata.support_event";
+    private static final String ATOMIC_CONTROLLER_PACKAGE = "com.vivo.musicwidgetmix";
     private static final String PUBLIC_MEDIA_ID = "android.media.metadata.MEDIA_ID";
     private static final String APPLE_MEDIA_ID = "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
     private static final String APPLE_QUEUE_ID = "com.apple.android.music.playback.metadata.ITEM_QUEUE_ID";
@@ -46,6 +47,7 @@ public final class VivoCarLyrics {
     private static final long LINE_POLL_MS = 250L;
     private static final long[] METADATA_REAPPLY_DELAYS_MS = {150L, 600L, 1500L, 3000L};
     private static final long[] ATOMIC_REPLAY_DELAYS_MS = {1000L, 2000L, 4000L, 8000L, 15000L};
+    private static final long[] ATOMIC_CONNECT_REPLAY_DELAYS_MS = {150L, 1000L, 2000L};
     private static final long ATOMIC_KEEPALIVE_MS = 25000L;
     private static final long ATOMIC_ACTION_CLEAR_MS = 750L;
     private static final long ATOMIC_LYRIC_SUPPORT_EVENT = 8L;
@@ -187,6 +189,38 @@ public final class VivoCarLyrics {
     /** Fallback for callers that do not have the target position available. */
     public static void onSeek(Object playbackManager) {
         onSeek(playbackManager, controllerPosition(playbackManager));
+    }
+
+    /** Replays the current state after Atomic Player registers its MediaController callback. */
+    public static void onAtomicControllerConnected(String packageName) {
+        try {
+            if (!ATOMIC_CONTROLLER_PACKAGE.equals(packageName)) {
+                return;
+            }
+
+            Object manager;
+            long generation;
+            String whole;
+            int status;
+            long stateSequence;
+            synchronized (STATE_LOCK) {
+                manager = currentManager;
+                generation = GENERATION.get();
+                whole = atomicWhole;
+                status = atomicStatus;
+                stateSequence = ATOMIC_STATE_SEQUENCE.get();
+            }
+            if (!isCurrent(manager, generation) || status == Integer.MIN_VALUE) {
+                return;
+            }
+
+            scheduleMetadataReapply(manager, generation);
+            for (long delay : ATOMIC_CONNECT_REPLAY_DELAYS_MS) {
+                MAIN.postDelayed(new AtomicReplayTask(manager, generation, whole,
+                        status, stateSequence, false), delay);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     private static final class SeekRefreshTask implements Runnable {

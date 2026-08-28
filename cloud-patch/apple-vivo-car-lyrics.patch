@@ -28,7 +28,7 @@ diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_class
      .line 9
      .line 10
      .line 11
-@@ -4801,6 +4807,8 @@
+@@ -4801,5 +4807,7 @@
      .line 3
      invoke-interface {v0, p1, p2}, Lcom/apple/android/music/playback/controller/MediaPlayerController;->seekToPosition(J)V
 
@@ -36,3 +36,27 @@ diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_class
 +
      .line 4
      new-instance p1, Lcom/apple/android/music/player/P$v;
+diff --git a/smali_classes2/com/apple/android/music/player/c0.smali b/smali_classes2/com/apple/android/music/player/c0.smali
+--- a/smali_classes2/com/apple/android/music/player/c0.smali
++++ b/smali_classes2/com/apple/android/music/player/c0.smali
+@@ -2278,7 +2278,7 @@
+ .end method
+
+ .method public final e(LE3/B2;LE3/B2$e;)V
+-    .locals 0
++    .locals 1
+
+     .line 1
+     const-string p0, "session"
+@@ -2296,6 +2296,11 @@
+     .line 8
+     iget-object p0, p0, LE3/Z2;->i:Ljava/lang/String;
+
++    iget-object v0, p2, LE3/B2$e;->a:LF3/C$b;
++    iget-object v0, v0, LF3/C$b;->a:LF3/C$c;
++    iget-object v0, v0, LF3/C$d;->a:Ljava/lang/String;
++    invoke-static {v0}, Lcom/apple/android/music/player/VivoCarLyrics;->onAtomicControllerConnected(Ljava/lang/String;)V
++
+     .line 9
+     .line 10
+     return-void

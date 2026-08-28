@@ -28,6 +28,7 @@
 5. 完整歌词、歌词状态或歌曲发生变化时才更新 MediaMetadata。
 6. 不修改解码器、音频格式、AudioTrack、ExoPlayer 音频输出、音频焦点或码率选择，避免影响音质。
 7. 原子随身听只在换歌、完整歌词或状态变化时收到完整 LRC；普通逐句更新必须清空原子事件 action，不能每 250 毫秒重复触发整段歌词解析。
+8. 原子随身听建立 MediaSession 控制器连接后，按短延迟补发当前状态，避免晚打开时等待下一轮低频保活。
 
 ## 3. vivo 车联协议字段
 
@@ -101,15 +102,16 @@ vivomusicmix.media.metadata.support_event = 原有能力位 | 8
 
 辅助类通过反射访问这些私有对象，因此新版首先要检查类、方法、构造函数和字段是否仍然存在。
 
-## 5. 四个必要 Hook
+## 5. 五个必要 Hook
 
-当前补丁在播放管理器中插入四个调用：
+当前补丁在播放管理器和 MediaSession 连接回调中插入五个调用：
 
 ```text
 onCurrentItemChanged(playbackManager, newQueueItem)
 onMetadataUpdated(playbackManager, queueItem)
 onPlaybackError(playbackManager)
 onSeek(playbackManager, targetPositionMs)
+onAtomicControllerConnected(controllerPackageName)
 ```
 
 新版本必须根据方法语义重新定位：
@@ -129,6 +131,10 @@ onSeek(playbackManager, targetPositionMs)
 ### 5.4 Seek
 
 寻找最终调用 `MediaPlayerController.seekToPosition(long)` 的路径。必须把同一个目标毫秒位置传给 `onSeek`，立即发布对应歌词行。
+
+### 5.5 原子随身听连接
+
+寻找 Media3 的 `onPostConnect` 回调，从 controller info 读取包名。仅当包名为 `com.vivo.musicwidgetmix` 时调用连接补发；不得对所有车联或蓝牙控制器广播完整 LRC。
 
 不要只依据旧 Smali 行号打补丁。应结合 jadx 伪代码、Smali 方法签名、调用关系和参数语义验证。
 
@@ -209,10 +215,10 @@ focused-sources.tar.gz
 
 ### 阶段 D：重新制作 Smali 补丁
 
-1. 在新版 apktool 输出中定位四个 Hook。
+1. 在新版 apktool 输出中定位五个 Hook。
 2. 生成新的 `cloud-patch/apple-vivo-car-lyrics.patch`。
 3. 更新 `cloud-patch/apply.sh` 中目标 Smali 路径。
-4. 更新 marker 检查，确保四个 Hook 均存在。
+4. 更新 marker 检查，确保五个 Hook 均存在且位于对应方法体内。
 5. 先执行补丁校验，再允许重建。
 
 ### 阶段 E：处理额外 DEX
@@ -235,9 +241,9 @@ apktool 重建成功
 zipalign 成功
 apksigner verify 成功
 目标辅助类存在于新增 DEX
-六个车联协议字符串、四个原子随身听协议字符串和辅助类 marker 存在
+六个车联协议字符串、五个原子随身听协议字符串和辅助类 marker 存在
 导出的 MediaPlaybackService 同时声明标准 MediaBrowser 和原子随身听合作 action
-四个 Smali Hook 存在
+五个 Smali Hook 存在于对应方法体内
 输出 APK SHA-256 已生成
 ```
 
@@ -301,7 +307,7 @@ Apple Music 6.5.2 的完整同步歌词主要存在私有 `PlayerLyricsViewModel
   GitHub Actions 分析、重建和上传入口。
 
 cloud-patch/apple-vivo-car-lyrics.patch
-  对指定 Apple Music 版本的四个 Smali Hook。
+  对指定 Apple Music 版本的五个 Smali Hook。
 
 cloud-patch/apply.sh
   应用补丁并验证 Hook marker。
@@ -324,7 +330,7 @@ config/search-patterns.txt
 后续 AI 只有在以下条件全部满足时才能说“适配完成”：
 
 - 新版本已重新分析，不是盲目套用旧补丁。
-- 四个 Hook 均按语义确认。
+- 五个 Hook 均按语义确认。
 - 辅助类的全部反射目标已验证。
 - GitHub Actions 构建成功。
 - APK 签名、包名、DEX 和协议 marker 验证成功。
