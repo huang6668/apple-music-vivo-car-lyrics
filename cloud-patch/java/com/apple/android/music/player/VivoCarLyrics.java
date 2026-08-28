@@ -20,6 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
+    private static final String BUILD_MARKER = "vivo-car-lyrics-fix-2026-08-28";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -31,21 +32,23 @@ public final class VivoCarLyrics {
     private static final int STATUS_NO_LYRICS = 1;
     private static final int STATUS_LOADING = 2;
     private static final int STATUS_FAILED = 3;
-    private static final int MAX_LOAD_ATTEMPTS = 15;
-    private static final long LOAD_RETRY_MS = 200L;
+    private static final int MAX_LOAD_ATTEMPTS = 24;
+    private static final long LOAD_RETRY_MS = 250L;
+    private static final long LYRICS_RESULT_TIMEOUT_MS = 15000L;
     private static final long LINE_POLL_MS = 250L;
+    private static final long[] METADATA_REAPPLY_DELAYS_MS = {150L, 600L, 1500L};
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
     private static final Object STATE_LOCK = new Object();
     private static final Pattern LRC_TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
+    private static final LyricsState EMPTY_LYRICS = new LyricsState(new long[0], new String[0], "");
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
+    private static volatile long currentExpectedQueueId = -1L;
     private static volatile Object currentPlaybackItem;
-    private static volatile long[] lineTimes = new long[0];
-    private static volatile String[] lineTexts = new String[0];
-    private static volatile String wholeLyrics = "";
+    private static volatile LyricsState lyricsState = EMPTY_LYRICS;
     private static String lastLine;
     private static String lastWhole;
     private static int lastStatus = Integer.MIN_VALUE;
@@ -55,8 +58,23 @@ public final class VivoCarLyrics {
     private static long pendingGeneration = -1L;
     private static Object pendingManager;
     private static boolean pendingForceMetadata;
+    private static long activeLoadGeneration = -1L;
+    private static Object activeLoadManager;
+    private static int loadRetryCount;
 
     private VivoCarLyrics() {
+    }
+
+    private static final class LyricsState {
+        final long[] times;
+        final String[] texts;
+        final String whole;
+
+        LyricsState(long[] times, String[] texts, String whole) {
+            this.times = times;
+            this.texts = texts;
+            this.whole = whole;
+        }
     }
 
     public static void onCurrentItemChanged(Object playbackManager, Object newQueueItem) {
@@ -64,10 +82,8 @@ public final class VivoCarLyrics {
             long generation = GENERATION.incrementAndGet();
             currentManager = playbackManager;
             currentTrackKey = queueKey(newQueueItem);
+            currentExpectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
             currentPlaybackItem = null;
-            lineTimes = new long[0];
-            lineTexts = new String[0];
-            wholeLyrics = "";
             resetPublishCache();
             publishExtras(playbackManager, "");
 
@@ -76,8 +92,7 @@ public final class VivoCarLyrics {
                 return;
             }
 
-            long expectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
-            MAIN.postDelayed(new LoadTask(playbackManager, generation, expectedQueueId, 0), LOAD_RETRY_MS);
+            scheduleLoad(playbackManager, generation, currentExpectedQueueId, LOAD_RETRY_MS);
         } catch (Throwable ignored) {
         }
     }
@@ -90,7 +105,14 @@ public final class VivoCarLyrics {
                 return;
             }
             long generation = GENERATION.get();
-            MAIN.postDelayed(new MetadataReapplyTask(playbackManager, generation), 100L);
+            long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), -1L);
+            if (queueId > 0L) {
+                currentExpectedQueueId = queueId;
+            }
+            scheduleMetadataReapply(playbackManager, generation);
+            if (shouldReloadLyrics()) {
+                scheduleLoad(playbackManager, generation, currentExpectedQueueId, LOAD_RETRY_MS);
+            }
         } catch (Throwable ignored) {
         }
     }
@@ -99,13 +121,11 @@ public final class VivoCarLyrics {
         try {
             long generation = GENERATION.incrementAndGet();
             currentManager = playbackManager;
+            currentExpectedQueueId = -1L;
             currentPlaybackItem = null;
-            lineTimes = new long[0];
-            lineTexts = new String[0];
-            wholeLyrics = "";
             resetPublishCache();
             requestPublish(playbackManager, "", "-1", STATUS_FAILED, generation);
-            MAIN.postDelayed(new MetadataReapplyTask(playbackManager, generation), 150L);
+            scheduleMetadataReapply(playbackManager, generation);
         } catch (Throwable ignored) {
         }
     }
@@ -114,10 +134,12 @@ public final class VivoCarLyrics {
     public static void onSeek(Object playbackManager, long position) {
         try {
             long generation = GENERATION.get();
-            if (!isCurrent(playbackManager, generation) || lineTimes.length == 0 || lineTexts.length == 0) {
+            LyricsState state = lyricsState;
+            if (!isCurrent(playbackManager, generation) || state.times.length == 0 || state.texts.length == 0) {
                 return;
             }
-            requestLinePublish(playbackManager, lineForPosition(position, lineTimes, lineTexts), generation, true);
+            requestLinePublish(playbackManager,
+                    lineForPosition(position, state.times, state.texts), generation, true);
             MAIN.postDelayed(new SeekRefreshTask(playbackManager, generation), 120L);
         } catch (Throwable ignored) {
         }
@@ -139,11 +161,12 @@ public final class VivoCarLyrics {
 
         @Override
         public void run() {
-            if (!isCurrent(manager, generation) || lineTimes.length == 0 || lineTexts.length == 0) {
+            LyricsState state = lyricsState;
+            if (!isCurrent(manager, generation) || state.times.length == 0 || state.texts.length == 0) {
                 return;
             }
             requestLinePublish(manager,
-                    lineForPosition(controllerPosition(manager), lineTimes, lineTexts), generation);
+                    lineForPosition(controllerPosition(manager), state.times, state.texts), generation);
         }
     }
 
@@ -177,6 +200,57 @@ public final class VivoCarLyrics {
         }
     }
 
+    private static void scheduleMetadataReapply(Object manager, long generation) {
+        for (long delay : METADATA_REAPPLY_DELAYS_MS) {
+            MAIN.postDelayed(new MetadataReapplyTask(manager, generation), delay);
+        }
+    }
+
+    private static void scheduleLoad(Object manager, long generation, long expectedQueueId, long delay) {
+        synchronized (STATE_LOCK) {
+            if (!isCurrent(manager, generation)) {
+                return;
+            }
+            if (activeLoadGeneration == generation && activeLoadManager == manager) {
+                return;
+            }
+            activeLoadGeneration = generation;
+            activeLoadManager = manager;
+        }
+        MAIN.postDelayed(new LoadTask(manager, generation, expectedQueueId, 0), delay);
+    }
+
+    private static boolean shouldReloadLyrics() {
+        synchronized (STATE_LOCK) {
+            long generation = GENERATION.get();
+            boolean active = activeLoadGeneration == generation && activeLoadManager == currentManager;
+            return !active && lyricsState.texts.length == 0 && lastStatus != STATUS_LOADING;
+        }
+    }
+
+    private static void finishLoad(Object manager, long generation) {
+        synchronized (STATE_LOCK) {
+            if (activeLoadGeneration == generation && activeLoadManager == manager) {
+                activeLoadGeneration = -1L;
+                activeLoadManager = null;
+            }
+        }
+    }
+
+    private static void retryLoadAfterFailure(Object manager, long generation) {
+        long expectedQueueId;
+        long delay;
+        synchronized (STATE_LOCK) {
+            if (!isCurrent(manager, generation) || lyricsState.texts.length != 0 || loadRetryCount >= 2) {
+                return;
+            }
+            loadRetryCount++;
+            expectedQueueId = currentExpectedQueueId;
+            delay = LOAD_RETRY_MS * (4L * loadRetryCount);
+        }
+        scheduleLoad(manager, generation, expectedQueueId, delay);
+    }
+
     private static final class LoadTask implements Runnable {
         private final Object manager;
         private final long generation;
@@ -199,8 +273,9 @@ public final class VivoCarLyrics {
             try {
                 Object playbackItem = currentPlaybackItem(manager);
                 long queueId = longValue(invokeOptional(playbackItem, "getQueueId"), 0L);
-                if (playbackItem == null || (expectedQueueId > 0L && queueId > 0L && expectedQueueId != queueId)) {
-                    retryOrFail();
+                long requiredQueueId = currentExpectedQueueId > 0L ? currentExpectedQueueId : expectedQueueId;
+                if (playbackItem == null || (requiredQueueId > 0L && requiredQueueId != queueId)) {
+                    retryOrFinish(STATUS_FAILED);
                     return;
                 }
 
@@ -213,29 +288,35 @@ public final class VivoCarLyrics {
                     String custom = stringValue(invokeOptional(playbackItem, "getCustomLyrics"));
                     if (!custom.trim().isEmpty()) {
                         consumeRawLyrics(manager, generation, custom, controllerDuration(manager));
+                        finishLoad(manager, generation);
                         return;
                     }
                 }
 
                 if (!hasLyrics && !hasCustomLyrics) {
-                    requestPublish(manager, "", "-1", STATUS_NO_LYRICS, generation);
+                    retryOrFinish(STATUS_NO_LYRICS);
                     return;
                 }
 
                 loadWithAppleViewModel(manager, generation, playbackItem);
             } catch (Throwable ignored) {
-                retryOrFail();
+                retryOrFinish(STATUS_FAILED);
             }
         }
 
-        private void retryOrFail() {
+        private void retryOrFinish(int finalStatus) {
             if (!isCurrent(manager, generation)) {
                 return;
             }
             if (attempt + 1 < MAX_LOAD_ATTEMPTS) {
-                MAIN.postDelayed(new LoadTask(manager, generation, expectedQueueId, attempt + 1), LOAD_RETRY_MS);
+                long requiredQueueId = currentExpectedQueueId > 0L ? currentExpectedQueueId : expectedQueueId;
+                MAIN.postDelayed(new LoadTask(manager, generation, requiredQueueId, attempt + 1), LOAD_RETRY_MS);
             } else {
-                requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+                finishLoad(manager, generation);
+                requestPublish(manager, "", "-1", finalStatus, generation);
+                if (finalStatus == STATUS_FAILED || finalStatus == STATUS_NO_LYRICS) {
+                    retryLoadAfterFailure(manager, generation);
+                }
             }
         }
     }
@@ -247,12 +328,23 @@ public final class VivoCarLyrics {
         Object viewModel = constructor.newInstance(application);
         Object liveData = invokeRequired(viewModel, "getLyricsResult");
         Class<?> observerType = Class.forName("androidx.lifecycle.L");
-        LyricsObserver handler = new LyricsObserver(manager, generation, playbackItem, liveData, observerType);
+        final LyricsObserver handler = new LyricsObserver(manager, generation, playbackItem, liveData, observerType);
         Object observer = Proxy.newProxyInstance(observerType.getClassLoader(), new Class<?>[]{observerType}, handler);
         handler.observer = observer;
         Method observeForever = liveData.getClass().getMethod("observeForever", observerType);
         observeForever.invoke(liveData, observer);
-        invokeRequired(viewModel, "loadLyrics", playbackItem);
+        MAIN.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                handler.onTimeout();
+            }
+        }, LYRICS_RESULT_TIMEOUT_MS);
+        try {
+            invokeRequired(viewModel, "loadLyrics", playbackItem);
+        } catch (Exception error) {
+            handler.cancel();
+            throw error;
+        }
     }
 
     private static final class LyricsObserver implements InvocationHandler {
@@ -262,7 +354,7 @@ public final class VivoCarLyrics {
         private final Object liveData;
         private final Class<?> observerType;
         private Object observer;
-        private boolean consumed;
+        private volatile boolean consumed;
 
         LyricsObserver(Object manager, long generation, Object playbackItem, Object liveData, Class<?> observerType) {
             this.manager = manager;
@@ -282,38 +374,83 @@ public final class VivoCarLyrics {
                 return args != null && args.length == 1 && proxy == args[0];
             }
             if ("toString".equals(name)) {
-                return "VivoCarLyricsObserver";
+                return BUILD_MARKER + "-observer";
             }
             if (!"onChanged".equals(name) || consumed || args == null || args.length == 0 || args[0] == null) {
                 return null;
             }
 
-            consumed = true;
-            removeObserver();
-            if (!isCurrent(manager, generation)) {
-                return null;
-            }
-
+            boolean claimed = false;
             try {
                 Object pair = args[0];
                 Object songInfoPtr = invokeRequired(pair, "component1");
                 Object error = invokeRequired(pair, "component2");
+                if (songInfoPtr == null && error == null) {
+                    return null;
+                }
+                claimed = claim();
+                if (!claimed) {
+                    return null;
+                }
+                removeObserver();
+                if (!isCurrent(manager, generation)) {
+                    return null;
+                }
                 if (error != null) {
+                    finishLoad(manager, generation);
                     requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+                    retryLoadAfterFailure(manager, generation);
                 } else if (songInfoPtr == null) {
                     String custom = stringValue(invokeOptional(playbackItem, "getCustomLyrics"));
                     if (custom.trim().isEmpty()) {
+                        finishLoad(manager, generation);
                         requestPublish(manager, "", "-1", STATUS_NO_LYRICS, generation);
                     } else {
                         consumeRawLyrics(manager, generation, custom, controllerDuration(manager));
+                        finishLoad(manager, generation);
                     }
                 } else {
                     consumeSongInfo(manager, generation, songInfoPtr);
+                    finishLoad(manager, generation);
                 }
             } catch (Throwable ignored) {
-                requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+                if (!claimed && !claim()) {
+                    return null;
+                }
+                removeObserver();
+                if (isCurrent(manager, generation)) {
+                    finishLoad(manager, generation);
+                    requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+                    retryLoadAfterFailure(manager, generation);
+                }
             }
             return null;
+        }
+
+        void onTimeout() {
+            if (!claim()) {
+                return;
+            }
+            removeObserver();
+            if (isCurrent(manager, generation)) {
+                finishLoad(manager, generation);
+                requestPublish(manager, "", "-1", STATUS_FAILED, generation);
+                retryLoadAfterFailure(manager, generation);
+            }
+        }
+
+        void cancel() {
+            if (claim()) {
+                removeObserver();
+            }
+        }
+
+        private synchronized boolean claim() {
+            if (consumed) {
+                return false;
+            }
+            consumed = true;
+            return true;
         }
 
         private void removeObserver() {
@@ -407,11 +544,16 @@ public final class VivoCarLyrics {
             }
         }
 
-        lineTimes = times;
-        lineTexts = texts;
-        wholeLyrics = lrc.toString();
+        String whole = lrc.toString();
+        synchronized (STATE_LOCK) {
+            if (!isCurrent(manager, generation)) {
+                return;
+            }
+            lyricsState = new LyricsState(times, texts, whole);
+            loadRetryCount = 0;
+        }
         String currentLine = lineForPosition(controllerPosition(manager), times, texts);
-        requestPublish(manager, currentLine, wholeLyrics, STATUS_SUCCESS, generation);
+        requestPublish(manager, currentLine, whole, STATUS_SUCCESS, generation);
         MAIN.postDelayed(new LineTick(manager, generation), LINE_POLL_MS);
     }
 
@@ -429,8 +571,9 @@ public final class VivoCarLyrics {
             if (!isCurrent(manager, generation)) {
                 return;
             }
-            long[] times = lineTimes;
-            String[] texts = lineTexts;
+            LyricsState state = lyricsState;
+            long[] times = state.times;
+            String[] texts = state.texts;
             if (times.length == 0 || texts.length == 0) {
                 return;
             }
@@ -445,8 +588,33 @@ public final class VivoCarLyrics {
     }
 
     private static void requestLinePublish(Object manager, String line, long generation,
-                                           boolean forceMetadata) {
-        requestPublish(manager, line, wholeLyrics, STATUS_SUCCESS, generation, forceMetadata);
+                                           boolean forceExtras) {
+        if (!isCurrent(manager, generation)) {
+            return;
+        }
+        final String latestLine = line == null ? "" : line;
+        synchronized (STATE_LOCK) {
+            if (!forceExtras && lastStatus == STATUS_SUCCESS && safeEquals(latestLine, lastLine)) {
+                return;
+            }
+            lastLine = latestLine;
+            lastStatus = STATUS_SUCCESS;
+        }
+
+        Runnable publish = new Runnable() {
+            @Override
+            public void run() {
+                if (isCurrent(manager, generation)) {
+                    publishExtras(manager, latestLine);
+                }
+            }
+        };
+        Handler handler = serviceHandler(manager);
+        if (handler != null && Looper.myLooper() != handler.getLooper()) {
+            handler.post(publish);
+        } else {
+            publish.run();
+        }
     }
 
     private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
@@ -515,10 +683,8 @@ public final class VivoCarLyrics {
                 }
                 try {
                     boolean metadataNeeded = forceLatestMetadata
-                            || latestStatus != STATUS_SUCCESS
                             || latestStatus != metadataStatus
-                            || !safeEquals(latestWhole, metadataWhole)
-                            || !metadataHasCarKeys(latestManager);
+                            || !safeEquals(latestWhole, metadataWhole);
                     if (metadataNeeded
                             && publishMetadata(latestManager, latestLine, latestWhole, latestStatus)) {
                         synchronized (STATE_LOCK) {
@@ -526,9 +692,9 @@ public final class VivoCarLyrics {
                             metadataStatus = latestStatus;
                         }
                     }
-                    publishExtras(latestManager, latestLine);
                 } catch (Throwable ignored) {
                 }
+                publishExtras(latestManager, latestLine);
             }
         };
 
@@ -643,13 +809,19 @@ public final class VivoCarLyrics {
             return "";
         }
         long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
+        if (queueId > 0L) {
+            return "queue:" + queueId;
+        }
         Object item = invokeOptional(queueItem, "getItem");
         String id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
         if (id.isEmpty()) {
             id = stringValue(invokeOptional(item, "getPersistentId"));
         }
+        if (!id.isEmpty()) {
+            return "item:" + id;
+        }
         String title = stringValue(invokeOptional(item, "getTitle"));
-        return queueId + "|" + id + "|" + title;
+        return title.isEmpty() ? "" : "title:" + title;
     }
 
     private static String lineForPosition(long position, long[] times, String[] texts) {
@@ -706,12 +878,16 @@ public final class VivoCarLyrics {
 
     private static void resetPublishCache() {
         synchronized (STATE_LOCK) {
+            lyricsState = EMPTY_LYRICS;
             lastLine = null;
             lastWhole = null;
             lastStatus = Integer.MIN_VALUE;
             metadataWhole = null;
             metadataStatus = Integer.MIN_VALUE;
             pendingForceMetadata = false;
+            activeLoadGeneration = -1L;
+            activeLoadManager = null;
+            loadRetryCount = 0;
         }
     }
 
