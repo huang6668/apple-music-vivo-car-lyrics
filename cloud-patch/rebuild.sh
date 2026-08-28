@@ -58,7 +58,7 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
-  'vivo-car-atomic-lyrics-fix-2026-08-28' \
+  'vivo-car-atomic-lyrics-fix-r2-2026-08-28' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
   'ucar.media.metadata.LYRICS_STATUS' \
@@ -69,6 +69,7 @@ HELPER_MARKERS=(
   'vivomusicmix.extra.lrc_change' \
   'vivomusicmix.extra.key.meidia_id' \
   'vivomusicmix.extra.key.lyric' \
+  'vivomusicmix.media.metadata.support_event' \
   'android.media.metadata.MEDIA_ID' \
   'com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID' \
   'com.apple.android.music.playback.metadata.ITEM_QUEUE_ID'

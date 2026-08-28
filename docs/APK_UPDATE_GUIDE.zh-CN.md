@@ -78,9 +78,10 @@ android.media.browse.MediaBrowserService
 vivomusicmix.meida.extra.key.action = vivomusicmix.extra.lrc_change
 vivomusicmix.extra.key.meidia_id = 当前公开 MEDIA_ID
 vivomusicmix.extra.key.lyric = 完整带时间戳 LRC
+vivomusicmix.media.metadata.support_event = 原有能力位 | 8
 ```
 
-`meida` 和 `meidia` 是协议中的真实拼写，不能修正。原子随身听晚连接后不会主动向 Apple Music 拉取当前歌词，因此成功、无歌词或失败事件需在短延迟后重发，并在播放期间低频重发。逐句车联 Extras 更新必须把 `vivomusicmix.meida.extra.key.action` 设为空字符串，避免旧的 `lrc_change` 被 Apple Music 的合并式 Extras 更新持续保留。
+`meida` 和 `meidia` 是协议中的真实拼写，不能修正。歌词能力位 `8` 必须放入 MediaMetadata；缺失时原子随身听会把合作控制器判定为不支持歌词，即使收到完整 LRC 事件也不会显示。原子随身听晚连接后不会主动向 Apple Music 拉取当前歌词，因此成功、无歌词或失败事件需在短延迟后重发，并在播放期间低频重发。逐句车联 Extras 更新必须把 `vivomusicmix.meida.extra.key.action` 设为空字符串，避免旧的 `lrc_change` 被 Apple Music 的合并式 Extras 更新持续保留。
 
 切歌时应立即发送一次空歌词事件。优先携带已经确认属于新队列项的公开 `android.media.metadata.MEDIA_ID`；公开 ID 尚未出现时可暂用新队列项的 store ID。若连 fallback ID 也没有，仍须发送 `lrc_change + 空 meidia_id + 空 lyric`，原子随身听会用该事件清除内存中的上一首歌词，不能继续沿用旧歌曲 ID。
 

@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-2026-08-28";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r2-2026-08-28";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -31,6 +31,7 @@ public final class VivoCarLyrics {
     private static final String ATOMIC_LRC_CHANGE = "vivomusicmix.extra.lrc_change";
     private static final String ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id";
     private static final String ATOMIC_LYRIC = "vivomusicmix.extra.key.lyric";
+    private static final String ATOMIC_SUPPORT_EVENTS = "vivomusicmix.media.metadata.support_event";
     private static final String PUBLIC_MEDIA_ID = "android.media.metadata.MEDIA_ID";
     private static final String APPLE_MEDIA_ID = "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
     private static final String APPLE_QUEUE_ID = "com.apple.android.music.playback.metadata.ITEM_QUEUE_ID";
@@ -44,9 +45,10 @@ public final class VivoCarLyrics {
     private static final long LYRICS_RESULT_TIMEOUT_MS = 15000L;
     private static final long LINE_POLL_MS = 250L;
     private static final long[] METADATA_REAPPLY_DELAYS_MS = {150L, 600L, 1500L, 3000L};
-    private static final long[] ATOMIC_REPLAY_DELAYS_MS = {1000L, 3000L, 8000L};
+    private static final long[] ATOMIC_REPLAY_DELAYS_MS = {1000L, 2000L, 4000L, 8000L, 15000L};
     private static final long ATOMIC_KEEPALIVE_MS = 25000L;
     private static final long ATOMIC_ACTION_CLEAR_MS = 750L;
+    private static final long ATOMIC_LYRIC_SUPPORT_EVENT = 8L;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
@@ -846,6 +848,8 @@ public final class VivoCarLyrics {
         extras.putString(META_LINE, line == null ? "" : line);
         extras.putString(META_WHOLE, whole == null ? "" : whole);
         extras.putLong(META_STATUS, (long) status);
+        long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
+        extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
 
         Object metadataBuilder = invokeRequired(metadata, "a");
         setFieldValue(metadataBuilder, "I", extras);
@@ -886,7 +890,9 @@ public final class VivoCarLyrics {
             return extras != null
                     && matchesExpectedMedia(manager, generation, extras)
                     && extras.containsKey(META_STATUS)
-                    && extras.containsKey(META_WHOLE);
+                    && extras.containsKey(META_WHOLE)
+                    && (longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L)
+                            & ATOMIC_LYRIC_SUPPORT_EVENT) != 0L;
         } catch (Throwable ignored) {
             return false;
         }
