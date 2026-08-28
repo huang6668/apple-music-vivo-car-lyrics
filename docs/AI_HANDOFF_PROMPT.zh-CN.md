@@ -32,7 +32,7 @@
 9. seek 后立即按目标毫秒位置发布歌词行，并在短延迟后用播放器实际位置校正。
 10. 不修改音频解码、重采样、AudioTrack、ExoPlayer 音频输出、音频焦点或码率选择，不能影响音质。
 11. 如果新版已存在 classes5.dex，自动选择下一个未使用的 classesN.dex，不能覆盖原 DEX。
-12. 使用固定或明确说明的测试签名，执行 zipalign、apksigner verify、包名检查、DEX marker 检查和 SHA-256 输出。
+12. 保持 `ANDROID_SIGNING_KEY_BASE64`、`ANDROID_SIGNING_PASSWORD` 和 `config/signing-cert-sha256.txt` 对应的固定测试签名，不得无故轮换；执行 zipalign、apksigner verify、证书 pin、包名、DEX marker 和 SHA-256 检查。
 13. 将代码和 workflow 修改提交到上述私有 GitHub 仓库，并触发云端构建。
 14. 最终给我：
    - 修改摘要
