@@ -156,7 +156,7 @@ filters = [{action.get(name_attr) for action in intent_filter.findall("action")}
 if not any(required.issubset(actions) for actions in filters):
     raise SystemExit("Atomic Player and MediaBrowser actions are not in the same rebuilt filter")
 all_actions = [action.get(name_attr)
-               for item in root.findall(".//action")]
+               for action in root.findall(".//action")]
 if all_actions.count(action_name) != 1:
     raise SystemExit("Atomic Player service action must occur exactly once in final manifest")
 PY
