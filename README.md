@@ -6,7 +6,8 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 
 - The original APK is kept out of Git history and uploaded only as size-limited parts.
 - Analysis runs in GitHub Actions; no Android SDK, apktool, jadx, or signing tools are installed on the local Mac.
-- Rebuild is opt-in and produces a newly signed test APK. It cannot replace Apple's signed package.
+- Rebuild is opt-in and produces a test APK signed by a fixed PKCS12 key stored in GitHub Secrets.
+- The pinned test certificate lets later builds update one another, but it cannot replace Apple's signed package or older builds signed with a different temporary key.
 
 ## KuWo bridge prototype
 
@@ -42,9 +43,12 @@ third-party proxy session must be verified on the target vehicle.
 1. Upload `input/SHA256SUMS` and `input/parts/*` for the APK.
 2. Run **Actions -> APK analysis and rebuild** with `rebuild=false`.
 3. Review the location report before enabling rebuild.
-4. Run again with `rebuild=true` only after an explicit patch has been added under `patches/`.
+4. Run again with `rebuild=true` only after the reviewed patch under `cloud-patch/` is ready.
 
 The workflow is deliberately `workflow_dispatch` only. It does not run for pull requests or pushes.
+Rebuilds require the repository secrets `ANDROID_SIGNING_KEY_BASE64` and
+`ANDROID_SIGNING_PASSWORD`; the certificate digest is pinned in
+`config/signing-cert-sha256.txt` so an accidental key change fails the build.
 
 ## Future Apple Music updates
 
