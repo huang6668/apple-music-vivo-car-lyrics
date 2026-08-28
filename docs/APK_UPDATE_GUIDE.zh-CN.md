@@ -11,7 +11,8 @@
 - versionCode：`1586`
 - 原始 APK SHA-256：`a05a36a5678015fd49d8c73aed2087e7a2f8f3232376733a2cf2f82623895736`
 - 目标车联包：`com.vivo.car.networking` 6.0.8.3
-- 已成功产出调试签名测试 APK。
+- 已成功产出 run-6 调试签名测试 APK；该版本使用了 Actions 临时密钥。
+- 2026-08-28 起改用 GitHub Secrets 中的固定测试密钥，并在仓库中校验证书 SHA-256。
 - 构建环境全部在 GitHub Actions 中安装，本地 Mac 不需要 Android SDK、Java、Gradle、apktool 或 jadx。
 
 ## 2. 要实现的行为
@@ -188,7 +189,7 @@ focused-sources.tar.gz
 
 ### 阶段 E：处理额外 DEX
 
-当前构建把辅助类编译为 `classes5.dex` 后加入 APK。
+当前 6.5.2 基线把辅助类加入为 `classes5.dex`；构建脚本会扫描 APK 中已有的 `classes*.dex`，自动选择下一个未占用的名称。
 
 新版如果已经存在 `classes5.dex`，不能覆盖。应扫描现有 `classes*.dex`，选择下一个未使用编号，并同步修改：
 
@@ -213,7 +214,7 @@ apksigner verify 成功
 
 ## 8. 安装与签名限制
 
-重建 APK 使用新的调试签名，不再拥有 Apple 官方签名。
+重建 APK 使用自有测试签名，不再拥有 Apple 官方签名。
 
 - 通常不能覆盖安装官方 Apple Music。
 - 卸载官方 App 通常会清除该 App 的数据和已下载歌曲。
@@ -221,7 +222,20 @@ apksigner verify 成功
 - 测试前应确认账号可重新登录，并接受离线下载需要重新下载。
 - 不要声称调试签名包与官方包完全等价。
 
-如需长期使用，应创建并安全保存固定签名密钥；每次随机生成调试密钥会导致新构建之间也无法直接覆盖安装。
+当前固定签名配置：
+
+```text
+GitHub Secret: ANDROID_SIGNING_KEY_BASE64
+GitHub Secret: ANDROID_SIGNING_PASSWORD
+Key alias: apple-music-vivo-car-lyrics
+证书 SHA-256: 19de023cf6b5b4d02d4151b306dd6389a7720d36b066607bf43ba9ce61fb9e66
+证书指纹文件: config/signing-cert-sha256.txt
+```
+
+密钥文件和密码不能提交到 Git。必须保留离线备份；若固定私钥丢失或被替换，之后的 APK 也无法覆盖安装。
+
+run-6 APK 的证书 SHA-256 是
+`40960a482d8ed1f69b1eaf06490add675cfd23d58b3d87d47906aae4bdb6c468`，其 Actions 临时私钥未保留。因此第一次切换到当前固定签名版本时，仍需卸载 run-6 后重新安装；安装固定签名版本后，后续使用同一组 Secrets 构建的 APK 可以直接覆盖更新。
 
 ## 9. 实车测试清单
 
@@ -263,7 +277,10 @@ cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java
   加载私有歌词、解析时间轴、同步当前行和完整歌词。
 
 cloud-patch/rebuild.sh
-  重建原 APK、编译辅助类、加入额外 DEX、对齐、签名和验证。
+  重建原 APK、编译辅助类、加入额外 DEX、对齐、固定签名和验证。
+
+config/signing-cert-sha256.txt
+  固定测试签名证书的 SHA-256 pin；与 Secrets 中私钥不匹配时构建失败。
 
 config/search-patterns.txt
   新版本分析时的初始搜索词。
