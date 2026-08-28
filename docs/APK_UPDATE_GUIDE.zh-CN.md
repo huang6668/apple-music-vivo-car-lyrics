@@ -1,4 +1,4 @@
-# Apple Music 车联歌词 APK 更新与交接指南
+# Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
 最后整理日期：2026-08-28
 
@@ -17,7 +17,7 @@
 
 ## 2. 要实现的行为
 
-修改代码运行在 Apple Music 自身进程中，从它的私有歌词对象获取完整歌词和时间轴，再发布给 vivo 车联。
+修改代码运行在 Apple Music 自身进程中，从它的私有歌词对象获取完整歌词和时间轴，再由同一状态机发布给 vivo 车联和原子随身听。
 
 必须保留以下行为：
 
@@ -27,6 +27,7 @@
 4. 歌词行变化只更新 MediaSession Extras，不能每句都重建歌曲元数据，否则车端会重复加载专辑图。
 5. 完整歌词、歌词状态或歌曲发生变化时才更新 MediaMetadata。
 6. 不修改解码器、音频格式、AudioTrack、ExoPlayer 音频输出、音频焦点或码率选择，避免影响音质。
+7. 原子随身听只在换歌、完整歌词或状态变化时收到完整 LRC；普通逐句更新必须清空原子事件 action，不能每 250 毫秒重复触发整段歌词解析。
 
 ## 3. vivo 车联协议字段
 
@@ -56,6 +57,32 @@ music.media.extras.NOTICE_CAR
 ```
 
 当前行放入 `music.media.extras.LYRIC`；另外两个字段设为 `true`。
+
+## 3.1 vivo 原子随身听协议
+
+在 `com.apple.android.music.player.MediaPlaybackService` 的现有 `intent-filter` 中增加：
+
+```text
+com.vivo.musicwidgetmix.support.service
+```
+
+该服务必须继续保持 `android:exported="true"`，并保留标准的：
+
+```text
+android.media.browse.MediaBrowserService
+```
+
+原子随身听从 MediaSession Extras 读取完整 LRC：
+
+```text
+vivomusicmix.meida.extra.key.action = vivomusicmix.extra.lrc_change
+vivomusicmix.extra.key.meidia_id = 当前公开 MEDIA_ID
+vivomusicmix.extra.key.lyric = 完整带时间戳 LRC
+```
+
+`meida` 和 `meidia` 是协议中的真实拼写，不能修正。原子随身听晚连接后不会主动向 Apple Music 拉取当前歌词，因此成功、无歌词或失败事件需在短延迟后重发，并在播放期间低频重发。逐句车联 Extras 更新必须把 `vivomusicmix.meida.extra.key.action` 设为空字符串，避免旧的 `lrc_change` 被 Apple Music 的合并式 Extras 更新持续保留。
+
+切歌时应立即发送一次空歌词事件。优先携带已经确认属于新队列项的公开 `android.media.metadata.MEDIA_ID`；公开 ID 尚未出现时可暂用新队列项的 store ID。若连 fallback ID 也没有，仍须发送 `lrc_change + 空 meidia_id + 空 lyric`，原子随身听会用该事件清除内存中的上一首歌词，不能继续沿用旧歌曲 ID。
 
 ## 4. 6.5.2 中的已知实现
 
@@ -207,7 +234,8 @@ apktool 重建成功
 zipalign 成功
 apksigner verify 成功
 目标辅助类存在于新增 DEX
-六个车联协议字符串和辅助类 marker 存在
+六个车联协议字符串、四个原子随身听协议字符串和辅助类 marker 存在
+导出的 MediaPlaybackService 同时声明标准 MediaBrowser 和原子随身听合作 action
 四个 Smali Hook 存在
 输出 APK SHA-256 已生成
 ```
@@ -234,8 +262,10 @@ Key alias: apple-music-vivo-car-lyrics
 
 密钥文件和密码不能提交到 Git。必须保留离线备份；若固定私钥丢失或被替换，之后的 APK 也无法覆盖安装。
 
+run-7 是第一份使用当前固定签名的基线 APK，证书 SHA-256 与上面的固定指纹一致。后续使用同一组 Secrets 构建的 APK 可以直接覆盖 run-7，无需重复卸载安装。
+
 run-6 APK 的证书 SHA-256 是
-`40960a482d8ed1f69b1eaf06490add675cfd23d58b3d87d47906aae4bdb6c468`，其 Actions 临时私钥未保留。因此第一次切换到当前固定签名版本时，仍需卸载 run-6 后重新安装；安装固定签名版本后，后续使用同一组 Secrets 构建的 APK 可以直接覆盖更新。
+`40960a482d8ed1f69b1eaf06490add675cfd23d58b3d87d47906aae4bdb6c468`，其 Actions 临时私钥未保留。因此从 run-6 或 Apple 官方签名版本切换到固定签名版本时，仍需先卸载再安装。
 
 ## 9. 实车测试清单
 
@@ -249,6 +279,8 @@ run-6 APK 的证书 SHA-256 是
 8. 暂停、恢复、上一首、下一首正确。
 9. 无歌词歌曲显示正确状态，不残留上一首歌词。
 10. 断开并重新连接车联后仍能恢复。
+11. 原子随身听首次连接、断开重连和 Apple Music 已播放后再打开时都能显示当前完整歌词。
+12. 原子随身听连续切歌不残留上一首歌词，无歌词歌曲会清空歌词。
 
 ## 10. 普通外挂方案的边界
 

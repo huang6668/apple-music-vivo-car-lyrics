@@ -4,7 +4,7 @@ set -Eeuo pipefail
 [[ -d work/apktool ]] || { echo "Decoded tree missing" >&2; exit 1; }
 mkdir -p out/report
 BT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}"
-PLATFORM="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/platforms/android-35/android.jar"
+PLATFORM="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/platforms/android-30/android.jar"
 PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/VivoCarLyrics.java"
 HELPER_WORK="$RUNNER_TEMP/vivo-car-lyrics-helper"
@@ -13,8 +13,11 @@ SIGNING_CERT_SHA256_FILE="$PATCH_ROOT/../config/signing-cert-sha256.txt"
 SIGNING_KEY_ALIAS=apple-music-vivo-car-lyrics
 HELPER_DEX_NAME=""
 APK_ENTRY_LIST="$HELPER_WORK/apk-entries.txt"
+ATOMIC_SERVICE_ACTION='com.vivo.musicwidgetmix.support.service'
+FINAL_MANIFEST_DIR="$HELPER_WORK/final-manifest"
+FINAL_HELPER_DEX="$HELPER_WORK/final-helper.dex"
 
-[[ -f "$PLATFORM" ]] || { echo "Android 35 platform is missing" >&2; exit 1; }
+[[ -f "$PLATFORM" ]] || { echo "Android 30 platform is missing" >&2; exit 1; }
 [[ -f "$HELPER_SOURCE" ]] || { echo "VivoCarLyrics.java is missing" >&2; exit 1; }
 [[ -f "$SIGNING_CERT_SHA256_FILE" ]] || { echo "Signing certificate pin is missing" >&2; exit 1; }
 [[ -n "${SIGNING_KEY_BASE64:-}" ]] || { echo "ANDROID_SIGNING_KEY_BASE64 secret is missing" >&2; exit 1; }
@@ -53,15 +56,24 @@ unsigned_apk="$(realpath out/app-unsigned.apk)"
 unzip -p out/app-unsigned.apk "$HELPER_DEX_NAME" > "out/report/$HELPER_DEX_NAME"
 strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-strings.txt
 
-for marker in \
+HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
-  'vivo-car-lyrics-fix-2026-08-28' \
+  'vivo-car-atomic-lyrics-fix-2026-08-28' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
   'ucar.media.metadata.LYRICS_STATUS' \
   'music.media.extras.LYRIC' \
   'music.media.extras.LYRIC_IS_ALLOWED' \
-  'music.media.extras.NOTICE_CAR'; do
+  'music.media.extras.NOTICE_CAR' \
+  'vivomusicmix.meida.extra.key.action' \
+  'vivomusicmix.extra.lrc_change' \
+  'vivomusicmix.extra.key.meidia_id' \
+  'vivomusicmix.extra.key.lyric' \
+  'android.media.metadata.MEDIA_ID' \
+  'com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID' \
+  'com.apple.android.music.playback.metadata.ITEM_QUEUE_ID'
+)
+for marker in "${HELPER_MARKERS[@]}"; do
   grep -Fq "$marker" out/report/vivo-car-lyrics-helper-strings.txt || {
     echo "Missing helper marker: $marker" >&2
     exit 1
@@ -98,16 +110,107 @@ actual_signer="$(awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolo
 printf '%s\n' "$actual_signer" > out/report/fixed-signing-cert-sha256.txt
 "$BT/aapt2" dump badging out/apple-music-vivo-car-lyrics-debug.apk \
   > out/report/patched-badging.txt
+"$BT/aapt2" dump xmltree out/apple-music-vivo-car-lyrics-debug.apk --file AndroidManifest.xml \
+  > out/report/patched-manifest.txt
+python3 - out/report/badging.txt out/report/patched-badging.txt <<'PY'
+import re
+import sys
+
+def values(path):
+    text = open(path, encoding="utf-8").read()
+    package = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']*)'", text, re.M)
+    minimum = re.search(r"^minSdkVersion:'([^']+)'", text, re.M)
+    if not package or not minimum:
+        raise SystemExit("Could not read package/version/minSdk from %s" % path)
+    return package.groups() + (minimum.group(1),)
+
+original = values(sys.argv[1])
+patched = values(sys.argv[2])
+if original != patched:
+    raise SystemExit("Original and patched package metadata differ: %r != %r" % (original, patched))
+if patched[0] != "com.apple.android.music":
+    raise SystemExit("Unexpected package name: %s" % patched[0])
+PY
 package_name="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" out/report/patched-badging.txt | head -n 1)"
-[[ "$package_name" == 'com.apple.android.music' ]] || {
-  echo "Unexpected package name: ${package_name:-<missing>}" >&2
-  exit 1
-}
 printf '%s\n' "$package_name" > out/report/patched-package-name.txt
+rm -rf "$FINAL_MANIFEST_DIR"
+java -Xmx4g -jar "$APKTOOL_JAR" d -f \
+  out/apple-music-vivo-car-lyrics-debug.apk -o "$FINAL_MANIFEST_DIR" \
+  > out/report/final-apktool.log 2>&1
+cp "$FINAL_MANIFEST_DIR/AndroidManifest.xml" out/report/patched-manifest-decoded.xml
+python3 - "$FINAL_MANIFEST_DIR/AndroidManifest.xml" "$ATOMIC_SERVICE_ACTION" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+manifest_path, action_name = sys.argv[1:]
+name_attr = "{http://schemas.android.com/apk/res/android}name"
+exported_attr = "{http://schemas.android.com/apk/res/android}exported"
+root = ET.parse(manifest_path).getroot()
+services = [item for item in root.findall("./application/service")
+            if item.get(name_attr) == "com.apple.android.music.player.MediaPlaybackService"]
+if len(services) != 1 or services[0].get(exported_attr) != "true":
+    raise SystemExit("MediaPlaybackService rebuilt manifest verification failed")
+required = {action_name, "android.media.browse.MediaBrowserService"}
+filters = [{action.get(name_attr) for action in intent_filter.findall("action")}
+           for intent_filter in services[0].findall("intent-filter")]
+if not any(required.issubset(actions) for actions in filters):
+    raise SystemExit("Atomic Player and MediaBrowser actions are not in the same rebuilt filter")
+all_actions = [action.get(name_attr)
+               for item in root.findall(".//action")]
+if all_actions.count(action_name) != 1:
+    raise SystemExit("Atomic Player service action must occur exactly once in final manifest")
+PY
+printf '%s\n' "$ATOMIC_SERVICE_ACTION" > out/report/verified-atomic-player-action.txt
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' out/report/patched-signature.txt || {
   echo "APK v3 signature verification is missing" >&2
   exit 1
 }
+grep -Fq 'Number of signers: 1' out/report/patched-signature.txt || {
+  echo "Patched APK must have exactly one signer" >&2
+  exit 1
+}
+signer_digest_count="$(grep -Ec '^Signer #[0-9]+ certificate SHA-256 digest:' \
+  out/report/patched-signature.txt || true)"
+[[ "$signer_digest_count" == 1 ]] || {
+  echo "Patched APK must expose exactly one signer certificate digest" >&2
+  exit 1
+}
+unzip -p out/apple-music-vivo-car-lyrics-debug.apk "$HELPER_DEX_NAME" > "$FINAL_HELPER_DEX"
+cmp -s "out/report/$HELPER_DEX_NAME" "$FINAL_HELPER_DEX" || {
+  echo "Helper DEX changed after APK signing" >&2
+  exit 1
+}
+strings "$FINAL_HELPER_DEX" > out/report/final-vivo-car-lyrics-helper-strings.txt
+for marker in "${HELPER_MARKERS[@]}"; do
+  grep -Fq "$marker" out/report/final-vivo-car-lyrics-helper-strings.txt || {
+    echo "Missing final helper marker: $marker" >&2
+    exit 1
+  }
+done
+sha256sum "$FINAL_HELPER_DEX" > out/report/final-helper-dex.sha256
+python3 - "$FINAL_MANIFEST_DIR" <<'PY'
+import glob
+import re
+import sys
+
+root = sys.argv[1]
+paths = glob.glob(root + "/smali*/com/apple/android/music/player/P.smali")
+if len(paths) != 1:
+    raise SystemExit("Expected exactly one final MediaPlaybackManager P.smali, found %d" % len(paths))
+text = open(paths[0], encoding="utf-8").read()
+methods = {
+    "onCurrentItemChanged": r"Lcom/apple/android/music/player/VivoCarLyrics;->onCurrentItemChanged\(Ljava/lang/Object;Ljava/lang/Object;\)V",
+    "onMetadataUpdated": r"Lcom/apple/android/music/player/VivoCarLyrics;->onMetadataUpdated\(Ljava/lang/Object;Ljava/lang/Object;\)V",
+    "onPlaybackError": r"Lcom/apple/android/music/player/VivoCarLyrics;->onPlaybackError\(Ljava/lang/Object;\)V",
+    "onSeek": r"Lcom/apple/android/music/player/VivoCarLyrics;->onSeek\(Ljava/lang/Object;J\)V",
+}
+for name, method in methods.items():
+    count = len(re.findall(r"^\s*invoke-static(?:/range)?\s+\{[^}]*\},\s*" + method + r"\s*$", text, re.M))
+    if count != 1:
+        raise SystemExit("Final P.smali must call %s exactly once (found %d)" % (name, count))
+PY
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
+  > out/report/final-manager-smali-path.txt
 unzip -Z1 out/apple-music-vivo-car-lyrics-debug.apk \
   | grep -E '^classes[0-9]*\.dex$' \
   > out/report/patched-dex-files.txt

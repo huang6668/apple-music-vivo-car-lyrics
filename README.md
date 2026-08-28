@@ -1,6 +1,6 @@
-# Apple Music vivo Car Lyrics
+# Apple Music vivo Car and Atomic Player Lyrics
 
-Private, manually triggered GitHub Actions workflow for analyzing and rebuilding the user-provided Apple Music 6.5.2 APK against the vivo JoviInCar lyrics adaptation notes.
+Private, manually triggered GitHub Actions workflow for analyzing and rebuilding the user-provided Apple Music 6.5.2 APK with shared lyrics support for vivo JoviInCar and Atomic Player.
 
 ## Scope
 
@@ -8,6 +8,8 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - Analysis runs in GitHub Actions; no Android SDK, apktool, jadx, or signing tools are installed on the local Mac.
 - Rebuild is opt-in and produces a test APK signed by a fixed PKCS12 key stored in GitHub Secrets.
 - The pinned test certificate lets later builds update one another, but it cannot replace Apple's signed package or older builds signed with a different temporary key.
+- One in-process lyrics state machine loads and parses Apple Music lyrics. Car lyrics receive only the current line during playback; Atomic Player receives the complete timestamped LRC on track or lyrics changes plus a low-frequency replay for late connections.
+- Apple Music's exported `MediaPlaybackService` also advertises `com.vivo.musicwidgetmix.support.service`, so Atomic Player selects its cooperation controller instead of the generic controller that has no lyrics support.
 
 ## KuWo bridge prototype
 
