@@ -10,7 +10,7 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: apple-music-vivo-car-lyrics
@@ -168,6 +168,19 @@ jobs:
           SIGNING_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
         run: bash ../cloud-patch/rebuild.sh
         working-directory: payload
+
+      - name: Create GitHub Release
+        if: ${{ inputs.rebuild && success() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          tag_name="v1.0.0-build-${{ github.run_number }}"
+          gh release create "$tag_name" \
+            payload/out/apple-music-vivo-car-lyrics-debug.apk \
+            payload/out/apple-music-vivo-car-lyrics-debug.apk.sha256 \
+            --title "Apple Music Vivo Car Lyrics - Build #${{ github.run_number }}" \
+            --notes "Patched APK with fixed signature (album art reload fix)."
 
       - name: Upload verified APK
         if: ${{ inputs.rebuild && success() }}
