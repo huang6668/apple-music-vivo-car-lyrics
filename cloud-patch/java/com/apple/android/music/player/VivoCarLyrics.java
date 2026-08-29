@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r4-album-art-reload-fix-2026-08-29";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r5-position-duration-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1061,21 +1061,46 @@ public final class VivoCarLyrics {
     }
 
     private static long controllerPosition(Object manager) {
-        return controllerLong(manager, "getCurrentPosition");
-    }
-
-    private static long controllerDuration(Object manager) {
-        return controllerLong(manager, "getDuration");
-    }
-
-    private static long controllerLong(Object manager, String method) {
         try {
             Object sessionManager = getFieldValue(manager, "a");
             Object controller = getFieldValue(sessionManager, "h");
-            return longValue(invokeRequired(controller, method), 0L);
+            if (controller != null) {
+                Object state = invokeOptional(controller, "getPlaybackState");
+                if (state != null) {
+                    long pos = longValue(invokeOptional(state, "getPosition"), 0L);
+                    int pbState = intValue(invokeOptional(state, "getState"), 0);
+                    long updateTime = longValue(invokeOptional(state, "getLastPositionUpdateTime"), 0L);
+                    float speed = floatValue(invokeOptional(state, "getPlaybackSpeed"), 1.0f);
+                    if (pbState == 3 /* STATE_PLAYING */ && updateTime > 0L) {
+                        long diff = android.os.SystemClock.elapsedRealtime() - updateTime;
+                        if (diff > 0L && diff < 3600000L) {
+                            pos += (long) (diff * speed);
+                        }
+                    }
+                    return Math.max(0L, pos);
+                }
+            }
         } catch (Throwable ignored) {
-            return 0L;
         }
+        return 0L;
+    }
+
+    private static long controllerDuration(Object manager) {
+        try {
+            Object sessionManager = getFieldValue(manager, "a");
+            Object controller = getFieldValue(sessionManager, "h");
+            if (controller != null) {
+                Object metadata = invokeOptional(controller, "getMetadata");
+                if (metadata != null) {
+                    long dur = longValue(invokeOptional(metadata, "getLong", "android.media.metadata.DURATION"), 0L);
+                    if (dur > 0L) {
+                        return dur;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0L;
     }
 
     private static Handler serviceHandler(Object manager) {
@@ -1376,6 +1401,10 @@ public final class VivoCarLyrics {
             }
         }
         throw new NoSuchFieldException(type.getName() + "." + name);
+    }
+
+    private static float floatValue(Object value, float fallback) {
+        return value instanceof Number ? ((Number) value).floatValue() : fallback;
     }
 
     private static boolean booleanValue(Object value) {
