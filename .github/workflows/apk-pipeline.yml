@@ -169,8 +169,21 @@ jobs:
         run: bash ../cloud-patch/rebuild.sh
         working-directory: payload
 
+      - name: Upload verified APK
+        if: ${{ inputs.rebuild && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-music-vivo-car-lyrics-debug
+          path: |
+            payload/out/apple-music-vivo-car-lyrics-debug.apk
+            payload/out/apple-music-vivo-car-lyrics-debug.apk.sha256
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Upload analysis reports
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: apk-results-${{ github.run_number }}-report
@@ -179,14 +192,3 @@ jobs:
           if-no-files-found: warn
           compression-level: 0
 
-      - name: Upload verified APK
-        if: ${{ inputs.rebuild && success() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-results-${{ github.run_number }}
-          path: |
-            payload/out/apple-music-vivo-car-lyrics-debug.apk
-            payload/out/apple-music-vivo-car-lyrics-debug.apk.sha256
-          retention-days: 7
-          if-no-files-found: error
-          compression-level: 0
