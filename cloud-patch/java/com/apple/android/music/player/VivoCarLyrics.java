@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r3-2026-08-28";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r4-album-art-reload-fix-2026-08-29";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -139,7 +139,9 @@ public final class VivoCarLyrics {
             if (queueId > 0L) {
                 currentExpectedQueueId = queueId;
             }
-            scheduleMetadataReapply(playbackManager, generation);
+            if (!metadataHasCarKeys(playbackManager, generation)) {
+                scheduleMetadataReapply(playbackManager, generation);
+            }
             if (shouldReloadLyrics()) {
                 scheduleLoad(playbackManager, generation, currentExpectedQueueId, LOAD_RETRY_MS);
             }
