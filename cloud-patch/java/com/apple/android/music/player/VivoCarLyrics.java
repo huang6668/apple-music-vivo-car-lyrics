@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r5-complete-progress-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r6-all-songs-progress-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -355,20 +355,13 @@ public final class VivoCarLyrics {
 
             try {
                 Object playbackItem = currentPlaybackItem(manager);
-                long queueId = longValue(invokeOptional(playbackItem, "getQueueId"), 0L);
-                long requiredQueueId = currentExpectedQueueId > 0L ? currentExpectedQueueId : expectedQueueId;
-                if (playbackItem == null || (requiredQueueId > 0L && requiredQueueId != queueId)) {
+                if (playbackItem == null) {
                     retryOrFinish(STATUS_FAILED);
                     return;
                 }
 
                 synchronized (STATE_LOCK) {
                     if (!isCurrent(manager, generation)) {
-                        return;
-                    }
-                    long latestExpectedQueueId = currentExpectedQueueId;
-                    if (latestExpectedQueueId > 0L && latestExpectedQueueId != queueId) {
-                        retryOrFinish(STATUS_FAILED);
                         return;
                     }
                     currentPlaybackItem = playbackItem;
