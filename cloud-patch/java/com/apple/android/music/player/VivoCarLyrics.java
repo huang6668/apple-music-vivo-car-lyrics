@@ -862,7 +862,6 @@ public final class VivoCarLyrics {
         extras.putString(META_WHOLE, whole == null ? "" : whole);
         extras.putLong(META_STATUS, (long) status);
 
-        long duration = resolveDuration(manager);
         if (duration > 0L) {
             extras.putLong("android.media.metadata.DURATION", duration);
         }
