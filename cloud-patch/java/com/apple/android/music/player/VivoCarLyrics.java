@@ -44,19 +44,28 @@ public final class VivoCarLyrics {
     private static final int STATUS_FAILED = 3;
     private static final int MAX_LOAD_ATTEMPTS = 24;
     private static final long LOAD_RETRY_MS = 250L;
+    private static final long LYRICS_RESULT_TIMEOUT_MS = 15000L;
     private static final long LINE_POLL_MS = 250L;
     private static final long[] METADATA_REAPPLY_DELAYS_MS = {150L, 600L, 1500L, 3000L};
+    private static final long[] ATOMIC_REPLAY_DELAYS_MS = {1000L, 2000L, 4000L, 8000L, 15000L};
+    private static final long[] ATOMIC_CONNECT_REPLAY_DELAYS_MS = {150L, 1000L, 2000L};
+    private static final long ATOMIC_KEEPALIVE_MS = 25000L;
+    private static final long ATOMIC_ACTION_CLEAR_MS = 750L;
+    private static final long ATOMIC_LYRIC_SUPPORT_EVENT = 8L;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
+    private static final AtomicLong ATOMIC_EVENT_SEQUENCE = new AtomicLong();
+    private static final AtomicLong ATOMIC_STATE_SEQUENCE = new AtomicLong();
     private static final Object STATE_LOCK = new Object();
-    private static final Pattern LRC_TIME = Pattern.compile("\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]");
+    private static final Pattern LRC_TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
     private static final LyricsState EMPTY_LYRICS = new LyricsState(new long[0], new String[0], "");
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
     private static volatile long currentExpectedQueueId = -1L;
     private static volatile Object currentPlaybackItem;
+    private static long currentPlaybackItemGeneration = -1L;
     private static volatile LyricsState lyricsState = EMPTY_LYRICS;
     private static String lastLine;
     private static String lastWhole;
@@ -67,9 +76,14 @@ public final class VivoCarLyrics {
     private static long pendingGeneration = -1L;
     private static Object pendingManager;
     private static boolean pendingForceMetadata;
+    private static boolean pendingAtomicPublish;
     private static long activeLoadGeneration = -1L;
     private static Object activeLoadManager;
     private static int loadRetryCount;
+    private static String currentAtomicMediaId = "";
+    private static long currentAtomicMediaIdGeneration = -1L;
+    private static String atomicWhole;
+    private static int atomicStatus = Integer.MIN_VALUE;
 
     private VivoCarLyrics() {
     }
@@ -94,6 +108,15 @@ public final class VivoCarLyrics {
             currentExpectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
             currentPlaybackItem = null;
             resetPublishCache();
+            String mediaId = queueMediaId(newQueueItem);
+            synchronized (STATE_LOCK) {
+                if (!isCurrent(playbackManager, generation)) {
+                    return;
+                }
+                currentAtomicMediaId = mediaId;
+                currentAtomicMediaIdGeneration = generation;
+            }
+            publishAtomicClear(playbackManager, mediaId, generation);
 
             if (newQueueItem == null) {
                 requestPublish(playbackManager, "", "-1", STATUS_NO_LYRICS, generation);
@@ -131,15 +154,27 @@ public final class VivoCarLyrics {
         try {
             long generation = GENERATION.incrementAndGet();
             currentManager = playbackManager;
+            String mediaId;
+            synchronized (STATE_LOCK) {
+                mediaId = currentAtomicMediaId;
+            }
             currentExpectedQueueId = -1L;
             currentPlaybackItem = null;
             resetPublishCache();
+            synchronized (STATE_LOCK) {
+                if (!isCurrent(playbackManager, generation)) {
+                    return;
+                }
+                currentAtomicMediaId = mediaId;
+                currentAtomicMediaIdGeneration = generation;
+            }
             requestPublish(playbackManager, "", "-1", STATUS_FAILED, generation);
             scheduleMetadataReapply(playbackManager, generation);
         } catch (Throwable ignored) {
         }
     }
 
+    /** Called from the media-session seek path so a drag jumps to the requested lyric immediately. */
     public static void onSeek(Object playbackManager, long position) {
         try {
             long generation = GENERATION.get();
@@ -147,18 +182,21 @@ public final class VivoCarLyrics {
             if (!isCurrent(playbackManager, generation) || state.times.length == 0 || state.texts.length == 0) {
                 return;
             }
-            requestLinePublish(playbackManager, lineForPosition(position, state.times, state.texts), generation);
+            requestLinePublish(playbackManager,
+                    lineForPosition(position, state.times, state.texts), generation, true);
             MAIN.postDelayed(new SeekRefreshTask(playbackManager, generation), 120L);
         } catch (Throwable ignored) {
         }
     }
 
+    /** Fallback for callers that do not have the target position available. */
     public static void onSeek(Object playbackManager) {
         onSeek(playbackManager, controllerPosition(playbackManager));
     }
 
+    /** Replays the current state after Atomic Player registers its MediaController callback. */
     public static void onAtomicControllerConnected(String packageName) {
-        // Atomic player bypass
+        // Atomic Player workaround removed - pure car mode
     }
 
     private static final class SeekRefreshTask implements Runnable {
@@ -176,7 +214,8 @@ public final class VivoCarLyrics {
             if (!isCurrent(manager, generation) || state.times.length == 0 || state.texts.length == 0) {
                 return;
             }
-            requestLinePublish(manager, lineForPosition(controllerPosition(manager), state.times, state.texts), generation);
+            requestLinePublish(manager,
+                    lineForPosition(controllerPosition(manager), state.times, state.texts), generation);
         }
     }
 
@@ -204,7 +243,8 @@ public final class VivoCarLyrics {
                 status = lastStatus;
             }
             if (status != Integer.MIN_VALUE) {
-                requestPublish(manager, line == null ? "" : line, whole == null ? "" : whole, status, generation, true);
+                requestPublish(manager, line == null ? "" : line, whole == null ? "" : whole,
+                        status, generation, true);
             }
         }
     }
@@ -291,6 +331,7 @@ public final class VivoCarLyrics {
                         return;
                     }
                     currentPlaybackItem = playbackItem;
+                    currentPlaybackItemGeneration = generation;
                 }
                 requestPublish(manager, "", "", STATUS_LOADING, generation);
 
@@ -345,16 +386,18 @@ public final class VivoCarLyrics {
         handler.observer = observer;
         Method observeForever = liveData.getClass().getMethod("observeForever", observerType);
         observeForever.invoke(liveData, observer);
-
         MAIN.postDelayed(new Runnable() {
             @Override
             public void run() {
                 handler.onTimeout();
             }
-        }, 15000L);
-
-        Method loadLyrics = viewModelClass.getMethod("loadLyrics", Class.forName("com.apple.android.music.playback.model.PlayerQueueItem"));
-        loadLyrics.invoke(viewModel, playbackItem);
+        }, LYRICS_RESULT_TIMEOUT_MS);
+        try {
+            invokeRequired(viewModel, "loadLyrics", playbackItem);
+        } catch (Exception error) {
+            handler.cancel();
+            throw error;
+        }
     }
 
     private static final class LyricsObserver implements InvocationHandler {
@@ -364,7 +407,7 @@ public final class VivoCarLyrics {
         private final Object liveData;
         private final Class<?> observerType;
         private Object observer;
-        private boolean consumed;
+        private volatile boolean consumed;
 
         LyricsObserver(Object manager, long generation, Object playbackItem, Object liveData, Class<?> observerType) {
             this.manager = manager;
@@ -376,34 +419,37 @@ public final class VivoCarLyrics {
 
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) {
-            if (method == null || !"onChanged".equals(method.getName()) || args == null || args.length == 0) {
+            String name = method.getName();
+            if ("hashCode".equals(name)) {
+                return System.identityHashCode(proxy);
+            }
+            if ("equals".equals(name)) {
+                return args != null && args.length == 1 && proxy == args[0];
+            }
+            if ("toString".equals(name)) {
+                return BUILD_MARKER + "-observer";
+            }
+            if (!"onChanged".equals(name) || consumed || args == null || args.length == 0 || args[0] == null) {
                 return null;
             }
 
-            boolean claimed = claim();
+            boolean claimed = false;
             try {
+                Object pair = args[0];
+                Object songInfoPtr = invokeRequired(pair, "component1");
+                Object error = invokeRequired(pair, "component2");
+                if (songInfoPtr == null && error == null) {
+                    return null;
+                }
+                claimed = claim();
                 if (!claimed) {
                     return null;
                 }
                 removeObserver();
-
                 if (!isCurrent(manager, generation)) {
                     return null;
                 }
-
-                Object result = args[0];
-                if (result == null) {
-                    finishLoad(manager, generation);
-                    requestPublish(manager, "", "-1", STATUS_FAILED, generation);
-                    retryLoadAfterFailure(manager, generation);
-                    return null;
-                }
-
-                Object statusObj = invokeOptional(result, "getStatus");
-                String statusName = statusObj == null ? "" : stringValue(invokeOptional(statusObj, "name"));
-                Object songInfoPtr = invokeOptional(result, "getData");
-
-                if ("FAILED".equals(statusName)) {
+                if (error != null) {
                     finishLoad(manager, generation);
                     requestPublish(manager, "", "-1", STATUS_FAILED, generation);
                     retryLoadAfterFailure(manager, generation);
@@ -443,6 +489,12 @@ public final class VivoCarLyrics {
                 finishLoad(manager, generation);
                 requestPublish(manager, "", "-1", STATUS_FAILED, generation);
                 retryLoadAfterFailure(manager, generation);
+            }
+        }
+
+        void cancel() {
+            if (claim()) {
+                removeObserver();
             }
         }
 
@@ -490,8 +542,7 @@ public final class VivoCarLyrics {
     private static void consumeRawLyrics(Object manager, long generation, String raw, long duration) {
         ArrayList<Long> times = new ArrayList<Long>();
         ArrayList<String> texts = new ArrayList<String>();
-        String[] rows = raw.replace("", "").split("
-");
+        String[] rows = raw.replace("\r", "").split("\n");
         for (String row : rows) {
             Matcher matcher = LRC_TIME.matcher(row);
             String clean = plainText(matcher.replaceAll(""));
@@ -542,8 +593,7 @@ public final class VivoCarLyrics {
         for (int index = 0; index < texts.length; index++) {
             lrc.append(formatTime(times[index])).append(texts[index]);
             if (index + 1 < texts.length) {
-                lrc.append('
-');
+                lrc.append('\n');
             }
         }
 
@@ -586,38 +636,127 @@ public final class VivoCarLyrics {
         }
     }
 
+    private static void scheduleAtomicReplays(Object manager, long generation, String whole,
+                                              int status, long stateSequence) {
+        // Atomic Player workaround removed - pure car mode
+    }
+
+    private static final class AtomicReplayTask implements Runnable {
+        private final Object manager;
+        private final long generation;
+        private final String whole;
+        private final int status;
+        private final long stateSequence;
+        private final boolean repeat;
+
+        AtomicReplayTask(Object manager, long generation, String whole, int status,
+                         long stateSequence, boolean repeat) {
+            this.manager = manager;
+            this.generation = generation;
+            this.whole = whole;
+            this.status = status;
+            this.stateSequence = stateSequence;
+            this.repeat = repeat;
+        }
+
+        @Override
+        public void run() {
+            String line;
+            synchronized (STATE_LOCK) {
+                if (!isCurrent(manager, generation)
+                        || stateSequence != ATOMIC_STATE_SEQUENCE.get()
+                        || status != atomicStatus
+                        || !safeEquals(whole, atomicWhole)) {
+                    return;
+                }
+                line = lastLine;
+            }
+            String lyric = status == STATUS_SUCCESS ? whole : "";
+            publishAtomicExtras(manager, line == null ? "" : line,
+                    resolveAtomicMediaId(manager, generation), lyric, generation);
+            if (repeat) {
+                MAIN.postDelayed(this, ATOMIC_KEEPALIVE_MS);
+            }
+        }
+    }
+
     private static void requestLinePublish(Object manager, String line, long generation) {
+        requestLinePublish(manager, line, generation, false);
+    }
+
+    private static void requestLinePublish(Object manager, String line, long generation,
+                                           boolean forceExtras) {
         if (!isCurrent(manager, generation)) {
             return;
         }
         final String latestLine = line == null ? "" : line;
         synchronized (STATE_LOCK) {
-            if (lastStatus == STATUS_SUCCESS && safeEquals(latestLine, lastLine)) {
+            if (!forceExtras && lastStatus == STATUS_SUCCESS && safeEquals(latestLine, lastLine)) {
                 return;
             }
             lastLine = latestLine;
+            lastStatus = STATUS_SUCCESS;
         }
-        requestPublish(manager, latestLine, lastWhole == null ? "" : lastWhole,
-                lastStatus == Integer.MIN_VALUE ? STATUS_SUCCESS : lastStatus, generation);
+
+        Runnable publish = new Runnable() {
+            @Override
+            public void run() {
+                if (isCurrent(manager, generation)) {
+                    publishLineExtras(manager, latestLine, generation);
+                }
+            }
+        };
+        Handler handler = serviceHandler(manager);
+        if (handler != null && Looper.myLooper() != handler.getLooper()) {
+            handler.post(publish);
+        } else {
+            publish.run();
+        }
     }
 
-    private static void requestPublish(Object manager, String line, String whole, int status,
-                                       long generation) {
+    private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return;
+        }
+        String clean = text.trim();
+        int last = times.size() - 1;
+        if (last >= 0 && times.get(last).longValue() == time) {
+            texts.set(last, texts.get(last) + " / " + clean);
+            return;
+        }
+        times.add(Long.valueOf(time));
+        texts.add(clean);
+    }
+
+    private static void requestPublish(final Object manager, final String line, final String whole,
+                                       final int status, final long generation) {
         requestPublish(manager, line, whole, status, generation, false);
     }
 
-    private static void requestPublish(Object manager, String line, String whole, int status,
-                                       long generation, boolean forceMetadata) {
+    private static void requestPublish(final Object manager, final String line, final String whole,
+                                       final int status, final long generation,
+                                       final boolean forceMetadata) {
         if (!isCurrent(manager, generation)) {
             return;
         }
         synchronized (STATE_LOCK) {
+            if (!forceMetadata && status == lastStatus && safeEquals(line, lastLine)
+                    && safeEquals(whole, lastWhole)) {
+                return;
+            }
             lastLine = line;
             lastWhole = whole;
             lastStatus = status;
+            boolean atomicNeeded = status != atomicStatus || !safeEquals(whole, atomicWhole);
+            if (atomicNeeded) {
+                atomicWhole = whole;
+                atomicStatus = status;
+                ATOMIC_STATE_SEQUENCE.incrementAndGet();
+            }
             pendingManager = manager;
             pendingGeneration = generation;
             pendingForceMetadata = pendingForceMetadata || forceMetadata;
+            pendingAtomicPublish = pendingAtomicPublish || atomicNeeded;
             if (publishQueued) {
                 return;
             }
@@ -633,6 +772,8 @@ public final class VivoCarLyrics {
                 Object latestManager;
                 long latestGeneration;
                 boolean forceLatestMetadata;
+                boolean publishLatestAtomic;
+                long latestAtomicStateSequence;
                 synchronized (STATE_LOCK) {
                     latestManager = pendingManager;
                     latestGeneration = pendingGeneration;
@@ -640,18 +781,22 @@ public final class VivoCarLyrics {
                     latestWhole = lastWhole;
                     latestStatus = lastStatus;
                     forceLatestMetadata = pendingForceMetadata;
+                    publishLatestAtomic = pendingAtomicPublish;
+                    latestAtomicStateSequence = ATOMIC_STATE_SEQUENCE.get();
                     pendingForceMetadata = false;
+                    pendingAtomicPublish = false;
                     publishQueued = false;
                 }
                 if (!isCurrent(latestManager, latestGeneration)) {
                     return;
                 }
+                String publishMediaId = resolveAtomicMediaId(latestManager, latestGeneration);
                 try {
                     boolean metadataNeeded = forceLatestMetadata
                             || latestStatus != metadataStatus
                             || !safeEquals(latestWhole, metadataWhole);
                     if (metadataNeeded && publishMetadata(latestManager, latestLine, latestWhole,
-                            latestStatus, latestGeneration, forceLatestMetadata)) {
+                            latestStatus, latestGeneration)) {
                         synchronized (STATE_LOCK) {
                             if (isCurrent(latestManager, latestGeneration)) {
                                 metadataWhole = latestWhole;
@@ -661,7 +806,20 @@ public final class VivoCarLyrics {
                     }
                 } catch (Throwable ignored) {
                 }
-                publishLineExtras(latestManager, latestLine, latestGeneration);
+                if (!isCurrent(latestManager, latestGeneration)) {
+                    return;
+                }
+                if (publishLatestAtomic) {
+                    String atomicLyric = latestStatus == STATUS_SUCCESS ? latestWhole : "";
+                    publishAtomicExtras(latestManager, latestLine, publishMediaId,
+                            atomicLyric, latestGeneration);
+                    if (latestStatus != STATUS_LOADING) {
+                        scheduleAtomicReplays(latestManager, latestGeneration, latestWhole,
+                                latestStatus, latestAtomicStateSequence);
+                    }
+                } else {
+                    publishLineExtras(latestManager, latestLine, latestGeneration);
+                }
             }
         };
 
@@ -674,7 +832,7 @@ public final class VivoCarLyrics {
     }
 
     private static boolean publishMetadata(Object manager, String line, String whole, int status,
-                                           long generation, boolean forceFullMetadata) throws Exception {
+                                           long generation) throws Exception {
         Object mediaItem = invokeRequired(manager, "a");
         if (mediaItem == null) {
             return false;
@@ -684,7 +842,7 @@ public final class VivoCarLyrics {
             return false;
         }
         Bundle extras = (Bundle) getFieldValue(metadata, "I");
-        if (!isCurrent(manager, generation)) {
+        if (!matchesExpectedMedia(manager, generation, extras)) {
             return false;
         }
         if (extras == null) {
@@ -692,21 +850,26 @@ public final class VivoCarLyrics {
             setFieldValue(metadata, "I", extras);
         }
 
+        String mediaId = resolveAtomicMediaId(manager, generation);
         long duration = resolveDuration(manager);
 
         extras.putString(META_LINE, line == null ? "" : line);
         extras.putString(META_WHOLE, whole == null ? "" : whole);
         extras.putLong(META_STATUS, (long) status);
+        long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
+        extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
 
+        if (!mediaId.isEmpty()) {
+            extras.putString("android.media.metadata.MEDIA_ID", mediaId);
+            extras.putString("ucar.media.metadata.VIVO.IMUSIC_ID", mediaId);
+        }
         if (duration > 0L) {
             extras.putLong("android.media.metadata.DURATION", duration);
         }
 
-        if (!forceFullMetadata) {
-            extras.remove("android.media.metadata.ALBUM_ART");
-            extras.remove("android.media.metadata.ART");
-            extras.remove("android.media.metadata.DISPLAY_ICON");
-        }
+        extras.remove("android.media.metadata.ALBUM_ART");
+        extras.remove("android.media.metadata.ART");
+        extras.remove("android.media.metadata.DISPLAY_ICON");
 
         Object latestMediaItem = invokeRequired(manager, "a");
         if (latestMediaItem != mediaItem) {
@@ -714,6 +877,10 @@ public final class VivoCarLyrics {
         }
         invokeOptional(manager, "I", mediaItem, 0);
         return true;
+    }
+
+    private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
+        return isCurrent(manager, generation);
     }
 
     private static boolean metadataHasCarKeys(Object manager, long generation) {
@@ -725,15 +892,54 @@ public final class VivoCarLyrics {
             Object metadata = getFieldValue(mediaItem, "d");
             Bundle extras = (Bundle) getFieldValue(metadata, "I");
             return extras != null
-                    && isCurrent(manager, generation)
+                    && matchesExpectedMedia(manager, generation, extras)
                     && extras.containsKey(META_STATUS)
-                    && extras.containsKey(META_WHOLE);
+                    && extras.containsKey(META_WHOLE)
+                    && (longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L)
+                            & ATOMIC_LYRIC_SUPPORT_EVENT) != 0L;
         } catch (Throwable ignored) {
             return false;
         }
     }
 
     private static void publishLineExtras(Object manager, String line, long generation) {
+        dispatchSessionExtras(manager, generation, line, false, "", "", false);
+    }
+
+    private static void publishAtomicClear(Object manager, String mediaId, long generation) {
+        // Atomic Player workaround removed - pure car mode
+    }
+
+    private static void publishAtomicExtras(Object manager, String line, String mediaId,
+                                            String whole, long generation) {
+        // Atomic Player workaround removed - pure car mode
+    }
+
+    private static void dispatchSessionExtras(final Object manager, final long generation,
+                                              final String line, final boolean atomicEvent,
+                                              final String mediaId, final String whole,
+                                              final boolean atomicClear) {
+        if (!isCurrent(manager, generation)) {
+            return;
+        }
+        Runnable publish = new Runnable() {
+            @Override
+            public void run() {
+                publishSessionExtras(manager, generation, line, atomicEvent,
+                        mediaId, whole, atomicClear);
+            }
+        };
+        Handler handler = serviceHandler(manager);
+        if (handler != null && Looper.myLooper() != handler.getLooper()) {
+            handler.post(publish);
+        } else {
+            publish.run();
+        }
+    }
+
+    private static void publishSessionExtras(Object manager, long generation, String line,
+                                             boolean atomicEvent, String mediaId, String whole,
+                                             boolean atomicClear) {
         if (!isCurrent(manager, generation)) {
             return;
         }
@@ -743,38 +949,78 @@ public final class VivoCarLyrics {
             extras.putBoolean(EXTRA_ALLOWED, true);
             extras.putString(EXTRA_LINE, line == null ? "" : line);
             extras.putBoolean(EXTRA_NOTICE, true);
+            extras.putString(ATOMIC_ACTION_KEY, atomicEvent ? ATOMIC_LRC_CHANGE : "");
+            if (atomicEvent) {
+                extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
+                extras.putString(ATOMIC_LYRIC, whole == null ? "" : whole);
+            }
             if (!isCurrent(manager, generation)) {
                 return;
             }
+            // Atomic extras check bypassed for current generation
             invokeRequired(sessionManager, "j", extras);
+            if (atomicEvent && isCurrent(manager, generation)) {
+                long sequence = ATOMIC_EVENT_SEQUENCE.incrementAndGet();
+                MAIN.postDelayed(new AtomicActionClearTask(manager, generation, sequence),
+                        ATOMIC_ACTION_CLEAR_MS);
+            }
         } catch (Throwable ignored) {
         }
     }
 
-    private static Application appleApplication() throws Exception {
-        Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
-        Object thread = invokeStaticOptional(activityThreadClass, "currentActivityThread");
-        if (thread != null) {
-            Object app = invokeOptional(thread, "getApplication");
-            if (app instanceof Application) {
-                return (Application) app;
-            }
+    private static boolean isExpectedAtomicMediaId(String mediaId, long generation) {
+        synchronized (STATE_LOCK) {
+            return generation == GENERATION.get()
+                    && currentAtomicMediaIdGeneration == generation
+                    && currentAtomicMediaId.equals(mediaId);
         }
-        throw new IllegalStateException("Application context unavailable");
+    }
+
+    private static final class AtomicActionClearTask implements Runnable {
+        private final Object manager;
+        private final long generation;
+        private final long sequence;
+
+        AtomicActionClearTask(Object manager, long generation, long sequence) {
+            this.manager = manager;
+            this.generation = generation;
+            this.sequence = sequence;
+        }
+
+        @Override
+        public void run() {
+            if (!isCurrent(manager, generation) || sequence != ATOMIC_EVENT_SEQUENCE.get()) {
+                return;
+            }
+            String line;
+            synchronized (STATE_LOCK) {
+                line = lastLine;
+            }
+            publishLineExtras(manager, line == null ? "" : line, generation);
+        }
     }
 
     private static Object currentPlaybackItem(Object manager) throws Exception {
-        Object item = invokeOptional(manager, "k");
-        if (item != null) return item;
-        Object queue = invokeOptional(manager, "i");
-        if (queue != null) {
-            Object currentQueueItem = invokeOptional(queue, "getCurrentItem");
-            if (currentQueueItem != null) {
-                Object playerItem = invokeOptional(currentQueueItem, "getItem");
-                if (playerItem != null) return playerItem;
-            }
+        Object mediaItem = invokeRequired(manager, "a");
+        if (mediaItem == null) {
+            return null;
         }
-        return null;
+        Object metadata = getFieldValue(mediaItem, "d");
+        Class<?> converter = Class.forName("com.apple.android.music.player.O");
+        Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
+        return method.invoke(null, metadata);
+    }
+
+    private static Application appleApplication() throws Exception {
+        Class<?> companion = Class.forName("com.apple.android.music.AppleMusicApplication$a");
+        Object application = invokeStaticOptional(companion, "c");
+        if (!(application instanceof Application)) {
+            application = invokeStaticOptional(companion, "a");
+        }
+        if (!(application instanceof Application)) {
+            throw new IllegalStateException("Apple Music application is unavailable");
+        }
+        return (Application) application;
     }
 
     private static long controllerPosition(Object manager) {
@@ -802,7 +1048,7 @@ public final class VivoCarLyrics {
         return 0L;
     }
 
-    private static long resolveDuration(Object manager) {
+        private static long resolveDuration(Object manager) {
         long dur = controllerDuration(manager);
         if (dur > 0L) {
             return dur;
@@ -891,6 +1137,92 @@ public final class VivoCarLyrics {
         return queueId > 0L ? "queue:" + queueId : "";
     }
 
+    private static String queueMediaId(Object queueItem) {
+        if (queueItem == null) {
+            return "";
+        }
+        Object item = invokeOptional(queueItem, "getItem");
+        String id = "";
+        if (item != null) {
+            id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
+            if (id.isEmpty()) {
+                long persistentId = longValue(invokeOptional(item, "getPersistentId"), 0L);
+                if (persistentId != 0L) {
+                    id = String.valueOf(persistentId);
+                }
+            }
+            if (id.isEmpty()) {
+                String title = stringValue(invokeOptional(item, "getTitle"));
+                String artist = stringValue(invokeOptional(item, "getArtistName"));
+                if (artist.isEmpty()) {
+                    artist = stringValue(invokeOptional(item, "getArtist"));
+                }
+                if (!title.isEmpty()) {
+                    id = title + ":" + artist;
+                }
+            }
+        }
+        if (id.isEmpty()) {
+            id = queueKey(queueItem);
+        }
+        return id;
+    }
+
+    private static String resolveAtomicMediaId(Object manager, long generation) {
+        synchronized (STATE_LOCK) {
+            if (!isCurrent(manager, generation)) {
+                return "";
+            }
+            if (currentAtomicMediaIdGeneration == generation && !currentAtomicMediaId.isEmpty()) {
+                return currentAtomicMediaId;
+            }
+        }
+        String resolved = "";
+        try {
+            Object mediaItem = invokeRequired(manager, "a");
+            Object metadata = getFieldValue(mediaItem, "d");
+            Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            if (extras != null) {
+                resolved = stringValue(extras.getString("android.media.metadata.MEDIA_ID"));
+                if (resolved.isEmpty()) {
+                    resolved = stringValue(extras.getString(PUBLIC_MEDIA_ID));
+                }
+                if (resolved.isEmpty()) {
+                    resolved = stringValue(extras.getString(APPLE_MEDIA_ID));
+                }
+            }
+            if (resolved.isEmpty() && mediaItem != null) {
+                resolved = stringValue(getFieldValue(mediaItem, "a"));
+            }
+        } catch (Throwable ignored) {
+        }
+
+        synchronized (STATE_LOCK) {
+            if (!isCurrent(manager, generation)) {
+                return "";
+            }
+            if (!resolved.isEmpty()) {
+                currentAtomicMediaId = resolved;
+                currentAtomicMediaIdGeneration = generation;
+            }
+            return currentAtomicMediaId;
+        }
+    }
+
+    private static String playbackItemMediaId(Object playbackItem) {
+        String id = stringValue(invokeOptional(playbackItem, "getSubscriptionStoreId"));
+        if (id.isEmpty()) {
+            id = stringValue(invokeOptional(playbackItem, "getId"));
+        }
+        if (id.isEmpty()) {
+            long persistentId = longValue(invokeOptional(playbackItem, "getPersistentId"), 0L);
+            if (persistentId != 0L) {
+                id = String.valueOf(persistentId);
+            }
+        }
+        return id;
+    }
+
     private static String lineForPosition(long position, long[] times, String[] texts) {
         int low = 0;
         int high = times.length - 1;
@@ -933,7 +1265,7 @@ public final class VivoCarLyrics {
             return "";
         }
         try {
-            return Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString().replace(' ', ' ').trim();
+            return Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString().replace('\u00a0', ' ').trim();
         } catch (Throwable ignored) {
             return html.replaceAll("<[^>]+>", "").trim();
         }
@@ -941,14 +1273,6 @@ public final class VivoCarLyrics {
 
     private static boolean isCurrent(Object manager, long generation) {
         return manager != null && manager == currentManager && generation == GENERATION.get();
-    }
-
-    private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
-        if (text == null || text.isEmpty()) {
-            return;
-        }
-        times.add(Long.valueOf(time));
-        texts.add(text);
     }
 
     private static void resetPublishCache() {
@@ -960,9 +1284,17 @@ public final class VivoCarLyrics {
             metadataWhole = null;
             metadataStatus = Integer.MIN_VALUE;
             pendingForceMetadata = false;
+            pendingAtomicPublish = false;
             activeLoadGeneration = -1L;
             activeLoadManager = null;
             loadRetryCount = 0;
+            currentPlaybackItemGeneration = -1L;
+            currentAtomicMediaId = "";
+            currentAtomicMediaIdGeneration = -1L;
+            atomicWhole = null;
+            atomicStatus = Integer.MIN_VALUE;
+            ATOMIC_EVENT_SEQUENCE.incrementAndGet();
+            ATOMIC_STATE_SEQUENCE.incrementAndGet();
         }
     }
 
