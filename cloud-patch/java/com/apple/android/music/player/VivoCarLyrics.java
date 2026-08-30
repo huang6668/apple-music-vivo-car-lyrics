@@ -21,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r12-stable-queue-key-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r13-consistent-mediaid-duration-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -882,11 +882,22 @@ public final class VivoCarLyrics {
             setFieldValue(metadata, "I", extras);
         }
 
+        String mediaId = resolveAtomicMediaId(manager, generation);
+        long duration = controllerDuration(manager);
+
         extras.putString(META_LINE, line == null ? "" : line);
         extras.putString(META_WHOLE, whole == null ? "" : whole);
         extras.putLong(META_STATUS, (long) status);
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
+
+        if (!mediaId.isEmpty()) {
+            extras.putString("android.media.metadata.MEDIA_ID", mediaId);
+            extras.putString("ucar.media.metadata.VIVO.IMUSIC_ID", mediaId);
+        }
+        if (duration > 0L) {
+            extras.putLong("android.media.metadata.DURATION", duration);
+        }
 
         extras.remove("android.media.metadata.ALBUM_ART");
         extras.remove("android.media.metadata.ART");
@@ -1167,18 +1178,15 @@ public final class VivoCarLyrics {
     }
 
     private static String resolveAtomicMediaId(Object manager, long generation) {
-        if (!isCurrent(manager, generation)) {
-            return "";
-        }
-        String resolved = "";
-        String fallback;
         synchronized (STATE_LOCK) {
             if (!isCurrent(manager, generation)) {
                 return "";
             }
-            fallback = currentAtomicMediaIdGeneration == generation ? currentAtomicMediaId : "";
+            if (currentAtomicMediaIdGeneration == generation && !currentAtomicMediaId.isEmpty()) {
+                return currentAtomicMediaId;
+            }
         }
-
+        String resolved = "";
         try {
             Object mediaItem = invokeRequired(manager, "a");
             Object metadata = getFieldValue(mediaItem, "d");
@@ -1196,10 +1204,6 @@ public final class VivoCarLyrics {
                 resolved = stringValue(getFieldValue(mediaItem, "a"));
             }
         } catch (Throwable ignored) {
-        }
-
-        if (resolved.isEmpty()) {
-            resolved = fallback;
         }
 
         synchronized (STATE_LOCK) {
