@@ -21,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r11-clean-in-place-metadata-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r12-stable-queue-key-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1119,16 +1119,20 @@ public final class VivoCarLyrics {
                 if (artist.isEmpty()) {
                     artist = stringValue(invokeOptional(item, "getArtist"));
                 }
+                String album = stringValue(invokeOptional(item, "getAlbumTitle"));
+                if (album.isEmpty()) {
+                    album = stringValue(invokeOptional(item, "getAlbum"));
+                }
                 if (!title.isEmpty()) {
-                    id = title + ":" + artist;
+                    id = title + ":" + artist + ":" + album;
                 }
             }
         }
-        long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
         if (!id.isEmpty()) {
-            return id + (queueId > 0L ? ":" + queueId : "");
+            return id;
         }
-        return queueId > 0L ? "queue:" + queueId + ":" + System.identityHashCode(queueItem) : "";
+        long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
+        return queueId > 0L ? "queue:" + queueId : "";
     }
 
     private static String queueMediaId(Object queueItem) {
