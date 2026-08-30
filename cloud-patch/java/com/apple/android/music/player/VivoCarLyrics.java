@@ -1,6 +1,7 @@
 package com.apple.android.music.player;
 
 import android.app.Application;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -20,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r9-loadtask-queue-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r10-empty-cover-metadata-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -876,16 +877,71 @@ public final class VivoCarLyrics {
         if (!matchesExpectedMedia(manager, generation, existing)) {
             return false;
         }
-        Bundle extras = existing == null ? new Bundle() : existing;
+        Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
         extras.putString(META_LINE, line == null ? "" : line);
         extras.putString(META_WHOLE, whole == null ? "" : whole);
         extras.putLong(META_STATUS, (long) status);
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
-        if (existing == null) {
-            setFieldValue(metadata, "I", extras);
+
+        extras.remove("android.media.metadata.ALBUM_ART");
+        extras.remove("android.media.metadata.ART");
+        extras.remove("android.media.metadata.DISPLAY_ICON");
+
+        Object metadataBuilder = invokeRequired(metadata, "a");
+        copyFields(metadata, metadataBuilder, true);
+        setFieldValue(metadataBuilder, "I", extras);
+        Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
+        copyFields(metadata, newMetadata, true);
+        setFieldValue(newMetadata, "I", extras);
+
+        Object mediaItemBuilder = invokeRequired(mediaItem, "a");
+        copyFields(mediaItem, mediaItemBuilder, true);
+        setFieldValue(mediaItemBuilder, "k", newMetadata);
+        Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
+        copyFields(mediaItem, newMediaItem, true);
+        setFieldValue(mediaItemBuilder, "k", newMetadata);
+        setFieldValue(newMediaItem, "k", newMetadata);
+
+        Object latestMediaItem = invokeRequired(manager, "a");
+        if (latestMediaItem != mediaItem) {
+            return false;
         }
+        invokeOptional(manager, "I", newMediaItem, 0);
         return true;
+    }
+
+    private static void copyFields(Object source, Object target, boolean clearBitmaps) {
+        if (source == null || target == null || source == target) {
+            return;
+        }
+        for (Class<?> cursor = source.getClass(); cursor != null && cursor != Object.class; cursor = cursor.getSuperclass()) {
+            for (Field field : cursor.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    Object val = field.get(source);
+                    if (clearBitmaps && val instanceof Bitmap) {
+                        val = null;
+                    }
+                    if (val != null) {
+                        Field targetField = findField(target.getClass(), field.getName());
+                        targetField.set(target, val);
+                    } else if (clearBitmaps) {
+                        try {
+                            Field targetField = findField(target.getClass(), field.getName());
+                            if (targetField.getType() == Bitmap.class) {
+                                targetField.set(target, null);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
@@ -969,9 +1025,7 @@ public final class VivoCarLyrics {
             if (!isCurrent(manager, generation)) {
                 return;
             }
-            if (atomicEvent && !atomicClear && !isExpectedAtomicMediaId(mediaId, generation)) {
-                return;
-            }
+            // Atomic extras check bypassed for current generation
             invokeRequired(sessionManager, "j", extras);
             if (atomicEvent && isCurrent(manager, generation)) {
                 long sequence = ATOMIC_EVENT_SEQUENCE.incrementAndGet();
