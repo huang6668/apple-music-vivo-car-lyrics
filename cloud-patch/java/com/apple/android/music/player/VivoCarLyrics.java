@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r5-position-duration-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r6-track-key-queue-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1116,86 +1116,67 @@ public final class VivoCarLyrics {
         if (queueItem == null) {
             return "";
         }
-        long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
-        if (queueId > 0L) {
-            return "queue:" + queueId;
-        }
         Object item = invokeOptional(queueItem, "getItem");
-        String id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
-        if (id.isEmpty()) {
-            id = stringValue(invokeOptional(item, "getPersistentId"));
+        String id = "";
+        if (item != null) {
+            id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
+            if (id.isEmpty()) {
+                long pid = longValue(invokeOptional(item, "getPersistentId"), 0L);
+                if (pid != 0L) {
+                    id = String.valueOf(pid);
+                }
+            }
+            if (id.isEmpty()) {
+                String title = stringValue(invokeOptional(item, "getTitle"));
+                String artist = stringValue(invokeOptional(item, "getArtistName"));
+                if (artist.isEmpty()) {
+                    artist = stringValue(invokeOptional(item, "getArtist"));
+                }
+                if (!title.isEmpty()) {
+                    id = title + ":" + artist;
+                }
+            }
         }
+        long queueId = longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
         if (!id.isEmpty()) {
-            return "item:" + id;
+            return id + (queueId > 0L ? ":" + queueId : "");
         }
-        String title = stringValue(invokeOptional(item, "getTitle"));
-        return title.isEmpty() ? "" : "title:" + title;
+        return queueId > 0L ? "queue:" + queueId + ":" + System.identityHashCode(queueItem) : "";
     }
 
     private static String queueMediaId(Object queueItem) {
+        if (queueItem == null) {
+            return "";
+        }
         Object item = invokeOptional(queueItem, "getItem");
-        String id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
-        if (id.isEmpty()) {
-            long persistentId = longValue(invokeOptional(item, "getPersistentId"), 0L);
-            if (persistentId != 0L) {
-                id = String.valueOf(persistentId);
+        String id = "";
+        if (item != null) {
+            id = stringValue(invokeOptional(item, "getSubscriptionStoreId"));
+            if (id.isEmpty()) {
+                long persistentId = longValue(invokeOptional(item, "getPersistentId"), 0L);
+                if (persistentId != 0L) {
+                    id = String.valueOf(persistentId);
+                }
             }
+            if (id.isEmpty()) {
+                String title = stringValue(invokeOptional(item, "getTitle"));
+                String artist = stringValue(invokeOptional(item, "getArtistName"));
+                if (artist.isEmpty()) {
+                    artist = stringValue(invokeOptional(item, "getArtist"));
+                }
+                if (!title.isEmpty()) {
+                    id = title + ":" + artist;
+                }
+            }
+        }
+        if (id.isEmpty()) {
+            id = queueKey(queueItem);
         }
         return id;
     }
 
     private static String resolveAtomicMediaId(Object manager, long generation) {
-        if (!isCurrent(manager, generation)) {
-            return "";
-        }
-        String resolved = "";
-        String fallback;
-        Object playbackItem;
-        long expectedQueueId;
         synchronized (STATE_LOCK) {
-            if (!isCurrent(manager, generation)) {
-                return "";
-            }
-            playbackItem = currentPlaybackItemGeneration == generation ? currentPlaybackItem : null;
-            expectedQueueId = currentExpectedQueueId;
-            fallback = currentAtomicMediaIdGeneration == generation ? currentAtomicMediaId : "";
-        }
-        if (expectedQueueId <= 0L) {
-            return fallback;
-        }
-
-        try {
-            Object mediaItem = invokeRequired(manager, "a");
-            Object metadata = getFieldValue(mediaItem, "d");
-            Bundle extras = (Bundle) getFieldValue(metadata, "I");
-            long queueId = extras == null ? 0L : extras.getLong(APPLE_QUEUE_ID, 0L);
-            if (queueId == expectedQueueId) {
-                resolved = stringValue(extras.getString(PUBLIC_MEDIA_ID));
-                if (resolved.isEmpty()) {
-                    resolved = stringValue(extras.getString(APPLE_MEDIA_ID));
-                }
-                if (resolved.isEmpty()) {
-                    resolved = stringValue(getFieldValue(mediaItem, "a"));
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        long playbackQueueId = longValue(invokeOptional(playbackItem, "getQueueId"), 0L);
-        if (resolved.isEmpty() && playbackItem != null && playbackQueueId == expectedQueueId) {
-            resolved = playbackItemMediaId(playbackItem);
-        }
-
-        synchronized (STATE_LOCK) {
-            if (!isCurrent(manager, generation)) {
-                return "";
-            }
-            if (currentExpectedQueueId != expectedQueueId) {
-                return currentAtomicMediaIdGeneration == generation ? currentAtomicMediaId : "";
-            }
-            if (!resolved.isEmpty()) {
-                currentAtomicMediaId = resolved;
-                currentAtomicMediaIdGeneration = generation;
-            }
             return currentAtomicMediaIdGeneration == generation ? currentAtomicMediaId : "";
         }
     }
