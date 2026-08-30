@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r6-track-key-queue-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r7-metadata-copy-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -888,11 +888,19 @@ public final class VivoCarLyrics {
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
 
         Object metadataBuilder = invokeRequired(metadata, "a");
+        copyFields(metadata, metadataBuilder);
         setFieldValue(metadataBuilder, "I", extras);
         Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
+        copyFields(metadata, newMetadata);
+        setFieldValue(newMetadata, "I", extras);
+
         Object mediaItemBuilder = invokeRequired(mediaItem, "a");
+        copyFields(mediaItem, mediaItemBuilder);
         setFieldValue(mediaItemBuilder, "k", newMetadata);
         Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
+        copyFields(mediaItem, newMediaItem);
+        setFieldValue(newMediaItem, "k", newMetadata);
+
         Object latestMediaItem = invokeRequired(manager, "a");
         if (latestMediaItem != mediaItem) {
             return false;
@@ -904,6 +912,28 @@ public final class VivoCarLyrics {
         }
         invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
         return true;
+    }
+
+    private static void copyFields(Object source, Object target) {
+        if (source == null || target == null || source == target) {
+            return;
+        }
+        for (Class<?> cursor = source.getClass(); cursor != null && cursor != Object.class; cursor = cursor.getSuperclass()) {
+            for (Field field : cursor.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                    Object val = field.get(source);
+                    if (val != null) {
+                        Field targetField = findField(target.getClass(), field.getName());
+                        targetField.set(target, val);
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
