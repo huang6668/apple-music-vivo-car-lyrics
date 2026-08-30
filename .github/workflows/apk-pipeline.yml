@@ -6,7 +6,7 @@ on:
       rebuild:
         description: Apply a reviewed patch and build a test APK
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
