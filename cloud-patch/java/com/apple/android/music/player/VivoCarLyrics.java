@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r6-all-songs-progress-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r7-no-metadata-override-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -41,8 +41,8 @@ public final class VivoCarLyrics {
     private static final int STATUS_NO_LYRICS = 1;
     private static final int STATUS_LOADING = 2;
     private static final int STATUS_FAILED = 3;
-    private static final int MAX_LOAD_ATTEMPTS = 24;
-    private static final long LOAD_RETRY_MS = 250L;
+    private static final int MAX_LOAD_ATTEMPTS = 40;
+    private static final long LOAD_RETRY_MS = 150L;
     private static final long LYRICS_RESULT_TIMEOUT_MS = 15000L;
     private static final long LINE_POLL_MS = 250L;
     private static final long[] METADATA_REAPPLY_DELAYS_MS = {150L, 600L, 1500L, 3000L};
@@ -355,9 +355,17 @@ public final class VivoCarLyrics {
 
             try {
                 Object playbackItem = currentPlaybackItem(manager);
-                if (playbackItem == null) {
-                    retryOrFinish(STATUS_FAILED);
-                    return;
+                long queueId = longValue(invokeOptional(playbackItem, "getQueueId"), 0L);
+                long requiredQueueId = currentExpectedQueueId > 0L ? currentExpectedQueueId : expectedQueueId;
+                if (playbackItem == null || (requiredQueueId > 0L && queueId > 0L && requiredQueueId != queueId)) {
+                    if (attempt + 1 < MAX_LOAD_ATTEMPTS) {
+                        MAIN.postDelayed(new LoadTask(manager, generation, requiredQueueId, attempt + 1), LOAD_RETRY_MS);
+                        return;
+                    }
+                    if (playbackItem == null) {
+                        retryOrFinish(STATUS_FAILED);
+                        return;
+                    }
                 }
 
                 synchronized (STATE_LOCK) {
@@ -874,50 +882,10 @@ public final class VivoCarLyrics {
 
     private static boolean publishMetadata(Object manager, String line, String whole, int status,
                                            long generation) throws Exception {
-        Object mediaItem = invokeRequired(manager, "a");
-        if (mediaItem == null) {
-            return false;
-        }
-        Object metadata = getFieldValue(mediaItem, "d");
-        Bundle existing = (Bundle) getFieldValue(metadata, "I");
-        if (!matchesExpectedMedia(manager, generation, existing)) {
-            return false;
-        }
-        Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
-        extras.putString(META_LINE, line == null ? "" : line);
-        extras.putString(META_WHOLE, whole == null ? "" : whole);
-        extras.putLong(META_STATUS, (long) status);
-        extras.putString(EXTRA_LINE, line == null ? "" : line);
-        extras.putInt(EXTRA_ALLOWED, 1);
-        long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
-        extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
-
-        long duration = controllerDuration(manager);
-        if (duration > 0L) {
-            extras.putLong("android.media.metadata.DURATION", duration);
-        }
-
-        extras.remove("android.media.metadata.ART");
-        extras.remove("android.media.metadata.ALBUM_ART");
-        extras.remove("android.media.metadata.DISPLAY_ICON");
-
-        Object metadataBuilder = invokeRequired(metadata, "a");
-        setFieldValue(metadataBuilder, "I", extras);
-        Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
-        Object mediaItemBuilder = invokeRequired(mediaItem, "a");
-        setFieldValue(mediaItemBuilder, "k", newMetadata);
-        Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
-        Object latestMediaItem = invokeRequired(manager, "a");
-        if (latestMediaItem != mediaItem) {
-            return false;
-        }
-        Object latestMetadata = getFieldValue(latestMediaItem, "d");
-        Bundle latestExtras = (Bundle) getFieldValue(latestMetadata, "I");
-        if (!matchesExpectedMedia(manager, generation, latestExtras)) {
-            return false;
-        }
-        invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
-        return true;
+        // Do not override MediaMetadata via manager.I, so native MediaMetadata & PlaybackState
+        // (including duration, title, artist, album art) stay 100% native and intact for Atomic Player.
+        // Also prevents cluster cover art from flashing on line updates.
+        return false;
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
