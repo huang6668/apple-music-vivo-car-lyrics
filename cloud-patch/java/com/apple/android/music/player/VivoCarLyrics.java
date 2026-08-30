@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r8-inplace-metadata-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r9-loadtask-queue-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -347,20 +347,13 @@ public final class VivoCarLyrics {
 
             try {
                 Object playbackItem = currentPlaybackItem(manager);
-                long queueId = longValue(invokeOptional(playbackItem, "getQueueId"), 0L);
-                long requiredQueueId = currentExpectedQueueId > 0L ? currentExpectedQueueId : expectedQueueId;
-                if (playbackItem == null || (requiredQueueId > 0L && requiredQueueId != queueId)) {
+                if (playbackItem == null) {
                     retryOrFinish(STATUS_FAILED);
                     return;
                 }
 
                 synchronized (STATE_LOCK) {
                     if (!isCurrent(manager, generation)) {
-                        return;
-                    }
-                    long latestExpectedQueueId = currentExpectedQueueId;
-                    if (latestExpectedQueueId > 0L && latestExpectedQueueId != queueId) {
-                        retryOrFinish(STATUS_FAILED);
                         return;
                     }
                     currentPlaybackItem = playbackItem;
@@ -896,12 +889,7 @@ public final class VivoCarLyrics {
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
-        if (!isCurrent(manager, generation)) {
-            return false;
-        }
-        long expectedQueueId = currentExpectedQueueId;
-        return expectedQueueId > 0L && extras != null
-                && extras.getLong(APPLE_QUEUE_ID, 0L) == expectedQueueId;
+        return isCurrent(manager, generation);
     }
 
     private static boolean metadataHasCarKeys(Object manager, long generation) {
