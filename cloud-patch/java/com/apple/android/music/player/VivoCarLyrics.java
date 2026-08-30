@@ -21,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r13-consistent-mediaid-duration-fix-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r14-verified-atomic-smali-fix-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -883,7 +883,7 @@ public final class VivoCarLyrics {
         }
 
         String mediaId = resolveAtomicMediaId(manager, generation);
-        long duration = controllerDuration(manager);
+        long duration = resolveDuration(manager);
 
         extras.putString(META_LINE, line == null ? "" : line);
         extras.putString(META_WHOLE, whole == null ? "" : whole);
@@ -1076,6 +1076,32 @@ public final class VivoCarLyrics {
                         }
                     }
                     return Math.max(0L, pos);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0L;
+    }
+
+        private static long resolveDuration(Object manager) {
+        long dur = controllerDuration(manager);
+        if (dur > 0L) {
+            return dur;
+        }
+        try {
+            Object playbackItem = currentPlaybackItem;
+            if (playbackItem != null) {
+                dur = longValue(invokeOptional(playbackItem, "getDuration"), 0L);
+                if (dur > 0L) return dur;
+            }
+            Object mediaItem = invokeRequired(manager, "a");
+            if (mediaItem != null) {
+                dur = longValue(invokeOptional(mediaItem, "getDuration"), 0L);
+                if (dur > 0L) return dur;
+                Object metadata = getFieldValue(mediaItem, "d");
+                if (metadata != null) {
+                    dur = longValue(invokeOptional(metadata, "getDuration"), 0L);
+                    if (dur > 0L) return dur;
                 }
             }
         } catch (Throwable ignored) {
