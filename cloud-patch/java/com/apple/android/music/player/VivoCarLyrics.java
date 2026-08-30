@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-fix-r7-no-metadata-override-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-lyrics-pure-car-extras-r8-2026-08-30";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -963,26 +963,32 @@ public final class VivoCarLyrics {
         try {
             Object sessionManager = getFieldValue(manager, "a");
             Bundle extras = new Bundle();
+            String safeLine = line == null ? "" : line;
+            String safeWhole = whole == null ? "" : whole;
+            int status;
+            synchronized (STATE_LOCK) {
+                status = lastStatus == Integer.MIN_VALUE ? STATUS_SUCCESS : lastStatus;
+            }
+
+            // Car head unit keys
             extras.putBoolean(EXTRA_ALLOWED, true);
-            extras.putString(EXTRA_LINE, line == null ? "" : line);
+            extras.putString(EXTRA_LINE, safeLine);
             extras.putBoolean(EXTRA_NOTICE, true);
-            extras.putString(ATOMIC_ACTION_KEY, atomicEvent ? ATOMIC_LRC_CHANGE : "");
+
+            // Dashboard instrument cluster keys (ucar)
+            extras.putString(META_LINE, safeLine);
+            extras.putString(META_WHOLE, safeWhole);
+            extras.putLong(META_STATUS, (long) status);
+
             if (atomicEvent) {
+                extras.putString(ATOMIC_ACTION_KEY, atomicEvent ? ATOMIC_LRC_CHANGE : "");
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
-                extras.putString(ATOMIC_LYRIC, whole == null ? "" : whole);
+                extras.putString(ATOMIC_LYRIC, safeWhole);
             }
             if (!isCurrent(manager, generation)) {
                 return;
             }
-            if (atomicEvent && !atomicClear && !isExpectedAtomicMediaId(mediaId, generation)) {
-                return;
-            }
             invokeRequired(sessionManager, "j", extras);
-            if (atomicEvent && isCurrent(manager, generation)) {
-                long sequence = ATOMIC_EVENT_SEQUENCE.incrementAndGet();
-                MAIN.postDelayed(new AtomicActionClearTask(manager, generation, sequence),
-                        ATOMIC_ACTION_CLEAR_MS);
-            }
         } catch (Throwable ignored) {
         }
     }
