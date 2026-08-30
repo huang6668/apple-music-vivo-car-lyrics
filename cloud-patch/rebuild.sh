@@ -58,7 +58,7 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
-  'vivo-car-lyrics-restore-duration-progress-r17-2026-08-30' \
+  'vivo-car-atomic-lyrics-fix-r3-2026-08-28' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
   'ucar.media.metadata.LYRICS_STATUS' \
@@ -140,11 +140,11 @@ java -Xmx4g -jar "$APKTOOL_JAR" d -f \
   out/apple-music-vivo-car-lyrics-debug.apk -o "$FINAL_MANIFEST_DIR" \
   > out/report/final-apktool.log 2>&1
 cp "$FINAL_MANIFEST_DIR/AndroidManifest.xml" out/report/patched-manifest-decoded.xml
-python3 - "$FINAL_MANIFEST_DIR/AndroidManifest.xml" <<'PY'
+python3 - "$FINAL_MANIFEST_DIR/AndroidManifest.xml" "$ATOMIC_SERVICE_ACTION" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
-manifest_path = sys.argv[1]
+manifest_path, action_name = sys.argv[1:]
 name_attr = "{http://schemas.android.com/apk/res/android}name"
 exported_attr = "{http://schemas.android.com/apk/res/android}exported"
 root = ET.parse(manifest_path).getroot()
@@ -152,10 +152,15 @@ services = [item for item in root.findall("./application/service")
             if item.get(name_attr) == "com.apple.android.music.player.MediaPlaybackService"]
 if len(services) != 1 or services[0].get(exported_attr) != "true":
     raise SystemExit("MediaPlaybackService rebuilt manifest verification failed")
+required = {action_name, "android.media.browse.MediaBrowserService"}
 filters = [{action.get(name_attr) for action in intent_filter.findall("action")}
            for intent_filter in services[0].findall("intent-filter")]
-if not any("android.media.browse.MediaBrowserService" in actions for actions in filters):
-    raise SystemExit("MediaBrowserService action is missing from rebuilt filter")
+if not any(required.issubset(actions) for actions in filters):
+    raise SystemExit("Atomic Player and MediaBrowser actions are not in the same rebuilt filter")
+all_actions = [action.get(name_attr)
+               for action in root.findall(".//action")]
+if all_actions.count(action_name) != 1:
+    raise SystemExit("Atomic Player service action must occur exactly once in final manifest")
 PY
 printf '%s\n' "$ATOMIC_SERVICE_ACTION" > out/report/verified-atomic-player-action.txt
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' out/report/patched-signature.txt || {
