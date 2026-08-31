@@ -48,6 +48,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test cluster lyric pagination and publishing contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test_classes="$RUNNER_TEMP/cluster-lyrics-tests"
+          rm -rf "$test_classes"
+          mkdir -p "$test_classes"
+          javac --release 8 -d "$test_classes" \
+            cloud-patch/java/com/apple/android/music/player/ClusterLyricsPaginator.java \
+            cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java
+          java -cp "$test_classes" com.apple.android.music.player.ClusterLyricsPaginatorTest
+          python3 cloud-patch/tests/verify_source_contract.py
+
       - name: Install Android build tools
         shell: bash
         run: |
@@ -180,7 +193,7 @@ jobs:
             payload/out/apple-music-vivo-car-lyrics-debug.apk \
             payload/out/apple-music-vivo-car-lyrics-debug.apk.sha256 \
             --title "Apple Music Vivo Car Lyrics - Build #${{ github.run_number }}" \
-            --notes "Patched APK with fixed signature (album art reload fix)."
+            --notes "Patched APK with fixed signature, correct cluster MediaMetadata lyrics, and timestamped long-line pagination. Album artwork flashing may still depend on CarNetworking behavior."
 
       - name: Upload verified APK
         if: ${{ inputs.rebuild && success() }}
@@ -205,4 +218,3 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           compression-level: 0
-

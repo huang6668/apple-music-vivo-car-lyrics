@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-lyrics-restore-pure-manifest-r9-2026-08-30";
+    private static final String BUILD_MARKER = "vivo-car-cluster-pagination-r10-2026-08-31";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -58,7 +58,8 @@ public final class VivoCarLyrics {
     private static final AtomicLong ATOMIC_STATE_SEQUENCE = new AtomicLong();
     private static final Object STATE_LOCK = new Object();
     private static final Pattern LRC_TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
-    private static final LyricsState EMPTY_LYRICS = new LyricsState(new long[0], new String[0], "");
+    private static final LyricsState EMPTY_LYRICS = new LyricsState(
+            new long[0], new String[0], "", new long[0], new String[0], "");
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
@@ -69,7 +70,6 @@ public final class VivoCarLyrics {
     private static String lastLine;
     private static String lastWhole;
     private static int lastStatus = Integer.MIN_VALUE;
-    private static String metadataLine;
     private static String metadataWhole;
     private static int metadataStatus = Integer.MIN_VALUE;
     private static volatile Object currentQueueItem;
@@ -94,11 +94,18 @@ public final class VivoCarLyrics {
         final long[] times;
         final String[] texts;
         final String whole;
+        final long[] clusterTimes;
+        final String[] clusterTexts;
+        final String clusterWhole;
 
-        LyricsState(long[] times, String[] texts, String whole) {
+        LyricsState(long[] times, String[] texts, String whole,
+                    long[] clusterTimes, String[] clusterTexts, String clusterWhole) {
             this.times = times;
             this.texts = texts;
             this.whole = whole;
+            this.clusterTimes = clusterTimes;
+            this.clusterTexts = clusterTexts;
+            this.clusterWhole = clusterWhole;
         }
     }
 
@@ -640,11 +647,14 @@ public final class VivoCarLyrics {
         }
 
         String whole = lrc.toString();
+        ClusterLyricsPaginator.Result cluster =
+                ClusterLyricsPaginator.paginate(times, texts, duration);
         synchronized (STATE_LOCK) {
             if (!isCurrent(manager, generation)) {
                 return;
             }
-            lyricsState = new LyricsState(times, texts, whole);
+            lyricsState = new LyricsState(times, texts, whole,
+                    cluster.times, cluster.texts, cluster.whole);
             loadRetryCount = 0;
         }
         String currentLine = lineForPosition(controllerPosition(manager), times, texts);
@@ -821,6 +831,7 @@ public final class VivoCarLyrics {
                 boolean forceLatestMetadata;
                 boolean publishLatestAtomic;
                 long latestAtomicStateSequence;
+                LyricsState latestLyricsState;
                 synchronized (STATE_LOCK) {
                     latestManager = pendingManager;
                     latestGeneration = pendingGeneration;
@@ -830,6 +841,7 @@ public final class VivoCarLyrics {
                     forceLatestMetadata = pendingForceMetadata;
                     publishLatestAtomic = pendingAtomicPublish;
                     latestAtomicStateSequence = ATOMIC_STATE_SEQUENCE.get();
+                    latestLyricsState = lyricsState;
                     pendingForceMetadata = false;
                     pendingAtomicPublish = false;
                     publishQueued = false;
@@ -839,16 +851,21 @@ public final class VivoCarLyrics {
                 }
                 String publishMediaId = resolveAtomicMediaId(latestManager, latestGeneration);
                 try {
-                    boolean metadataNeeded = forceLatestMetadata
+                    String latestClusterWhole = latestStatus == STATUS_SUCCESS
+                            ? latestLyricsState.clusterWhole : latestWhole;
+                    String latestClusterLine = latestStatus == STATUS_SUCCESS
+                            ? lineForPosition(controllerPosition(latestManager),
+                                    latestLyricsState.clusterTimes, latestLyricsState.clusterTexts)
+                            : "";
+                    boolean metadataNeeded = latestStatus != STATUS_LOADING && (forceLatestMetadata
                             || latestStatus != metadataStatus
-                            || !safeEquals(latestLine, metadataLine)
-                            || !safeEquals(latestWhole, metadataWhole);
-                    if (metadataNeeded && publishMetadata(latestManager, latestLine, latestWhole,
+                            || !safeEquals(latestClusterWhole, metadataWhole));
+                    if (metadataNeeded && publishMetadata(latestManager, latestClusterLine,
+                            latestClusterWhole,
                             latestStatus, latestGeneration)) {
                         synchronized (STATE_LOCK) {
                             if (isCurrent(latestManager, latestGeneration)) {
-                                metadataLine = latestLine;
-                                metadataWhole = latestWhole;
+                                metadataWhole = latestClusterWhole;
                                 metadataStatus = latestStatus;
                             }
                         }
@@ -882,10 +899,42 @@ public final class VivoCarLyrics {
 
     private static boolean publishMetadata(Object manager, String line, String whole, int status,
                                            long generation) throws Exception {
-        // Do not override MediaMetadata via manager.I, so native MediaMetadata & PlaybackState
-        // (including duration, title, artist, album art) stay 100% native and intact for Atomic Player.
-        // Also prevents cluster cover art from flashing on line updates.
-        return false;
+        Object mediaItem = invokeRequired(manager, "a");
+        if (mediaItem == null) {
+            return false;
+        }
+        Object metadata = getFieldValue(mediaItem, "d");
+        if (metadata == null) {
+            return false;
+        }
+        Bundle existing = (Bundle) getFieldValue(metadata, "I");
+        if (!matchesExpectedMedia(manager, generation, existing)) {
+            return false;
+        }
+
+        Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
+        extras.putString(META_LINE, line == null ? "" : line);
+        extras.putString(META_WHOLE, whole == null ? "" : whole);
+        extras.putLong(META_STATUS, (long) status);
+
+        Object metadataBuilder = invokeRequired(metadata, "a");
+        setFieldValue(metadataBuilder, "I", extras);
+        Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
+        Object mediaItemBuilder = invokeRequired(mediaItem, "a");
+        setFieldValue(mediaItemBuilder, "k", newMetadata);
+        Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
+
+        Object latestMediaItem = invokeRequired(manager, "a");
+        if (latestMediaItem != mediaItem) {
+            return false;
+        }
+        Object latestMetadata = getFieldValue(latestMediaItem, "d");
+        Bundle latestExtras = (Bundle) getFieldValue(latestMetadata, "I");
+        if (!matchesExpectedMedia(manager, generation, latestExtras)) {
+            return false;
+        }
+        invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
+        return true;
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
@@ -907,10 +956,9 @@ public final class VivoCarLyrics {
             Bundle extras = (Bundle) getFieldValue(metadata, "I");
             return extras != null
                     && matchesExpectedMedia(manager, generation, extras)
+                    && extras.containsKey(META_LINE)
                     && extras.containsKey(META_STATUS)
-                    && extras.containsKey(META_WHOLE)
-                    && (longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L)
-                            & ATOMIC_LYRIC_SUPPORT_EVENT) != 0L;
+                    && extras.containsKey(META_WHOLE);
         } catch (Throwable ignored) {
             return false;
         }
@@ -975,13 +1023,8 @@ public final class VivoCarLyrics {
             extras.putString(EXTRA_LINE, safeLine);
             extras.putBoolean(EXTRA_NOTICE, true);
 
-            // Dashboard instrument cluster keys (ucar)
-            extras.putString(META_LINE, safeLine);
-            extras.putString(META_WHOLE, safeWhole);
-            extras.putLong(META_STATUS, (long) status);
-
             if (atomicEvent) {
-                extras.putString(ATOMIC_ACTION_KEY, atomicEvent ? ATOMIC_LRC_CHANGE : "");
+                extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
                 extras.putString(ATOMIC_LYRIC, safeWhole);
             }

@@ -7,6 +7,7 @@ BT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}"
 PLATFORM="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/platforms/android-30/android.jar"
 PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/VivoCarLyrics.java"
+PAGINATOR_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/ClusterLyricsPaginator.java"
 HELPER_WORK="$RUNNER_TEMP/vivo-car-lyrics-helper"
 SIGNING_KEY="$RUNNER_TEMP/apple-music-vivo-car-lyrics-signing.p12"
 SIGNING_CERT_SHA256_FILE="$PATCH_ROOT/../config/signing-cert-sha256.txt"
@@ -19,6 +20,7 @@ FINAL_HELPER_DEX="$HELPER_WORK/final-helper.dex"
 
 [[ -f "$PLATFORM" ]] || { echo "Android 30 platform is missing" >&2; exit 1; }
 [[ -f "$HELPER_SOURCE" ]] || { echo "VivoCarLyrics.java is missing" >&2; exit 1; }
+[[ -f "$PAGINATOR_SOURCE" ]] || { echo "ClusterLyricsPaginator.java is missing" >&2; exit 1; }
 [[ -f "$SIGNING_CERT_SHA256_FILE" ]] || { echo "Signing certificate pin is missing" >&2; exit 1; }
 [[ -n "${SIGNING_KEY_BASE64:-}" ]] || { echo "ANDROID_SIGNING_KEY_BASE64 secret is missing" >&2; exit 1; }
 [[ -n "${SIGNING_PASSWORD:-}" ]] || { echo "ANDROID_SIGNING_PASSWORD secret is missing" >&2; exit 1; }
@@ -31,7 +33,8 @@ find work/apktool -path '*/META-INF/*' -type f \
 
 java -Xmx4g -jar "$APKTOOL_JAR" b work/apktool -o out/app-unsigned.apk
 
-javac --release 8 -classpath "$PLATFORM" -d "$HELPER_WORK/classes" "$HELPER_SOURCE"
+javac --release 8 -classpath "$PLATFORM" -d "$HELPER_WORK/classes" \
+  "$HELPER_SOURCE" "$PAGINATOR_SOURCE"
 jar --create --file "$HELPER_WORK/vivo-car-lyrics.jar" -C "$HELPER_WORK/classes" .
 "$BT/d8" --min-api 30 --output "$HELPER_WORK/dex" "$HELPER_WORK/vivo-car-lyrics.jar"
 unzip -Z1 out/app-unsigned.apk > "$APK_ENTRY_LIST"
@@ -58,7 +61,8 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
-  'vivo-car-lyrics-restore-pure-manifest-r9-2026-08-30' \
+  'com/apple/android/music/player/ClusterLyricsPaginator' \
+  'vivo-car-cluster-pagination-r10-2026-08-31' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
   'ucar.media.metadata.LYRICS_STATUS' \

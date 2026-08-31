@@ -8,8 +8,10 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - Analysis runs in GitHub Actions; no Android SDK, apktool, jadx, or signing tools are installed on the local Mac.
 - Rebuild is opt-in and produces a test APK signed by a fixed PKCS12 key stored in GitHub Secrets.
 - The pinned test certificate lets later builds update one another, but it cannot replace Apple's signed package or older builds signed with a different temporary key.
-- One in-process lyrics state machine loads and parses Apple Music lyrics. Car lyrics receive only the current line during playback; Atomic Player receives the complete timestamped LRC on track or lyrics changes, immediately after its controller connects, and through a low-frequency replay fallback.
-- Apple Music's exported `MediaPlaybackService` also advertises `com.vivo.musicwidgetmix.support.service`, so Atomic Player selects its cooperation controller instead of the generic controller that has no lyrics support.
+- One in-process lyrics state machine loads and parses Apple Music lyrics. The head unit receives the native current-line Extras, while the instrument cluster receives a timestamped LRC through `MediaMetadata`.
+- Instrument-cluster lines longer than 20 UTF-16 code units are split into timestamped pages. The original LRC remains unchanged for Atomic Player events.
+- Current-line changes do not rebuild `MediaMetadata`; only a track, complete lyric, status, or native metadata replacement can trigger a rebuild. This removes Apple Music's per-line metadata churn, but CarNetworking may still resend artwork when its own parsed lyric page changes.
+- The current baseline keeps Apple Music's native `MediaPlaybackService` manifest to preserve the native progress bar. Atomic Player protocol fields are retained, but cooperation-controller selection remains device/firmware dependent.
 
 ## KuWo bridge prototype
 

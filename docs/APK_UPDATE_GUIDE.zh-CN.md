@@ -1,6 +1,6 @@
 # Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
-最后整理日期：2026-08-28
+最后整理日期：2026-08-31
 
 本文档用于把新版 Apple Music APK 交给后续 AI 重新分析、适配并通过 GitHub Actions 构建。不要把本文档中的混淆类名、字段名或补丁行号当成跨版本稳定接口。
 
@@ -29,6 +29,7 @@
 6. 不修改解码器、音频格式、AudioTrack、ExoPlayer 音频输出、音频焦点或码率选择，避免影响音质。
 7. 原子随身听只在换歌、完整歌词或状态变化时收到完整 LRC；普通逐句更新必须清空原子事件 action，不能每 250 毫秒重复触发整段歌词解析。
 8. 原子随身听建立 MediaSession 控制器连接后，按短延迟补发当前状态，避免晚打开时等待下一轮低频保活。
+9. 仪表端使用独立的分页时间轴：单页最多 20 个 UTF-16 单元，长句按时间戳分成多页；车机和原子随身听继续使用原始歌词时间轴。
 
 ## 3. vivo 车联协议字段
 
@@ -59,9 +60,13 @@ music.media.extras.NOTICE_CAR
 
 当前行放入 `music.media.extras.LYRIC`；另外两个字段设为 `true`。
 
+仪表端读取的是歌曲 `MediaMetadata` 中的 `ucar.*` 字段，不读取上述 Session Extras。当前实现只在换歌、完整分页歌词、状态变化或原生元数据覆盖时重建一次 Metadata；普通逐句变化不重建。这样可以消除 Apple Music 自身造成的逐句封面刷新，但车联在解析分页 LRC 后仍可能因内部 `CarMusicInfo` 更新而重发封面，必须以实车结果为准。
+
+仪表固件会把超过 20 个 UTF-16 单元的当前行截成前 17 个单元加省略号，且不会自行横向滚动。因此辅助类需要把长句预先拆成不超过 20 个 UTF-16 单元的多条 LRC，并为每页分配递增时间戳，模拟翻页显示。
+
 ## 3.1 vivo 原子随身听协议
 
-在 `com.apple.android.music.player.MediaPlaybackService` 的现有 `intent-filter` 中增加：
+协议完整接入通常要求在 `com.apple.android.music.player.MediaPlaybackService` 的现有 `intent-filter` 中增加：
 
 ```text
 com.vivo.musicwidgetmix.support.service
@@ -83,6 +88,8 @@ vivomusicmix.media.metadata.support_event = 原有能力位 | 8
 ```
 
 `meida` 和 `meidia` 是协议中的真实拼写，不能修正。歌词能力位 `8` 必须放入 MediaMetadata；缺失时原子随身听会把合作控制器判定为不支持歌词，即使收到完整 LRC 事件也不会显示。原子随身听晚连接后不会主动向 Apple Music 拉取当前歌词，因此成功、无歌词或失败事件需在短延迟后重发，并在播放期间低频重发。逐句车联 Extras 更新必须把 `vivomusicmix.meida.extra.key.action` 设为空字符串，避免旧的 `lrc_change` 被 Apple Music 的合并式 Extras 更新持续保留。
+
+当前 r9 基线为了保留 Apple Music 原生进度条，已撤销 Manifest 中的原子合作 action，只保留协议字段和连接回调代码。因此本轮仪表分页改动不宣称原子随身听已经完整兼容；是否能选中合作控制器取决于设备和固件。若后续恢复该 action，必须同时复测原子随身听进度条、歌词和连续切歌。
 
 切歌时应立即发送一次空歌词事件。优先携带已经确认属于新队列项的公开 `android.media.metadata.MEDIA_ID`；公开 ID 尚未出现时可暂用新队列项的 store ID。若连 fallback ID 也没有，仍须发送 `lrc_change + 空 meidia_id + 空 lyric`，原子随身听会用该事件清除内存中的上一首歌词，不能继续沿用旧歌曲 ID。
 
@@ -147,7 +154,8 @@ onAtomicControllerConnected(controllerPackageName)
 - 当前歌词行变化：只调用 Apple Music MediaSession 管理器的 Extras 发布接口。
 - 完整歌词或状态变化：更新 MediaItem 内部 Metadata Extras，再让播放管理器发布新的 MediaItem。
 - Apple Music 自己覆盖元数据且车联字段消失：延迟补写一次。
-- 使用缓存比较 `line`、`whole`、`status`，相同内容不重复发布。
+- 仪表元数据去重只比较分页后的 `whole` 和 `status`，不能因为原始当前行变化而重建。
+- 仪表 `LYRICS_LINE` 在 Metadata 写入时取当前分页行；后续翻页由 `LYRICS_WHOLE` 中的时间戳驱动。
 
 6.5.2 中，辅助类通过反射访问：
 
@@ -288,6 +296,9 @@ run-6 APK 的证书 SHA-256 是
 10. 断开并重新连接车联后仍能恢复。
 11. 原子随身听首次连接、断开重连和 Apple Music 已播放后再打开时都能显示当前完整歌词。
 12. 原子随身听连续切歌不残留上一首歌词，无歌词歌曲会清空歌词。
+13. 超过 20 个 UTF-16 单元的中英文长句会按时间戳显示后续分页，而不是永久停留在前 17 个字加省略号。
+
+第 7 项只能确认 Apple Music 没有逐句重建 Metadata；如果车联自身在歌词分页变化时仍刷新封面，应记录为车联端行为，不能宣称已由 Apple Music 单包彻底消除。
 
 ## 10. 普通外挂方案的边界
 
@@ -314,6 +325,9 @@ cloud-patch/apply.sh
 
 cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java
   加载私有歌词、解析时间轴、同步当前行和完整歌词。
+
+cloud-patch/java/com/apple/android/music/player/ClusterLyricsPaginator.java
+  为仪表生成不超过 20 个 UTF-16 单元的分页 LRC 和递增时间戳。
 
 cloud-patch/rebuild.sh
   重建原 APK、编译辅助类、加入额外 DEX、对齐、固定签名和验证。
