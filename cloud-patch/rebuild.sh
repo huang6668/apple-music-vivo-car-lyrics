@@ -62,7 +62,7 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
   'com/apple/android/music/player/ClusterLyricsPaginator' \
-  'vivo-car-atomic-native-manifest-r13-2026-09-01' \
+  'vivo-car-cluster-atomic-extras-r12-2026-09-01' \
   'onNativeMediaItem' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
@@ -157,30 +157,26 @@ services = [item for item in root.findall("./application/service")
             if item.get(name_attr) == "com.apple.android.music.player.MediaPlaybackService"]
 if len(services) != 1 or services[0].get(exported_attr) != "true":
     raise SystemExit("MediaPlaybackService rebuilt manifest verification failed")
-native_actions = (
+required = {
+    action_name,
     "android.media.browse.MediaBrowserService",
     "androidx.media3.session.MediaSessionService",
     "android.intent.action.MEDIA_BUTTON",
-)
+}
 filters = [[action.get(name_attr) for action in intent_filter.findall("action")]
            for intent_filter in services[0].findall("intent-filter")]
-matching_filters = [actions for actions in filters
-                    if set(native_actions).issubset(set(actions))]
+matching_filters = [actions for actions in filters if required.issubset(set(actions))]
 if len(matching_filters) != 1:
-    raise SystemExit("Expected exactly one native rebuilt MediaBrowser/MediaSession intent-filter")
-for required_action in native_actions:
+    raise SystemExit("Native and Atomic Player actions must share one rebuilt intent-filter")
+for required_action in required:
     if matching_filters[0].count(required_action) != 1:
         raise SystemExit("Rebuilt service action must occur exactly once in target filter: %s" %
                          required_action)
 all_actions = [action.get(name_attr) for action in root.findall(".//action")]
-if action_name in all_actions:
-    raise SystemExit(
-        "Atomic Player service action must stay out of the rebuilt manifest: it disables the "
-        "generic MediaSession controller and removes the progress bar (%s)" % action_name
-    )
+if all_actions.count(action_name) != 1:
+    raise SystemExit("Atomic Player service action must occur exactly once in final manifest")
 PY
-printf 'absent-by-design: %s\n' "$ATOMIC_SERVICE_ACTION" \
-  > out/report/verified-atomic-player-action.txt
+printf '%s\n' "$ATOMIC_SERVICE_ACTION" > out/report/verified-atomic-player-action.txt
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' out/report/patched-signature.txt || {
   echo "APK v3 signature verification is missing" >&2
   exit 1
