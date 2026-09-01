@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cluster-atomic-r11-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-cluster-atomic-extras-r12-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -905,44 +905,20 @@ public final class VivoCarLyrics {
         }
     }
 
+    /**
+     * Never republishes MediaMetadata. Calling the playback manager's MediaItem publish path
+     * (manager.I) rebuilds the session's MediaMetadata and resets the native PlaybackState, which
+     * removes Atomic Player's progress bar and makes the cluster reload cover art. Both the car
+     * head unit and the instrument cluster receive their lyrics through session Extras instead, and
+     * the only MediaMetadata mutation is the in-place capability bit in
+     * {@link #advertiseAtomicLyricSupport(Object)}.
+     *
+     * <p>Kept as an explicit no-op so the caller's dedupe bookkeeping stays intact and so a future
+     * change does not silently reintroduce the MediaItem replacement.
+     */
     private static boolean publishMetadata(Object manager, String line, String whole, int status,
-                                           long generation) throws Exception {
-        Object mediaItem = invokeRequired(manager, "a");
-        if (mediaItem == null) {
-            return false;
-        }
-        Object metadata = getFieldValue(mediaItem, "d");
-        if (metadata == null) {
-            return false;
-        }
-        Bundle existing = (Bundle) getFieldValue(metadata, "I");
-        if (!matchesExpectedMedia(manager, generation, existing)) {
-            return false;
-        }
-
-        Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
-        extras.putString(META_LINE, line == null ? "" : line);
-        extras.putString(META_WHOLE, whole == null ? "" : whole);
-        extras.putLong(META_STATUS, (long) status);
-
-        Object metadataBuilder = invokeRequired(metadata, "a");
-        setFieldValue(metadataBuilder, "I", extras);
-        Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
-        Object mediaItemBuilder = invokeRequired(mediaItem, "a");
-        setFieldValue(mediaItemBuilder, "k", newMetadata);
-        Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
-
-        Object latestMediaItem = invokeRequired(manager, "a");
-        if (latestMediaItem != mediaItem) {
-            return false;
-        }
-        Object latestMetadata = getFieldValue(latestMediaItem, "d");
-        Bundle latestExtras = (Bundle) getFieldValue(latestMetadata, "I");
-        if (!matchesExpectedMedia(manager, generation, latestExtras)) {
-            return false;
-        }
-        invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
-        return true;
+                                           long generation) {
+        return false;
     }
 
     /**
@@ -985,11 +961,11 @@ public final class VivoCarLyrics {
             }
             Object metadata = getFieldValue(mediaItem, "d");
             Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            // Only the capability bit lives in MediaMetadata. The ucar cluster keys travel through
+            // session Extras, so requiring them here would never be satisfied and would retrigger
+            // the reapply loop forever.
             return extras != null
                     && matchesExpectedMedia(manager, generation, extras)
-                    && extras.containsKey(META_LINE)
-                    && extras.containsKey(META_STATUS)
-                    && extras.containsKey(META_WHOLE)
                     && (longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L)
                             & ATOMIC_LYRIC_SUPPORT_EVENT) != 0L;
         } catch (Throwable ignored) {
@@ -1055,6 +1031,22 @@ public final class VivoCarLyrics {
             extras.putBoolean(EXTRA_ALLOWED, true);
             extras.putString(EXTRA_LINE, safeLine);
             extras.putBoolean(EXTRA_NOTICE, true);
+
+            // Dashboard instrument cluster keys (ucar), delivered through session Extras only.
+            // These must never travel in MediaMetadata: republishing the MediaItem resets the
+            // native PlaybackState and removes Atomic Player's progress bar. Paginated values
+            // are read from the shared lyrics state so line ticks keep carrying the full
+            // paginated body instead of blanking it.
+            LyricsState clusterState = lyricsState;
+            boolean haveCluster = clusterState.clusterTexts.length > 0;
+            String clusterWhole = haveCluster ? clusterState.clusterWhole : safeWhole;
+            String clusterLine = haveCluster
+                    ? lineForPosition(controllerPosition(manager),
+                            clusterState.clusterTimes, clusterState.clusterTexts)
+                    : safeLine;
+            extras.putString(META_LINE, clusterLine);
+            extras.putString(META_WHOLE, clusterWhole);
+            extras.putLong(META_STATUS, (long) status);
 
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
@@ -1454,11 +1446,6 @@ public final class VivoCarLyrics {
     private static Object getFieldValue(Object target, String name) throws Exception {
         Field field = findField(target.getClass(), name);
         return field.get(target);
-    }
-
-    private static void setFieldValue(Object target, String name, Object value) throws Exception {
-        Field field = findField(target.getClass(), name);
-        field.set(target, value);
     }
 
     private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
