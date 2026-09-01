@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-republish-diag-r20-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-republish-looper-r21-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1061,7 +1061,21 @@ public final class VivoCarLyrics {
 
         @Override
         public void run() {
-            republishForDuration(manager, generation);
+            // The publish path must run on the playback manager's own looper, exactly like every
+            // other publish in this class. Calling it from the main thread makes the player's
+            // thread check throw, which surfaced as rep?err@10publish InvocationTargetException.
+            final Runnable work = new Runnable() {
+                @Override
+                public void run() {
+                    republishForDuration(manager, generation);
+                }
+            };
+            Handler handler = serviceHandler(manager);
+            if (handler != null && Looper.myLooper() != handler.getLooper()) {
+                handler.post(work);
+            } else {
+                work.run();
+            }
         }
     }
 

@@ -62,7 +62,7 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
   'com/apple/android/music/player/ClusterLyricsPaginator' \
-  'vivo-car-atomic-republish-diag-r20-2026-09-01' \
+  'vivo-car-atomic-republish-looper-r21-2026-09-01' \
   'onNativeMediaItem' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
