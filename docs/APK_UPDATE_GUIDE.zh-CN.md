@@ -1,6 +1,6 @@
 # Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
-最后整理日期：2026-08-28
+最后整理日期：2026-09-01
 
 本文档用于把新版 Apple Music APK 交给后续 AI 重新分析、适配并通过 GitHub Actions 构建。不要把本文档中的混淆类名、字段名或补丁行号当成跨版本稳定接口。
 
@@ -25,7 +25,7 @@
 2. 每 250 毫秒根据播放位置计算当前歌词行。
 3. 快进或拖动进度时立即切换到目标歌词行，不等待下一次自然播放回调。
 4. 歌词行变化只更新 MediaSession Extras，不能每句都重建歌曲元数据，否则车端会重复加载专辑图。
-5. 完整歌词、歌词状态或歌曲发生变化时才更新 MediaMetadata。
+5. 只在 Apple Music 原生发布 MediaMetadata 的路径中幂等补入原子歌词能力位；辅助类不额外重发 MediaItem。
 6. 不修改解码器、音频格式、AudioTrack、ExoPlayer 音频输出、音频焦点或码率选择，避免影响音质。
 7. 原子随身听只在换歌、完整歌词或状态变化时收到完整 LRC；普通逐句更新必须清空原子事件 action，不能每 250 毫秒重复触发整段歌词解析。
 8. 原子随身听建立 MediaSession 控制器连接后，按短延迟补发当前状态，避免晚打开时等待下一轮低频保活。
@@ -102,11 +102,12 @@ vivomusicmix.media.metadata.support_event = 原有能力位 | 8
 
 辅助类通过反射访问这些私有对象，因此新版首先要检查类、方法、构造函数和字段是否仍然存在。
 
-## 5. 五个必要 Hook
+## 5. 六个必要 Hook
 
-当前补丁在播放管理器和 MediaSession 连接回调中插入五个调用：
+当前补丁在播放管理器和 MediaSession 连接回调中插入六个调用：
 
 ```text
+onNativeMediaItem(nativeMediaItem)
 onCurrentItemChanged(playbackManager, newQueueItem)
 onMetadataUpdated(playbackManager, queueItem)
 onPlaybackError(playbackManager)
@@ -116,23 +117,27 @@ onAtomicControllerConnected(controllerPackageName)
 
 新版本必须根据方法语义重新定位：
 
-### 5.1 当前歌曲改变
+### 5.1 原生元数据发布
+
+寻找 Apple Music 用当前 MediaItem 通知 `onMediaMetadataChanged` 的原生发布路径。在发布前只向现有 Metadata Extras 原位写入 `support_event | 8`，不得构造替代 MediaItem，也不得从辅助代码再次调用播放管理器的发布方法。
+
+### 5.2 当前歌曲改变
 
 寻找接收新队列项、更新当前 MediaItem 或切换播放项的方法。Hook 后应清除上一首歌词、增加 generation，并延迟加载新歌词。
 
-### 5.2 元数据重新发布
+### 5.3 元数据重新发布
 
-寻找 Apple Music 重建或重新发送当前 MediaMetadata 的路径。Hook 用于在官方代码覆盖元数据后重新补回车联歌词字段。
+寻找 Apple Music 重建或重新发送当前 MediaMetadata 的路径。Hook 用于重新加载歌词状态；原子歌词能力位由 5.1 的原生发布 Hook 补入。
 
-### 5.3 播放错误
+### 5.4 播放错误
 
 寻找当前播放项错误回调。Hook 应清空歌词并发布失败状态。
 
-### 5.4 Seek
+### 5.5 Seek
 
 寻找最终调用 `MediaPlayerController.seekToPosition(long)` 的路径。必须把同一个目标毫秒位置传给 `onSeek`，立即发布对应歌词行。
 
-### 5.5 原子随身听连接
+### 5.6 原子随身听连接
 
 寻找 Media3 的 `onPostConnect` 回调，从 controller info 读取包名。仅当包名为 `com.vivo.musicwidgetmix` 时调用连接补发；不得对所有车联或蓝牙控制器广播完整 LRC。
 
@@ -145,8 +150,9 @@ onAtomicControllerConnected(controllerPackageName)
 正确策略：
 
 - 当前歌词行变化：只调用 Apple Music MediaSession 管理器的 Extras 发布接口。
-- 完整歌词或状态变化：更新 MediaItem 内部 Metadata Extras，再让播放管理器发布新的 MediaItem。
-- Apple Music 自己覆盖元数据且车联字段消失：延迟补写一次。
+- 完整歌词或状态变化：仍只通过 Session Extras 发布完整 LRC，不替换 MediaItem。
+- Apple Music 原生发布 MediaItem 时：只向它已有的 Metadata Extras 原位 OR 歌词能力位 `8`，然后让原生流程继续发布同一个对象。
+- Apple Music 自己覆盖元数据：下一次原生发布 Hook 会再次幂等补入能力位。
 - 使用缓存比较 `line`、`whole`、`status`，相同内容不重复发布。
 
 6.5.2 中，辅助类通过反射访问：
@@ -154,8 +160,7 @@ onAtomicControllerConnected(controllerPackageName)
 ```text
 MediaItem 字段 d          -> metadata
 Metadata 字段 I           -> extras Bundle
-MediaItem builder 字段 k  -> metadata
-播放管理器方法 I(item, 0) -> 发布更新后的 MediaItem
+播放管理器方法 I(item, 0) -> Apple Music 原生 MediaItem 发布路径，只在方法内部插入能力位 Hook
 MediaSession 管理器方法 j(Bundle) -> 发布会话 Extras
 ```
 
@@ -243,7 +248,7 @@ apksigner verify 成功
 目标辅助类存在于新增 DEX
 六个车联协议字符串、五个原子随身听协议字符串和辅助类 marker 存在
 导出的 MediaPlaybackService 同时声明标准 MediaBrowser 和原子随身听合作 action
-五个 Smali Hook 存在于对应方法体内
+六个 Smali Hook 存在于对应方法体内
 输出 APK SHA-256 已生成
 ```
 
