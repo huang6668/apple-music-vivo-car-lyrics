@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-lyrics-on-main-r12-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-clean-r22-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -32,7 +32,6 @@ public final class VivoCarLyrics {
     private static final String ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id";
     private static final String ATOMIC_LYRIC = "vivomusicmix.extra.key.lyric";
     private static final String ATOMIC_SUPPORT_EVENTS = "vivomusicmix.media.metadata.support_event";
-    private static final String PUBLIC_DURATION = "android.media.metadata.DURATION";
     private static final String ATOMIC_CONTROLLER_PACKAGE = "com.vivo.musicwidgetmix";
     private static final String PUBLIC_MEDIA_ID = "android.media.metadata.MEDIA_ID";
     private static final String APPLE_MEDIA_ID = "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
@@ -61,29 +60,6 @@ public final class VivoCarLyrics {
      * standard PlaybackState / METADATA_KEY_DURATION.
      */
     private static final long ATOMIC_BASELINE_SUPPORT_EVENTS = 7L;
-    /**
-     * Diagnostic build switch. When true, the lyric body sent to Atomic Player is prefixed with
-     * two LRC lines carrying the values Atomic actually receives, so the numbers can be read off
-     * the phone screen. Set back to false once the progress bar cause is identified; this only
-     * affects the Atomic lyric payload and never the car head unit or instrument cluster keys.
-     */
-    private static final boolean DIAGNOSTIC_MODE = true;
-    /**
-     * Snapshot of the duration values seen on the FIRST capability write after a track change,
-     * which is when Atomic Player latches {@code this.j} from METADATA_KEY_DURATION. Mid-track
-     * values always look healthy, so only this early snapshot can show whether Atomic ever had a
-     * usable track length to build its progress bar from.
-     */
-    private static volatile String firstMetaDiag = "";
-    private static final long[] DURATION_REPUBLISH_DELAYS_MS = {600L, 1500L, 3000L, 6000L};
-    /**
-     * Track generation whose duration republish has already been settled, either because it fired
-     * or because the published MediaItem turned out to carry a duration of its own. Keeps the
-     * rescue republish to at most one per track. GENERATION increments on every track change, so
-     * this needs no separate reset.
-     */
-    private static volatile long durationRepublishedGeneration = -1L;
-    private static volatile String durationRepublishDiag = "rep?none";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
@@ -162,7 +138,6 @@ public final class VivoCarLyrics {
             }
             currentExpectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
             currentPlaybackItem = null;
-            firstMetaDiag = "";
             resetPublishCache();
             String mediaId = queueMediaId(newQueueItem);
             synchronized (STATE_LOCK) {
@@ -180,7 +155,6 @@ public final class VivoCarLyrics {
             }
 
             scheduleLoad(playbackManager, generation, currentExpectedQueueId, LOAD_RETRY_MS);
-            scheduleDurationRepublish(playbackManager, generation);
         } catch (Throwable ignored) {
         }
     }
@@ -957,135 +931,6 @@ public final class VivoCarLyrics {
     }
 
     /**
-     * Republishes the current MediaItem exactly once per track, but only when the first capability
-     * write saw no duration and a real one has since become available.
-     *
-     * <p>Atomic Player latches track length from the legacy {@code METADATA_KEY_DURATION}, which
-     * Media3 derives from the player rather than from our extras. If the duration is unknown at
-     * track-change time that key never arrives and Atomic keeps a zero-length progress bar
-     * forever, because nothing else triggers a metadata refresh on our side.
-     *
-     * <p>Deliberately at most one republish per track. Republishing on every lyric line is what
-     * previously reset the native PlaybackState and made the cluster reload cover art.
-     */
-    private static void republishForDuration(Object manager, long generation) {
-        if (durationRepublishedGeneration == generation || !isCurrent(manager, generation)) {
-            return;
-        }
-        long duration = extractDurationFromItem(currentQueueItem);
-        if (duration <= 0L) {
-            duration = extractDurationFromItem(currentPlaybackItem);
-        }
-        if (duration <= 0L) {
-            duration = controllerLong(manager, "getDuration");
-        }
-        if (duration <= 0L) {
-            durationRepublishDiag = "rep?wait";
-            return;
-        }
-        String step = "0";
-        try {
-            step = "1item";
-            Object mediaItem = invokeRequired(manager, "a");
-            if (mediaItem == null) {
-                return;
-            }
-            step = "2meta";
-            Object metadata = getFieldValue(mediaItem, "d");
-            if (metadata == null) {
-                return;
-            }
-            // Self-checking gate: only republish when the MediaItem Apple Music actually published
-            // carries no duration of its own. That is the case Media3 cannot turn into a legacy
-            // METADATA_KEY_DURATION, so it is the only case Atomic Player needs rescuing from.
-            if (extractDurationFromItem(mediaItem) > 0L) {
-                durationRepublishedGeneration = generation;
-                durationRepublishDiag = "rep?unneeded";
-                return;
-            }
-            step = "3extras";
-            Bundle existing = (Bundle) getFieldValue(metadata, "I");
-            if (!matchesExpectedMedia(manager, generation, existing)) {
-                durationRepublishDiag = "rep?mismatch";
-                return;
-            }
-            // Must tolerate a null Bundle: new Bundle(null) throws, and by the time this runs the
-            // manager may hold a different MediaItem whose extras were never populated.
-            Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
-            extras.putLong(PUBLIC_DURATION, duration);
-            long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
-            extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
-                    | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT);
-
-            step = "4mdBuilder";
-            Object metadataBuilder = invokeRequired(metadata, "a");
-            step = "5mdExtras";
-            setFieldValue(metadataBuilder, "I", extras);
-            step = "6mdBuild";
-            Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
-            step = "7itemBuilder";
-            Object mediaItemBuilder = invokeRequired(mediaItem, "a");
-            step = "8itemMeta";
-            setFieldValue(mediaItemBuilder, "k", newMetadata);
-            step = "9itemBuild";
-            Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
-
-            if (invokeRequired(manager, "a") != mediaItem || !isCurrent(manager, generation)) {
-                durationRepublishDiag = "rep?raced";
-                return;
-            }
-            step = "10publish";
-            durationRepublishedGeneration = generation;
-            lastKnownDuration = duration;
-            invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
-            durationRepublishDiag = "rep?yes d=" + duration;
-        } catch (Throwable failure) {
-            durationRepublishDiag = "rep?err@" + step + " "
-                    + failure.getClass().getSimpleName();
-        }
-    }
-
-    private static void setFieldValue(Object target, String name, Object value) throws Exception {
-        Field field = findField(target.getClass(), name);
-        field.set(target, value);
-    }
-
-    private static final class DurationRepublishTask implements Runnable {
-        private final Object manager;
-        private final long generation;
-
-        DurationRepublishTask(Object manager, long generation) {
-            this.manager = manager;
-            this.generation = generation;
-        }
-
-        @Override
-        public void run() {
-            // The publish path must run on the playback manager's own looper, exactly like every
-            // other publish in this class. Calling it from the main thread makes the player's
-            // thread check throw, which surfaced as rep?err@10publish InvocationTargetException.
-            final Runnable work = new Runnable() {
-                @Override
-                public void run() {
-                    republishForDuration(manager, generation);
-                }
-            };
-            Handler handler = serviceHandler(manager);
-            if (handler != null && Looper.myLooper() != handler.getLooper()) {
-                handler.post(work);
-            } else {
-                work.run();
-            }
-        }
-    }
-
-    private static void scheduleDurationRepublish(Object manager, long generation) {
-        for (long delay : DURATION_REPUBLISH_DELAYS_MS) {
-            MAIN.postDelayed(new DurationRepublishTask(manager, generation), delay);
-        }
-    }
-
-    /**
      * ORs the Atomic Player capability bits into the MediaItem's existing Metadata Extras in
      * place, so Apple Music's own native publish carries them. Mutating the existing Bundle
      * avoids replacing the MediaItem, which would reset the native progress bar and make the
@@ -1110,120 +955,7 @@ public final class VivoCarLyrics {
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
                 | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT);
-        ensureAtomicDuration(mediaItem, extras);
         return true;
-    }
-
-    /**
-     * Guarantees a positive {@code android.media.metadata.DURATION} in the same Extras Bundle.
-     * Atomic Player's cooperation controller reads track length straight from that key
-     * ({@code this.j = metadata.n("android.media.metadata.DURATION")}) to drive its progress bar
-     * widget, so a missing or non-positive value leaves the widget with no data. The lyric widget
-     * is unaffected because it seeks using the timestamps inside the LRC body.
-     *
-     * <p>Only fills in a value when the native one is absent or non-positive, so a real Apple
-     * Music duration is never overwritten. Written in place, exactly like the capability bits, so
-     * the MediaItem is never republished and the native PlaybackState stays intact.
-     */
-    private static void ensureAtomicDuration(Object mediaItem, Bundle extras) {
-        long existing = longValue(extras.get(PUBLIC_DURATION), 0L);
-        long itemDuration = extractDurationFromItem(mediaItem);
-        long queueDuration = extractDurationFromItem(currentQueueItem);
-        long playbackDuration = extractDurationFromItem(currentPlaybackItem);
-
-        if (firstMetaDiag.isEmpty()) {
-            if (DIAGNOSTIC_MODE) {
-                firstMetaDiag = "ex0=" + existing + " mi0=" + itemDuration
-                        + " q0=" + queueDuration + " i0=" + playbackDuration
-                        + " last0=" + lastKnownDuration;
-            }
-            // Media3 derives the legacy METADATA_KEY_DURATION that Atomic Player latches from the
-            // player's own duration, not from these extras. When the MediaItem carries no duration
-            // at track-change time the legacy key is absent, Atomic stores 0 and its progress bar
-            // has no length. Arm exactly one republish for this track so the legacy metadata is
-            // regenerated once a real duration exists.
-        }
-
-        if (existing > 0L) {
-            lastKnownDuration = existing;
-            return;
-        }
-        long duration = itemDuration;
-        if (duration <= 0L) {
-            duration = queueDuration;
-        }
-        if (duration <= 0L) {
-            duration = playbackDuration;
-        }
-        if (duration <= 0L) {
-            duration = lastKnownDuration;
-        }
-        if (duration > 0L) {
-            lastKnownDuration = duration;
-            extras.putLong(PUBLIC_DURATION, duration);
-        }
-    }
-
-    /**
-     * Builds LRC lines describing what Atomic Player actually receives, so the values can be read
-     * off the phone screen when logcat is unavailable. Only used while {@link #DIAGNOSTIC_MODE} is
-     * on. Every probe is individually guarded: a failing probe reports "err" instead of aborting
-     * the whole header, and the real lyric body always follows.
-     */
-    private static String diagnosticHeader(Object manager) {
-        StringBuilder out = new StringBuilder();
-        try {
-            long extrasDuration = -1L;
-            long supportEvents = -1L;
-            boolean sawExtras = false;
-            try {
-                Object mediaItem = invokeRequired(manager, "a");
-                Object metadata = getFieldValue(mediaItem, "d");
-                Bundle metaExtras = (Bundle) getFieldValue(metadata, "I");
-                if (metaExtras != null) {
-                    sawExtras = true;
-                    extrasDuration = longValue(metaExtras.get(PUBLIC_DURATION), -1L);
-                    supportEvents = longValue(metaExtras.get(ATOMIC_SUPPORT_EVENTS), -1L);
-                }
-            } catch (Throwable ignored) {
-            }
-
-            long playerDuration = -1L;
-            try {
-                playerDuration = controllerLong(manager, "getDuration");
-            } catch (Throwable ignored) {
-            }
-            long queueDuration = -1L;
-            try {
-                queueDuration = extractDurationFromItem(currentQueueItem);
-            } catch (Throwable ignored) {
-            }
-            long itemDuration = -1L;
-            try {
-                itemDuration = extractDurationFromItem(currentPlaybackItem);
-            } catch (Throwable ignored) {
-            }
-            long position = -1L;
-            try {
-                position = controllerPosition(manager);
-            } catch (Throwable ignored) {
-            }
-
-            out.append("[00:00.00]DIAG r17 ex=").append(sawExtras ? "y" : "n")
-                    .append(" SE=").append(supportEvents).append('\n');
-            out.append("[00:00.30]exDUR=").append(extrasDuration)
-                    .append(" plDUR=").append(playerDuration).append('\n');
-            out.append("[00:00.60]qDUR=").append(queueDuration)
-                    .append(" iDUR=").append(itemDuration)
-                    .append(" last=").append(lastKnownDuration).append('\n');
-            out.append("[00:00.90]POS=").append(position).append('\n');
-            out.append("[00:01.20]FIRST ")
-                    .append(firstMetaDiag.isEmpty() ? "none" : firstMetaDiag).append('\n');
-            out.append("[00:01.50]").append(durationRepublishDiag).append('\n');
-        } catch (Throwable ignored) {
-            return "[00:00.00]DIAG failed\n";
-        }
-        return out.toString();
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
@@ -1333,9 +1065,7 @@ public final class VivoCarLyrics {
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
-                extras.putString(ATOMIC_LYRIC, DIAGNOSTIC_MODE
-                        ? diagnosticHeader(manager) + safeWhole
-                        : safeWhole);
+                extras.putString(ATOMIC_LYRIC, safeWhole);
             }
             if (!isCurrent(manager, generation)) {
                 return;
