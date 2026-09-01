@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-diag-r17-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-diag-first-r18-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -68,6 +68,13 @@ public final class VivoCarLyrics {
      * affects the Atomic lyric payload and never the car head unit or instrument cluster keys.
      */
     private static final boolean DIAGNOSTIC_MODE = true;
+    /**
+     * Snapshot of the duration values seen on the FIRST capability write after a track change,
+     * which is when Atomic Player latches {@code this.j} from METADATA_KEY_DURATION. Mid-track
+     * values always look healthy, so only this early snapshot can show whether Atomic ever had a
+     * usable track length to build its progress bar from.
+     */
+    private static volatile String firstMetaDiag = "";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
@@ -146,6 +153,7 @@ public final class VivoCarLyrics {
             }
             currentExpectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
             currentPlaybackItem = null;
+            firstMetaDiag = "";
             resetPublishCache();
             String mediaId = queueMediaId(newQueueItem);
             synchronized (STATE_LOCK) {
@@ -980,16 +988,26 @@ public final class VivoCarLyrics {
      */
     private static void ensureAtomicDuration(Object mediaItem, Bundle extras) {
         long existing = longValue(extras.get(PUBLIC_DURATION), 0L);
+        long itemDuration = extractDurationFromItem(mediaItem);
+        long queueDuration = extractDurationFromItem(currentQueueItem);
+        long playbackDuration = extractDurationFromItem(currentPlaybackItem);
+
+        if (DIAGNOSTIC_MODE && firstMetaDiag.isEmpty()) {
+            firstMetaDiag = "ex0=" + existing + " mi0=" + itemDuration
+                    + " q0=" + queueDuration + " i0=" + playbackDuration
+                    + " last0=" + lastKnownDuration;
+        }
+
         if (existing > 0L) {
             lastKnownDuration = existing;
             return;
         }
-        long duration = extractDurationFromItem(mediaItem);
+        long duration = itemDuration;
         if (duration <= 0L) {
-            duration = extractDurationFromItem(currentQueueItem);
+            duration = queueDuration;
         }
         if (duration <= 0L) {
-            duration = extractDurationFromItem(currentPlaybackItem);
+            duration = playbackDuration;
         }
         if (duration <= 0L) {
             duration = lastKnownDuration;
@@ -1053,6 +1071,8 @@ public final class VivoCarLyrics {
                     .append(" iDUR=").append(itemDuration)
                     .append(" last=").append(lastKnownDuration).append('\n');
             out.append("[00:00.90]POS=").append(position).append('\n');
+            out.append("[00:01.20]FIRST ")
+                    .append(firstMetaDiag.isEmpty() ? "none" : firstMetaDiag).append('\n');
         } catch (Throwable ignored) {
             return "[00:00.00]DIAG failed\n";
         }
