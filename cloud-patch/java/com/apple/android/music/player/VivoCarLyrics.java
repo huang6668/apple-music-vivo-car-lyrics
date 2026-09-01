@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cluster-atomic-extras-r12-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-baseline-events-r15-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -51,6 +51,15 @@ public final class VivoCarLyrics {
     private static final long ATOMIC_KEEPALIVE_MS = 25000L;
     private static final long ATOMIC_ACTION_CLEAR_MS = 750L;
     private static final long ATOMIC_LYRIC_SUPPORT_EVENT = 8L;
+    /**
+     * Baseline Atomic Player capability bits. Atomic's own getSupportEvent() falls back to 7
+     * (bits 1|2|4) whenever it cannot query an app's vivo service, so 7 is what it assumes for
+     * an ordinary cooperating player. Publishing only the lyric bit would report 8, which
+     * actively declares those three baseline capabilities as unsupported and leaves the
+     * progress bar widget disabled even though position and duration are readable from the
+     * standard PlaybackState / METADATA_KEY_DURATION.
+     */
+    private static final long ATOMIC_BASELINE_SUPPORT_EVENTS = 7L;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
@@ -922,10 +931,14 @@ public final class VivoCarLyrics {
     }
 
     /**
-     * ORs the Atomic Player lyric capability bit into the MediaItem's existing Metadata Extras
-     * in place, so Apple Music's own native publish carries the capability. Mutating the existing
-     * Bundle avoids replacing the MediaItem, which would reset the native progress bar and make
-     * the cluster reload cover art.
+     * ORs the Atomic Player capability bits into the MediaItem's existing Metadata Extras in
+     * place, so Apple Music's own native publish carries them. Mutating the existing Bundle
+     * avoids replacing the MediaItem, which would reset the native progress bar and make the
+     * cluster reload cover art.
+     *
+     * <p>The baseline bits are included alongside the lyric bit. Publishing the lyric bit alone
+     * reports 8, which tells Atomic Player that bits 1, 2 and 4 are unsupported and leaves its
+     * progress bar widget disabled; its own fallback for a cooperating player is 7.
      */
     private static boolean advertiseAtomicLyricSupport(Object mediaItem) throws Exception {
         if (mediaItem == null) {
@@ -940,7 +953,8 @@ public final class VivoCarLyrics {
             return false;
         }
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
-        extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
+        extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
+                | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT);
         return true;
     }
 
