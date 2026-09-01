@@ -28,9 +28,12 @@ line_publish = method_body(
     "private static void requestLinePublish(Object manager, String line, long generation,"
 )
 
-# The playback manager's MediaItem publish path rebuilds session MediaMetadata and resets the
-# native PlaybackState, which removes Atomic Player's progress bar and reloads cluster cover art.
-# publishMetadata must stay an inert no-op.
+# Republishing the MediaItem rebuilds session MediaMetadata and resets the native PlaybackState.
+# Doing it per lyric line is what removed Atomic Player's progress bar and reloaded cluster cover
+# art. It is permitted in exactly one place: republishForDuration, at most once per track, to give
+# Media3 a chance to emit a legacy METADATA_KEY_DURATION that Atomic Player can latch.
+republish = method_body("private static void republishForDuration(")
+
 for forbidden in (
     'invokeRequired(manager, "I", newMediaItem',
     "constructCompatible(",
@@ -42,12 +45,29 @@ for forbidden in (
     assert forbidden not in metadata, f"publishMetadata must not republish MediaMetadata: {forbidden}"
 assert "return false;" in metadata, "publishMetadata must remain a no-op"
 
-# Nothing anywhere may republish the MediaItem or write cluster keys into MediaMetadata.
-assert 'invokeRequired(manager, "I", newMediaItem' not in text, (
-    "MediaItem republication resets the native progress bar"
+# The republish must be gated per track and must verify the item genuinely lacks a duration.
+assert "durationRepublishedGeneration == generation" in republish, (
+    "republishForDuration must not fire twice for the same track"
 )
-assert "setFieldValue(" not in text, (
-    "Mutating MediaItem/Metadata builder fields reintroduces MediaMetadata override"
+assert "durationRepublishedGeneration = generation" in republish, (
+    "republishForDuration must record that it fired"
+)
+assert "extractDurationFromItem(mediaItem) > 0L" in republish, (
+    "republishForDuration must only rescue items that carry no duration of their own"
+)
+assert "matchesExpectedMedia(" in republish, (
+    "republishForDuration must confirm the item still matches the expected track"
+)
+assert 'invokeRequired(manager, "I", newMediaItem' in republish, (
+    "republishForDuration is the one place allowed to republish"
+)
+
+# Republication must appear nowhere else, and must never be reachable from a per-line publish.
+assert text.count('invokeRequired(manager, "I", newMediaItem') == 1, (
+    "MediaItem republication must exist in exactly one place"
+)
+assert text.count("setFieldValue(") == 3, (
+    "setFieldValue must only be used by republishForDuration (2 calls + 1 definition)"
 )
 
 # The only permitted MediaMetadata mutation is the in-place Atomic capability bit.
