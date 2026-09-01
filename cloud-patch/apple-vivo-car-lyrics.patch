@@ -1,7 +1,18 @@
 diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_classes2/com/apple/android/music/player/P.smali
 --- a/smali_classes2/com/apple/android/music/player/P.smali
 +++ b/smali_classes2/com/apple/android/music/player/P.smali
-@@ -2553,6 +2553,8 @@
+@@ -441,7 +441,9 @@
+     .line 4
+     .line 5
+     .line 6
+     if-nez p2, :cond_4
+-
++
++    invoke-static {p1}, Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V
++
+     .line 7
+     .line 8
+@@ -2553,6 +2555,8 @@
      .line 3
      invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
  
@@ -10,7 +21,7 @@ diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_class
      .line 4
      .line 5
      .line 6
-@@ -2647,6 +2649,8 @@
+@@ -2647,6 +2651,8 @@
      .line 8
      invoke-static {p2, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
  
@@ -19,7 +30,7 @@ diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_class
      .line 9
      .line 10
      .line 11
-@@ -2924,6 +2928,8 @@
+@@ -2924,6 +2930,8 @@
      .line 8
      invoke-static {p2, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
  
@@ -28,7 +39,7 @@ diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_class
      .line 9
      .line 10
      .line 11
-@@ -4801,5 +4807,7 @@
+@@ -4801,5 +4809,7 @@
      .line 3
      invoke-interface {v0, p1, p2}, Lcom/apple/android/music/playback/controller/MediaPlayerController;->seekToPosition(J)V
 

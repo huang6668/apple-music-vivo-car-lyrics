@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cluster-pagination-r10-2026-08-31";
+    private static final String BUILD_MARKER = "vivo-car-cluster-atomic-r11-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -109,6 +109,14 @@ public final class VivoCarLyrics {
         }
     }
 
+    /** Adds only the Atomic lyric capability before Apple Music publishes its native MediaItem. */
+    public static void onNativeMediaItem(Object mediaItem) {
+        try {
+            advertiseAtomicLyricSupport(mediaItem);
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static void onCurrentItemChanged(Object playbackManager, Object newQueueItem) {
         try {
             long generation = GENERATION.incrementAndGet();
@@ -154,7 +162,7 @@ public final class VivoCarLyrics {
             if (queueId > 0L) {
                 currentExpectedQueueId = queueId;
             }
-            if (!metadataHasCarKeys(playbackManager, generation)) {
+            if (!metadataHasAtomicSupport(playbackManager, generation)) {
                 scheduleMetadataReapply(playbackManager, generation);
             }
             if (shouldReloadLyrics()) {
@@ -271,7 +279,7 @@ public final class VivoCarLyrics {
 
         @Override
         public void run() {
-            if (!isCurrent(manager, generation) || metadataHasCarKeys(manager, generation)) {
+            if (!isCurrent(manager, generation) || metadataHasAtomicSupport(manager, generation)) {
                 return;
             }
 
@@ -937,6 +945,29 @@ public final class VivoCarLyrics {
         return true;
     }
 
+    /**
+     * ORs the Atomic Player lyric capability bit into the MediaItem's existing Metadata Extras
+     * in place, so Apple Music's own native publish carries the capability. Mutating the existing
+     * Bundle avoids replacing the MediaItem, which would reset the native progress bar and make
+     * the cluster reload cover art.
+     */
+    private static boolean advertiseAtomicLyricSupport(Object mediaItem) throws Exception {
+        if (mediaItem == null) {
+            return false;
+        }
+        Object metadata = getFieldValue(mediaItem, "d");
+        if (metadata == null) {
+            return false;
+        }
+        Bundle extras = (Bundle) getFieldValue(metadata, "I");
+        if (extras == null) {
+            return false;
+        }
+        long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
+        extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents | ATOMIC_LYRIC_SUPPORT_EVENT);
+        return true;
+    }
+
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
         if (!isCurrent(manager, generation)) {
             return false;
@@ -946,7 +977,7 @@ public final class VivoCarLyrics {
                 && extras.getLong(APPLE_QUEUE_ID, 0L) == expectedQueueId;
     }
 
-    private static boolean metadataHasCarKeys(Object manager, long generation) {
+    private static boolean metadataHasAtomicSupport(Object manager, long generation) {
         try {
             Object mediaItem = invokeRequired(manager, "a");
             if (mediaItem == null) {
@@ -958,7 +989,9 @@ public final class VivoCarLyrics {
                     && matchesExpectedMedia(manager, generation, extras)
                     && extras.containsKey(META_LINE)
                     && extras.containsKey(META_STATUS)
-                    && extras.containsKey(META_WHOLE);
+                    && extras.containsKey(META_WHOLE)
+                    && (longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L)
+                            & ATOMIC_LYRIC_SUPPORT_EVENT) != 0L;
         } catch (Throwable ignored) {
             return false;
         }
