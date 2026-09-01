@@ -348,7 +348,7 @@ config/search-patterns.txt
 
 ## 12. 完成标准
 
-后续 AI 只有在以下条件全部满足时才能说“适配完成”：
+后续 AI 只有在以下条件全部满足时才能说”适配完成”：
 
 - 新版本已重新分析，不是盲目套用旧补丁。
 - 五个 Hook 均按语义确认。
@@ -356,4 +356,39 @@ config/search-patterns.txt
 - GitHub Actions 构建成功。
 - APK 签名、包名、DEX 和协议 marker 验证成功。
 - 明确说明签名和卸载风险。
-- 实车歌词、快进同步和封面刷新至少完成一次测试；未实测时必须明确标为“待实车验证”。
+- 实车歌词、快进同步和封面刷新至少完成一次测试；未实测时必须明确标为”待实车验证”。
+
+## 13. 版本变更记录
+
+### r12 (2026-09-01) - 三方合并：车机 + 仪表分页 + 原子随身听
+
+将 release-44 分支（96312d1，车机和仪表分页）与 379acd9（原子随身听支持）合并至 feat/atomic-lyrics-on-main。
+
+**保留特性：**
+- 车机歌词：META_WHOLE / META_LINE / META_STATUS 写入 MediaMetadata Extras
+- 仪表分页：ClusterLyricsPaginator 把长句拆成 ≤20 UTF-16 单元的多页 LRC；仪表使用 clusterWhole / clusterTimes / clusterTexts
+- 原子随身听：vivomusicmix.* 协议字段、onNativeMediaItem 和 onAtomicControllerConnected 回调、能力位写入
+
+**关键实现：**
+- LyricsState 同时保存原始和分页时间轴
+- META_WHOLE 使用 clusterWhole（仪表读取），vivomusicmix.extra.key.lyric 使用原始 whole（原子随身听读取）
+- publishSessionExtras 中为仪表动态计算 clusterLine，为车机保留原始 safeLine
+- 两条歌词路径完全独立，互不干扰
+
+**构建标识：**
+- BUILD_MARKER: vivo-car-atomic-lyrics-on-main-r12-2026-09-01
+- 包含 ClusterLyricsPaginator.java 和 VivoCarLyrics.java
+- apply.sh 验证 onNativeMediaItem 和 onAtomicControllerConnected 在正确位置
+- rebuild.sh 验证所有协议字符串和分页 marker
+
+### r21 (2026-09-01) - 原子随身听进度条修复（duration republish on looper）
+
+在 r12 之前的分支中完成，修复原子随身听进度条问题。duration republish 改为在 playback manager 的 looper 上执行，避免线程检查抛出 InvocationTargetException。
+
+### r10-r20 - 原子随身听调试与诊断
+
+在 379acd9 分支中完成，包括 duration 诊断、能力位基线调整、null extras 防护等。这些改动已合并至 r12。
+
+### r9 (2026-08-29) - 仪表分页初版（release-44）
+
+在 96312d1 提交中完成，引入 ClusterLyricsPaginator，按 20 UTF-16 单元拆分长句，为仪表生成独立时间轴。
