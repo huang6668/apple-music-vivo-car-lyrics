@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-every-track-r14-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-native-manifest-r13-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -281,16 +281,6 @@ public final class VivoCarLyrics {
         public void run() {
             if (!isCurrent(manager, generation) || metadataHasAtomicSupport(manager, generation)) {
                 return;
-            }
-
-            // Best-effort in-place repair: OR the capability bit into whatever MediaItem the
-            // manager currently holds. This never republishes the MediaItem, so the native
-            // PlaybackState and the Atomic Player progress bar stay intact. Media3 may have
-            // already cached the converted metadata, so this is a fallback only; the primary
-            // guarantee is the onNativeMediaItem hook running before the item-index branch.
-            try {
-                advertiseAtomicLyricSupport(invokeRequired(manager, "a"));
-            } catch (Throwable ignored) {
             }
 
             String line;

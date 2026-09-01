@@ -1,17 +1,17 @@
 diff --git a/smali_classes2/com/apple/android/music/player/P.smali b/smali_classes2/com/apple/android/music/player/P.smali
 --- a/smali_classes2/com/apple/android/music/player/P.smali
 +++ b/smali_classes2/com/apple/android/music/player/P.smali
-@@ -437,8 +437,10 @@
-     .line 2
-     .line 3
-     invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V
-
-+    invoke-static {p1}, Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V
-+
+@@ -441,7 +441,9 @@
      .line 4
      .line 5
      .line 6
      if-nez p2, :cond_4
+-
++
++    invoke-static {p1}, Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V
++
+     .line 7
+     .line 8
 @@ -2553,6 +2555,8 @@
      .line 3
      invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V

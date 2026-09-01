@@ -62,7 +62,7 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
   'com/apple/android/music/player/ClusterLyricsPaginator' \
-  'vivo-car-atomic-every-track-r14-2026-09-01' \
+  'vivo-car-atomic-native-manifest-r13-2026-09-01' \
   'onNativeMediaItem' \
   'ucar.media.metadata.LYRICS_LINE' \
   'ucar.media.metadata.LYRICS_WHOLE' \
@@ -269,16 +269,14 @@ native_blocks = re.findall(
 if len(native_blocks) != 1:
     raise SystemExit("Expected exactly one final native MediaItem publish method")
 native_block = native_blocks[0]
-# Must run before the item-index branch; see the matching note in apply.sh.
 native_order = (
-    native_block.find("invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V"),
-    native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     native_block.find("if-nez p2, :cond_4"),
+    native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     native_block.find("invoke-virtual {p1}, Lv3/t;->hashCode()I"),
     native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/P;->j:Lv3/t;"),
 )
 if -1 in native_order or tuple(sorted(native_order)) != native_order:
-    raise SystemExit("Final native metadata hook must run before the item-index branch")
+    raise SystemExit("Final native metadata hook is outside the guarded stock publish path")
 PY
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
