@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-duration-republish-r19-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-republish-diag-r20-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -983,11 +983,14 @@ public final class VivoCarLyrics {
             durationRepublishDiag = "rep?wait";
             return;
         }
+        String step = "0";
         try {
+            step = "1item";
             Object mediaItem = invokeRequired(manager, "a");
             if (mediaItem == null) {
                 return;
             }
+            step = "2meta";
             Object metadata = getFieldValue(mediaItem, "d");
             if (metadata == null) {
                 return;
@@ -1000,33 +1003,45 @@ public final class VivoCarLyrics {
                 durationRepublishDiag = "rep?unneeded";
                 return;
             }
+            step = "3extras";
             Bundle existing = (Bundle) getFieldValue(metadata, "I");
             if (!matchesExpectedMedia(manager, generation, existing)) {
-                durationRepublishDiag = "fired?mismatch";
+                durationRepublishDiag = "rep?mismatch";
                 return;
             }
-            Bundle extras = new Bundle(existing);
+            // Must tolerate a null Bundle: new Bundle(null) throws, and by the time this runs the
+            // manager may hold a different MediaItem whose extras were never populated.
+            Bundle extras = existing == null ? new Bundle() : new Bundle(existing);
             extras.putLong(PUBLIC_DURATION, duration);
             long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
             extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
                     | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT);
 
+            step = "4mdBuilder";
             Object metadataBuilder = invokeRequired(metadata, "a");
+            step = "5mdExtras";
             setFieldValue(metadataBuilder, "I", extras);
+            step = "6mdBuild";
             Object newMetadata = constructCompatible(metadata.getClass(), metadataBuilder);
+            step = "7itemBuilder";
             Object mediaItemBuilder = invokeRequired(mediaItem, "a");
+            step = "8itemMeta";
             setFieldValue(mediaItemBuilder, "k", newMetadata);
+            step = "9itemBuild";
             Object newMediaItem = invokeRequired(mediaItemBuilder, "a");
 
             if (invokeRequired(manager, "a") != mediaItem || !isCurrent(manager, generation)) {
+                durationRepublishDiag = "rep?raced";
                 return;
             }
+            step = "10publish";
             durationRepublishedGeneration = generation;
             lastKnownDuration = duration;
-            durationRepublishDiag = "rep?yes d=" + duration;
             invokeRequired(manager, "I", newMediaItem, Integer.valueOf(0));
-        } catch (Throwable ignored) {
-            durationRepublishDiag = "fired?err";
+            durationRepublishDiag = "rep?yes d=" + duration;
+        } catch (Throwable failure) {
+            durationRepublishDiag = "rep?err@" + step + " "
+                    + failure.getClass().getSimpleName();
         }
     }
 
