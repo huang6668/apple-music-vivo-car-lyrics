@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-duration-r16-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-diag-r17-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -61,6 +61,13 @@ public final class VivoCarLyrics {
      * standard PlaybackState / METADATA_KEY_DURATION.
      */
     private static final long ATOMIC_BASELINE_SUPPORT_EVENTS = 7L;
+    /**
+     * Diagnostic build switch. When true, the lyric body sent to Atomic Player is prefixed with
+     * two LRC lines carrying the values Atomic actually receives, so the numbers can be read off
+     * the phone screen. Set back to false once the progress bar cause is identified; this only
+     * affects the Atomic lyric payload and never the car head unit or instrument cluster keys.
+     */
+    private static final boolean DIAGNOSTIC_MODE = true;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
@@ -993,6 +1000,65 @@ public final class VivoCarLyrics {
         }
     }
 
+    /**
+     * Builds LRC lines describing what Atomic Player actually receives, so the values can be read
+     * off the phone screen when logcat is unavailable. Only used while {@link #DIAGNOSTIC_MODE} is
+     * on. Every probe is individually guarded: a failing probe reports "err" instead of aborting
+     * the whole header, and the real lyric body always follows.
+     */
+    private static String diagnosticHeader(Object manager) {
+        StringBuilder out = new StringBuilder();
+        try {
+            long extrasDuration = -1L;
+            long supportEvents = -1L;
+            boolean sawExtras = false;
+            try {
+                Object mediaItem = invokeRequired(manager, "a");
+                Object metadata = getFieldValue(mediaItem, "d");
+                Bundle metaExtras = (Bundle) getFieldValue(metadata, "I");
+                if (metaExtras != null) {
+                    sawExtras = true;
+                    extrasDuration = longValue(metaExtras.get(PUBLIC_DURATION), -1L);
+                    supportEvents = longValue(metaExtras.get(ATOMIC_SUPPORT_EVENTS), -1L);
+                }
+            } catch (Throwable ignored) {
+            }
+
+            long playerDuration = -1L;
+            try {
+                playerDuration = controllerLong(manager, "getDuration");
+            } catch (Throwable ignored) {
+            }
+            long queueDuration = -1L;
+            try {
+                queueDuration = extractDurationFromItem(currentQueueItem);
+            } catch (Throwable ignored) {
+            }
+            long itemDuration = -1L;
+            try {
+                itemDuration = extractDurationFromItem(currentPlaybackItem);
+            } catch (Throwable ignored) {
+            }
+            long position = -1L;
+            try {
+                position = controllerPosition(manager);
+            } catch (Throwable ignored) {
+            }
+
+            out.append("[00:00.00]DIAG r17 ex=").append(sawExtras ? "y" : "n")
+                    .append(" SE=").append(supportEvents).append('\n');
+            out.append("[00:00.30]exDUR=").append(extrasDuration)
+                    .append(" plDUR=").append(playerDuration).append('\n');
+            out.append("[00:00.60]qDUR=").append(queueDuration)
+                    .append(" iDUR=").append(itemDuration)
+                    .append(" last=").append(lastKnownDuration).append('\n');
+            out.append("[00:00.90]POS=").append(position).append('\n');
+        } catch (Throwable ignored) {
+            return "[00:00.00]DIAG failed\n";
+        }
+        return out.toString();
+    }
+
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
         if (!isCurrent(manager, generation)) {
             return false;
@@ -1100,7 +1166,9 @@ public final class VivoCarLyrics {
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
-                extras.putString(ATOMIC_LYRIC, safeWhole);
+                extras.putString(ATOMIC_LYRIC, DIAGNOSTIC_MODE
+                        ? diagnosticHeader(manager) + safeWhole
+                        : safeWhole);
             }
             if (!isCurrent(manager, generation)) {
                 return;
