@@ -75,14 +75,18 @@ native_blocks = re.findall(
 if len(native_blocks) != 1:
     raise SystemExit("Expected exactly one native MediaItem publish method")
 native_block = native_blocks[0]
+# The capability hook must sit BEFORE "if-nez p2, :cond_4". That int argument is the current
+# item index from Lv3/C;->e0()I, not a constant 0, so a hook placed after the branch only runs
+# for the first track and every later track loses the Atomic lyric capability bit.
 native_order = (
-    native_block.find("if-nez p2, :cond_4"),
+    native_block.find("invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V"),
     native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
+    native_block.find("if-nez p2, :cond_4"),
     native_block.find("invoke-virtual {p1}, Lv3/t;->hashCode()I"),
     native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/P;->j:Lv3/t;"),
 )
 if -1 in native_order or tuple(sorted(native_order)) != native_order:
-    raise SystemExit("Native metadata hook must remain between the publish guard and stock hash/store")
+    raise SystemExit("Native metadata hook must run before the item-index branch on every publish")
 PY
 
 # The AndroidManifest.xml stays byte-for-byte native. Advertising
