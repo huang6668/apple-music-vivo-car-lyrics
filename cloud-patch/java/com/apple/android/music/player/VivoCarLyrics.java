@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cluster-atomic-extras-r12-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-native-manifest-r13-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
