@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-baseline-events-r15-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-duration-r16-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -32,6 +32,7 @@ public final class VivoCarLyrics {
     private static final String ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id";
     private static final String ATOMIC_LYRIC = "vivomusicmix.extra.key.lyric";
     private static final String ATOMIC_SUPPORT_EVENTS = "vivomusicmix.media.metadata.support_event";
+    private static final String PUBLIC_DURATION = "android.media.metadata.DURATION";
     private static final String ATOMIC_CONTROLLER_PACKAGE = "com.vivo.musicwidgetmix";
     private static final String PUBLIC_MEDIA_ID = "android.media.metadata.MEDIA_ID";
     private static final String APPLE_MEDIA_ID = "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
@@ -955,7 +956,41 @@ public final class VivoCarLyrics {
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
                 | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT);
+        ensureAtomicDuration(mediaItem, extras);
         return true;
+    }
+
+    /**
+     * Guarantees a positive {@code android.media.metadata.DURATION} in the same Extras Bundle.
+     * Atomic Player's cooperation controller reads track length straight from that key
+     * ({@code this.j = metadata.n("android.media.metadata.DURATION")}) to drive its progress bar
+     * widget, so a missing or non-positive value leaves the widget with no data. The lyric widget
+     * is unaffected because it seeks using the timestamps inside the LRC body.
+     *
+     * <p>Only fills in a value when the native one is absent or non-positive, so a real Apple
+     * Music duration is never overwritten. Written in place, exactly like the capability bits, so
+     * the MediaItem is never republished and the native PlaybackState stays intact.
+     */
+    private static void ensureAtomicDuration(Object mediaItem, Bundle extras) {
+        long existing = longValue(extras.get(PUBLIC_DURATION), 0L);
+        if (existing > 0L) {
+            lastKnownDuration = existing;
+            return;
+        }
+        long duration = extractDurationFromItem(mediaItem);
+        if (duration <= 0L) {
+            duration = extractDurationFromItem(currentQueueItem);
+        }
+        if (duration <= 0L) {
+            duration = extractDurationFromItem(currentPlaybackItem);
+        }
+        if (duration <= 0L) {
+            duration = lastKnownDuration;
+        }
+        if (duration > 0L) {
+            lastKnownDuration = duration;
+            extras.putLong(PUBLIC_DURATION, duration);
+        }
     }
 
     private static boolean matchesExpectedMedia(Object manager, long generation, Bundle extras) {
