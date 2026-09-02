@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-clean-r22-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-probe-r23-2026-09-01";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -32,6 +32,7 @@ public final class VivoCarLyrics {
     private static final String ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id";
     private static final String ATOMIC_LYRIC = "vivomusicmix.extra.key.lyric";
     private static final String ATOMIC_SUPPORT_EVENTS = "vivomusicmix.media.metadata.support_event";
+    private static final String PUBLIC_DURATION = "android.media.metadata.DURATION";
     private static final String ATOMIC_CONTROLLER_PACKAGE = "com.vivo.musicwidgetmix";
     private static final String PUBLIC_MEDIA_ID = "android.media.metadata.MEDIA_ID";
     private static final String APPLE_MEDIA_ID = "com.apple.android.music.playback.metadata.METADATA_KEY_MEDIA_ID";
@@ -60,6 +61,20 @@ public final class VivoCarLyrics {
      * standard PlaybackState / METADATA_KEY_DURATION.
      */
     private static final long ATOMIC_BASELINE_SUPPORT_EVENTS = 7L;
+
+    /**
+     * Diagnostic build switch. Prefixes the Atomic lyric payload with probe lines describing what
+     * Atomic Player actually receives. Every previous probe was self-referential - it read back the
+     * same Bundle this helper had just written, which proves the write landed but says nothing
+     * about what reaches Atomic. This probe instead opens a MediaControllerCompat against Apple
+     * Music's own session token, exactly the way Atomic does, and reads the legacy metadata and
+     * PlaybackState back out of it.
+     */
+    private static final boolean DIAGNOSTIC_MODE = true;
+    private static volatile String sessionProbeDiag = "";
+    private static volatile long sessionProbeGeneration = -1L;
+    private static volatile String atomicConnectDiag = "conn=n";
+    private static volatile long trackStartUptime = 0L;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final AtomicLong GENERATION = new AtomicLong();
@@ -230,6 +245,11 @@ public final class VivoCarLyrics {
         try {
             if (!ATOMIC_CONTROLLER_PACKAGE.equals(packageName)) {
                 return;
+            }
+            if (DIAGNOSTIC_MODE) {
+                long since = trackStartUptime > 0L
+                        ? android.os.SystemClock.uptimeMillis() - trackStartUptime : -1L;
+                atomicConnectDiag = "conn=y@" + since;
             }
 
             Object manager;
@@ -940,6 +960,158 @@ public final class VivoCarLyrics {
      * reports 8, which tells Atomic Player that bits 1, 2 and 4 are unsupported and leaves its
      * progress bar widget disabled; its own fallback for a cooperating player is 7.
      */
+    /**
+     * Finds Apple Music's own {@code MediaSessionCompat.Token} by walking object graph edges from
+     * the session manager. Support-library class names survive obfuscation, so the token is matched
+     * by type rather than by a guessed field name. Bounded in both depth and visit count.
+     */
+    private static Object findCompatToken(Object root, Class<?> tokenClass) {
+        java.util.IdentityHashMap<Object, Boolean> seen = new java.util.IdentityHashMap<>();
+        List<Object> level = new ArrayList<>();
+        level.add(root);
+        int visited = 0;
+        for (int depth = 0; depth < 4 && !level.isEmpty(); depth++) {
+            List<Object> next = new ArrayList<>();
+            for (Object obj : level) {
+                if (obj == null || seen.put(obj, Boolean.TRUE) != null || ++visited > 400) {
+                    continue;
+                }
+                if (tokenClass.isInstance(obj)) {
+                    return obj;
+                }
+                for (Method method : obj.getClass().getMethods()) {
+                    if (method.getParameterTypes().length == 0
+                            && tokenClass.isAssignableFrom(method.getReturnType())) {
+                        try {
+                            method.setAccessible(true);
+                            Object token = method.invoke(obj);
+                            if (token != null) {
+                                return token;
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+                for (Class<?> cursor = obj.getClass();
+                        cursor != null && cursor != Object.class; cursor = cursor.getSuperclass()) {
+                    for (Field field : cursor.getDeclaredFields()) {
+                        if (field.getType().isPrimitive()
+                                || Modifier.isStatic(field.getModifiers())) {
+                            continue;
+                        }
+                        try {
+                            field.setAccessible(true);
+                            Object value = field.get(obj);
+                            if (value != null && !(value instanceof String)) {
+                                next.add(value);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+            }
+            level = next;
+        }
+        return null;
+    }
+
+    /**
+     * Reads Apple Music's session the way Atomic Player reads it: through a MediaControllerCompat
+     * built from the session's own compat token. This is deliberately not self-referential - it
+     * reports the legacy metadata and PlaybackState the session actually exposes, rather than the
+     * Bundle this helper wrote.
+     */
+    private static String probeSessionAsAtomicSees(Object manager) {
+        String step = "0";
+        try {
+            step = "1sm";
+            Object sessionManager = getFieldValue(manager, "a");
+            step = "2tokcls";
+            Class<?> tokenClass =
+                    Class.forName("android.support.v4.media.session.MediaSessionCompat$Token");
+            step = "3tok";
+            Object token = findCompatToken(sessionManager, tokenClass);
+            if (token == null) {
+                return "D1 tok=NONE";
+            }
+            step = "4ctl";
+            Class<?> controllerClass =
+                    Class.forName("android.support.v4.media.session.MediaControllerCompat");
+            Constructor<?> constructor = controllerClass.getConstructor(
+                    android.content.Context.class, tokenClass);
+            constructor.setAccessible(true);
+            Object controller = constructor.newInstance(appleApplication(), token);
+
+            step = "5meta";
+            Object metadata = invokeOptional(controller, "getMetadata");
+            long metaDuration = -1L;
+            long metaSupport = -1L;
+            int metaKeys = -1;
+            boolean metaHasLine = false;
+            if (metadata != null) {
+                metaDuration = longValue(
+                        invokeOptional(metadata, "getLong", PUBLIC_DURATION), -1L);
+                metaSupport = longValue(
+                        invokeOptional(metadata, "getLong", ATOMIC_SUPPORT_EVENTS), -1L);
+                Object keySet = invokeOptional(metadata, "keySet");
+                if (keySet instanceof java.util.Set) {
+                    metaKeys = ((java.util.Set<?>) keySet).size();
+                    metaHasLine = ((java.util.Set<?>) keySet).contains(META_LINE);
+                }
+            }
+
+            step = "6state";
+            Object state = invokeOptional(controller, "getPlaybackState");
+            long statePosition = -1L;
+            long stateActions = -1L;
+            int stateCode = -1;
+            if (state != null) {
+                statePosition = longValue(invokeOptional(state, "getPosition"), -1L);
+                stateActions = longValue(invokeOptional(state, "getActions"), -1L);
+                stateCode = intValue(invokeOptional(state, "getState"), -1);
+            }
+
+            StringBuilder out = new StringBuilder();
+            out.append("D1 tok=y ctl=y meta=").append(metadata != null ? "y" : "n")
+                    .append(" ps=").append(state != null ? "y" : "n").append('\n');
+            out.append("[00:00.30]D2 mDUR=").append(metaDuration)
+                    .append(" mSE=").append(metaSupport).append('\n');
+            out.append("[00:00.60]D3 psST=").append(stateCode)
+                    .append(" psPOS=").append(statePosition)
+                    .append(" psACT=").append(Long.toHexString(stateActions)).append('\n');
+            out.append("[00:00.90]D4 keys=").append(metaKeys)
+                    .append(" ucarLine=").append(metaHasLine ? "y" : "n");
+            return out.toString();
+        } catch (Throwable failure) {
+            return "D1 err@" + step + " " + failure.getClass().getSimpleName();
+        }
+    }
+
+    /** Builds the LRC-formatted probe header, computed once per track. */
+    private static String diagnosticHeader(Object manager, long generation) {
+        String probe = sessionProbeDiag;
+        if (sessionProbeGeneration != generation || probe.isEmpty()) {
+            probe = probeSessionAsAtomicSees(manager);
+            sessionProbeDiag = probe;
+            sessionProbeGeneration = generation;
+        }
+        long ourSupport = -1L;
+        long ourDuration = -1L;
+        try {
+            Object mediaItem = invokeRequired(manager, "a");
+            Object metadata = getFieldValue(mediaItem, "d");
+            Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            if (extras != null) {
+                ourSupport = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), -1L);
+                ourDuration = longValue(extras.get(PUBLIC_DURATION), -1L);
+            }
+        } catch (Throwable ignored) {
+        }
+        return "[00:00.00]" + probe + '\n'
+                + "[00:01.20]D5 ourSE=" + ourSupport + " ourDUR=" + ourDuration + '\n'
+                + "[00:01.50]D6 " + atomicConnectDiag + '\n';
+    }
+
     private static boolean advertiseAtomicLyricSupport(Object mediaItem) throws Exception {
         if (mediaItem == null) {
             return false;
@@ -1065,7 +1237,9 @@ public final class VivoCarLyrics {
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
-                extras.putString(ATOMIC_LYRIC, safeWhole);
+                extras.putString(ATOMIC_LYRIC, DIAGNOSTIC_MODE
+                        ? diagnosticHeader(manager, generation) + safeWhole
+                        : safeWhole);
             }
             if (!isCurrent(manager, generation)) {
                 return;
@@ -1357,6 +1531,12 @@ public final class VivoCarLyrics {
             loadRetryCount = 0;
             currentPlaybackItemGeneration = -1L;
             currentAtomicMediaId = "";
+            if (DIAGNOSTIC_MODE) {
+                sessionProbeDiag = "";
+                sessionProbeGeneration = -1L;
+                atomicConnectDiag = "conn=n";
+                trackStartUptime = android.os.SystemClock.uptimeMillis();
+            }
             currentAtomicMediaIdGeneration = -1L;
             atomicWhole = null;
             atomicStatus = Integer.MIN_VALUE;
