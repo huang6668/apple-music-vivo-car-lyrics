@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-retry-probe-r29-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-framework-token-r30-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1115,24 +1115,59 @@ public final class VivoCarLyrics {
             }
         }
 
-        diag.append("D1 A=").append(pathA)
-            .append(" B=").append(pathB)
-            .append(" C=").append(pathC);
-
+        // Path D: search k0.b (Media3 MediaLibrarySession) for the *framework* token
+        // android.media.session.MediaSession$Token. MediaControllerCompat accepts that
+        // directly via its second constructor. The compat token (I3.l.e) is never set
+        // during local playback; the framework token always is.
+        String pathD = "skip";
+        Object frameworkToken = null;
         if (token == null) {
-            return diag.toString();
+            try {
+                Object sm = getFieldValue(manager, "a");      // P.a = k0
+                Object sess = getFieldValue(sm, "b");         // k0.b = E3.P1$b
+                Class<?> fwTokenClass = Class.forName(
+                        "android.media.session.MediaSession$Token");
+                frameworkToken = findCompatToken(sess, fwTokenClass);
+                pathD = frameworkToken != null ? "ok" : "null";
+            } catch (Throwable ex) {
+                pathD = "exc:" + ex.getClass().getSimpleName();
+            }
         }
 
-        // Got a token — build MediaControllerCompat and read what Atomic sees.
-        try {
-            Class<?> compatTokenClass = Class.forName(
-                    "android.support.v4.media.session.MediaSessionCompat$Token");
-            Class<?> controllerClass = Class.forName(
-                    "android.support.v4.media.session.MediaControllerCompat");
-            Constructor<?> ctor = controllerClass.getConstructor(
-                    android.content.Context.class, compatTokenClass);
-            ctor.setAccessible(true);
-            Object controller = ctor.newInstance(appleApplication(), token);
+        diag.append("D1 A=").append(pathA)
+            .append(" B=").append(pathB)
+            .append(" C=").append(pathC)
+            .append(" D=").append(pathD);
+
+        // Build a MediaControllerCompat from whichever token worked.
+        Object controllerToUse = null;
+        if (token != null || frameworkToken != null) {
+            try {
+                Class<?> controllerClass = Class.forName(
+                        "android.support.v4.media.session.MediaControllerCompat");
+                if (token != null) {
+                    Class<?> compatTokenClass = Class.forName(
+                            "android.support.v4.media.session.MediaSessionCompat$Token");
+                    Constructor<?> ctor = controllerClass.getConstructor(
+                            android.content.Context.class, compatTokenClass);
+                    ctor.setAccessible(true);
+                    controllerToUse = ctor.newInstance(appleApplication(), token);
+                } else {
+                    Class<?> fwTokenClass = Class.forName(
+                            "android.media.session.MediaSession$Token");
+                    Constructor<?> ctor = controllerClass.getConstructor(
+                            android.content.Context.class, fwTokenClass);
+                    ctor.setAccessible(true);
+                    controllerToUse = ctor.newInstance(appleApplication(), frameworkToken);
+                }
+            } catch (Throwable ex) {
+                diag.append(" ctlErr:").append(ex.getClass().getSimpleName());
+            }
+        }
+
+        if (controllerToUse == null) {
+            return diag.toString();
+        }
 
             Object metadata = invokeOptional(controller, "getMetadata");
             long metaDuration = -1L;
