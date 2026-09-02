@@ -1077,7 +1077,7 @@ public final class VivoCarLyrics {
             Class<?> controllerClass =
                     Class.forName("android.support.v4.media.session.MediaControllerCompat");
             Constructor<?> constructor = controllerClass.getConstructor(
-                    android.content.Context.class, tokenClass);
+                    android.content.Context.class, compatTokenClass);
             constructor.setAccessible(true);
             Object controller = constructor.newInstance(appleApplication(), token);
 
