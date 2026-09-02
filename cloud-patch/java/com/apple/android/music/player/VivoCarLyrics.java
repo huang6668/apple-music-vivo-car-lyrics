@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-legacy-token-r26-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-token-call-r27-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1048,45 +1048,24 @@ public final class VivoCarLyrics {
     private static String probeSessionAsAtomicSees(Object manager) {
         String step = "0";
         try {
-            step = "1sm";
-            Object sessionManager = getFieldValue(manager, "a");
-            step = "1.5sess";
-            Object session = getFieldValue(sessionManager, "b");  // E3.P1$b = MediaLibrarySession
-            step = "2tokcls";
+            step = "1tokcls";
             Class<?> compatTokenClass =
                     Class.forName("android.support.v4.media.session.MediaSessionCompat$Token");
 
-            step = "3tok.method";
-            Object rawToken = invokeOptional(session, "getSessionToken");
-            Object token = null;
-
-            if (rawToken != null) {
-                step = "3tok.compat?";
-                if (compatTokenClass.isInstance(rawToken)) {
-                    token = rawToken;
-                    step = "3tok.compat.yes";
-                } else {
-                    // Media3 SessionToken -> call getLegacyToken()
-                    step = "3tok.legacy";
-                    token = invokeOptional(rawToken, "getLegacyToken");
-                    if (token == null) {
-                        step = "3tok.sesscompat";
-                        // Fallback: getSessionCompat().getSessionToken()
-                        Object compat = invokeOptional(session, "getSessionCompat");
-                        if (compat != null) {
-                            token = invokeOptional(compat, "getSessionToken");
-                        }
-                    }
-                }
-            }
-
-            if (token == null) {
-                step = "3tok.find";
-                token = findCompatToken(session != null ? session : sessionManager, compatTokenClass);
-            }
+            step = "2call";
+            // Apple Music exposes its own compat token through a public static method that its
+            // own MediaRouter dialogs already call (androidx/mediarouter/app/{i,q} -> I3.l.e()).
+            // Verified from the decoded smali: .method public static e()
+            //   Landroid/support/v4/media/session/MediaSessionCompat$Token;
+            // Using it avoids guessing at the obfuscated Media3 object graph, where every
+            // method name this helper tried (getSessionToken/getLegacyToken/getSessionCompat)
+            // does not survive obfuscation.
+            Class<?> tokenSource = Class.forName("I3.l");
+            Object token = invokeStaticOptional(tokenSource, "e");
             if (token == null) {
                 return "D1 tok=NONE@" + step;
             }
+
             step = "4ctl";
             Class<?> controllerClass =
                     Class.forName("android.support.v4.media.session.MediaControllerCompat");
@@ -1587,7 +1566,9 @@ public final class VivoCarLyrics {
             if (DIAGNOSTIC_MODE) {
                 sessionProbeDiag = "";
                 sessionProbeGeneration = -1L;
-                atomicConnectDiag = "conn=n";
+                // atomicConnectDiag intentionally NOT reset: Atomic Player stays connected
+                // across track changes. Only trackStartUptime resets so timestamps are
+                // relative to the new track.
                 trackStartUptime = android.os.SystemClock.uptimeMillis();
             }
             currentAtomicMediaIdGeneration = -1L;
