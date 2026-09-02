@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-probe-r23-2026-09-01";
+    private static final String BUILD_MARKER = "vivo-car-atomic-probe-session-r24-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -133,10 +133,18 @@ public final class VivoCarLyrics {
         }
     }
 
-    /** Adds only the Atomic lyric capability before Apple Music publishes its native MediaItem. */
+    /** Adds Atomic lyric capability and duration before Apple Music publishes its native MediaItem. */
     public static void onNativeMediaItem(Object mediaItem) {
         try {
-            advertiseAtomicLyricSupport(mediaItem);
+            if (advertiseAtomicLyricSupport(mediaItem) && lastKnownDuration > 0L) {
+                Object metadata = getFieldValue(mediaItem, "d");
+                if (metadata != null) {
+                    Bundle extras = (Bundle) getFieldValue(metadata, "I");
+                    if (extras != null && !extras.containsKey(PUBLIC_DURATION)) {
+                        extras.putLong(PUBLIC_DURATION, lastKnownDuration);
+                    }
+                }
+            }
         } catch (Throwable ignored) {
         }
     }
@@ -1026,13 +1034,15 @@ public final class VivoCarLyrics {
         try {
             step = "1sm";
             Object sessionManager = getFieldValue(manager, "a");
+            step = "1.5sess";
+            Object session = getFieldValue(sessionManager, "b");  // E3.P1$b = MediaLibrarySession
             step = "2tokcls";
             Class<?> tokenClass =
                     Class.forName("android.support.v4.media.session.MediaSessionCompat$Token");
             step = "3tok";
-            Object token = findCompatToken(sessionManager, tokenClass);
+            Object token = findCompatToken(session != null ? session : sessionManager, tokenClass);
             if (token == null) {
-                return "D1 tok=NONE";
+                return "D1 tok=NONE@" + step;
             }
             step = "4ctl";
             Class<?> controllerClass =
