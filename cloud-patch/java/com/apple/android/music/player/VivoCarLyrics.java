@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-framework-token-r30-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-framework-token-r30b-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1169,7 +1169,8 @@ public final class VivoCarLyrics {
             return diag.toString();
         }
 
-            Object metadata = invokeOptional(controller, "getMetadata");
+        try {
+            Object metadata = invokeOptional(controllerToUse, "getMetadata");
             long metaDuration = -1L;
             long metaSupport = -1L;
             int metaKeys = -1;
@@ -1184,7 +1185,7 @@ public final class VivoCarLyrics {
                 }
             }
 
-            Object state = invokeOptional(controller, "getPlaybackState");
+            Object state = invokeOptional(controllerToUse, "getPlaybackState");
             long statePos = -1L; long stateAct = -1L; int stateSt = -1;
             if (state != null) {
                 statePos = longValue(invokeOptional(state, "getPosition"), -1L);
@@ -1202,7 +1203,7 @@ public final class VivoCarLyrics {
             diag.append("[00:00.90]D4 keys=").append(metaKeys)
                 .append(" ucarLine=").append(metaHasLine ? "y" : "n");
         } catch (Throwable ex) {
-            diag.append(" ctlErr:").append(ex.getClass().getSimpleName());
+            diag.append(" readErr:").append(ex.getClass().getSimpleName());
         }
         return diag.toString();
     }
