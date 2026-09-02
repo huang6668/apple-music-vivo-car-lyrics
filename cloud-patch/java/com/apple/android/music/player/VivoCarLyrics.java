@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-multipath-diag-r28-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-retry-probe-r29-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -260,19 +260,35 @@ public final class VivoCarLyrics {
                 long since = trackStartUptime > 0L
                         ? android.os.SystemClock.uptimeMillis() - trackStartUptime : -1L;
                 atomicConnectDiag = "conn=y@" + since;
-                // Probe exactly what Atomic sees at connection time
+                // Probe exactly what Atomic sees at connection time. The session's compat layer
+                // may not be wired up at first-lyric time (I3.l.c is live but c.D.a and c.E
+                // are null), so we retry here with up to 3 x 300ms delays, then bust the cache
+                // so the next lyric update surfaces the fresh result.
                 Object mgr;
                 synchronized (STATE_LOCK) {
                     mgr = currentManager;
                 }
                 if (mgr != null) {
-                    MAIN.post(() -> {
-                        String result = probeSessionAsAtomicSees(mgr);
-                        synchronized (STATE_LOCK) {
-                            sessionProbeDiag = result;
-                            sessionProbeGeneration = GENERATION.get();
+                    final Object capturedMgr = mgr;
+                    Runnable retry = new Runnable() {
+                        int attempts = 0;
+                        @Override public void run() {
+                            String result = probeSessionAsAtomicSees(capturedMgr);
+                            boolean succeeded = !result.contains("sing=null")
+                                    && !result.contains("A=null")
+                                    && !result.contains("A=sing=ok")
+                                    && !result.startsWith("D1 A=sing=ok B=null");
+                            synchronized (STATE_LOCK) {
+                                sessionProbeDiag = result;
+                                // Always bust the cache so the next lyric update re-reads this
+                                sessionProbeGeneration = -1L;
+                            }
+                            if (!succeeded && ++attempts < 3) {
+                                MAIN.postDelayed(this, 300L);
+                            }
                         }
-                    });
+                    };
+                    MAIN.postDelayed(retry, 100L);
                 }
             }
 
