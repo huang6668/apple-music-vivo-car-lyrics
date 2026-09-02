@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-duration-republish-r34-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-diag-off-r35-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -305,29 +305,6 @@ public final class VivoCarLyrics {
             }
 
             scheduleMetadataReapply(manager, generation);
-
-            // r32/r33 diagnosis: the framework-layer MediaController has mDUR=258000, but
-            // MediaSessionCompat.Token.fromToken(frameworkToken) returns null — the framework
-            // session and the compat session that Atomic's c0 controller connects to are two
-            // independently registered sessions. LegacyConversions writes METADATA_KEY_DURATION
-            // from player.getDuration() into the compat session independently of our extras
-            // writes. At track change it publishes once with getDuration()=TIME_UNSET(-1) before
-            // the player loads the manifest. Atomic connects at ~4.8 s and may have missed the
-            // subsequent update. Republishing the MediaItem here forces LegacyConversions to run
-            // again while getDuration() already has the correct value, so Atomic's
-            // onMetadataChanged fires with the real duration and b3.j gets set properly.
-            final Object republishManager = manager;
-            MAIN.postDelayed(new Runnable() {
-                @Override public void run() {
-                    try {
-                        if (!isCurrent(republishManager, generation)) return;
-                        invokeRequired(republishManager, "I",
-                                invokeRequired(republishManager, "a"), 0);
-                    } catch (Throwable ignored) {
-                    }
-                }
-            }, 200L);
-
             for (long delay : ATOMIC_CONNECT_REPLAY_DELAYS_MS) {
                 MAIN.postDelayed(new AtomicReplayTask(manager, generation, whole,
                         status, stateSequence, false), delay);
