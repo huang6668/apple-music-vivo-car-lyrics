@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-fw-controller-r32-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-compat-compare-r33-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1214,7 +1214,58 @@ public final class VivoCarLyrics {
                 .append(" psPOS=").append(statePos)
                 .append(" psACT=").append(Long.toHexString(stateAct)).append('\n');
             diag.append("[00:00.90]D4 keys=").append(metaKeys)
-                .append(" ucarLine=").append(metaHasLine ? "y" : "n");
+                .append(" ucarLine=").append(metaHasLine ? "y" : "n").append('\n');
+
+            // D5: Read the same DURATION through the compat layer by converting the framework
+            // token to a compat token via MediaSessionCompat.Token.fromToken(). This is the
+            // exact path Atomic's c0 takes via MediaBrowserCompat -> MediaControllerCompat,
+            // so if this value differs from mDUR above, that explains the missing progress bar.
+            long compatDUR = -2L;
+            String compatCtlStatus = "skip";
+            try {
+                Class<?> compatTokenClass = Class.forName(
+                        "android.support.v4.media.session.MediaSessionCompat$Token");
+                Object compatToken = invokeStaticOptional(compatTokenClass, "fromToken", frameworkToken);
+                compatCtlStatus = compatToken != null ? "tok=y" : "tok=null";
+                if (compatToken != null) {
+                    Class<?> controllerCompatClass = Class.forName(
+                            "android.support.v4.media.session.MediaControllerCompat");
+                    // Print actual ctor param types so we know the exact signature next time
+                    StringBuilder ctorTypes = new StringBuilder();
+                    for (Constructor<?> ctor : controllerCompatClass.getDeclaredConstructors()) {
+                        if (ctor.getParameterTypes().length == 2) {
+                            ctorTypes.append(ctor.getParameterTypes()[1].getSimpleName()).append(',');
+                        }
+                    }
+                    compatCtlStatus += " ctorP2=[" + ctorTypes + "]";
+                    // Try each 2-arg ctor regardless of param type
+                    Object compatCtl = null;
+                    for (Constructor<?> ctor : controllerCompatClass.getDeclaredConstructors()) {
+                        Class<?>[] pt = ctor.getParameterTypes();
+                        if (pt.length == 2) {
+                            try {
+                                ctor.setAccessible(true);
+                                compatCtl = ctor.newInstance(appleApplication(), compatToken);
+                                break;
+                            } catch (Throwable ignored) {}
+                        }
+                    }
+                    if (compatCtl != null) {
+                        Object compatMeta = invokeOptional(compatCtl, "getMetadata");
+                        if (compatMeta != null) {
+                            compatDUR = longValue(
+                                    invokeOptional(compatMeta, "getLong", PUBLIC_DURATION), -1L);
+                        }
+                        compatCtlStatus += " ok";
+                    } else {
+                        compatCtlStatus += " noCtl";
+                    }
+                }
+            } catch (Throwable ex) {
+                compatCtlStatus = "exc:" + ex.getClass().getSimpleName();
+            }
+            diag.append("[00:01.20]D5e compat=").append(compatCtlStatus)
+                .append(" cDUR=").append(compatDUR);
         } catch (Throwable ex) {
             diag.append(" readErr:").append(ex.getClass().getSimpleName());
         }
