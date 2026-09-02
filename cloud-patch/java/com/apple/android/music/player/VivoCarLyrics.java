@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-probe-session-r24-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-probe-token-r25-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1039,8 +1039,12 @@ public final class VivoCarLyrics {
             step = "2tokcls";
             Class<?> tokenClass =
                     Class.forName("android.support.v4.media.session.MediaSessionCompat$Token");
-            step = "3tok";
-            Object token = findCompatToken(session != null ? session : sessionManager, tokenClass);
+            step = "3tok.method";
+            Object token = invokeOptional(session, "getSessionToken");
+            if (token == null) {
+                step = "3tok.find";
+                token = findCompatToken(session != null ? session : sessionManager, tokenClass);
+            }
             if (token == null) {
                 return "D1 tok=NONE@" + step;
             }
