@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-ctor-scan-r31-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-fw-controller-r32-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1139,34 +1139,40 @@ public final class VivoCarLyrics {
             .append(" C=").append(pathC)
             .append(" D=").append(pathD);
 
-        // Build a MediaControllerCompat from whichever token worked.
-        // Use getDeclaredConstructors() and parameter-compatibility matching rather than
-        // getConstructor(), because the support library's constructor parameter type may be
-        // declared as Parcelable or IBinder rather than the concrete token class after obfuscation.
+        // Build a controller from whichever token worked.
+        // MediaControllerCompat's constructor parameter type is obfuscated and can't be
+        // matched by reflection. Use the standard framework MediaController instead --
+        // it accepts android.media.session.MediaSession$Token directly, has the same
+        // getMetadata()/getPlaybackState() surface, and is not obfuscated.
         Object controllerToUse = null;
-        if (token != null || frameworkToken != null) {
+        if (frameworkToken != null) {
+            try {
+                android.media.session.MediaController fwCtl =
+                        new android.media.session.MediaController(
+                                appleApplication(),
+                                (android.media.session.MediaSession.Token) frameworkToken);
+                controllerToUse = fwCtl;
+            } catch (Throwable ex) {
+                diag.append(" ctlErr:").append(ex.getClass().getSimpleName());
+            }
+        } else if (token != null) {
+            // Compat token path: try scanning constructors as before but accept any 2-arg ctor
             try {
                 Class<?> controllerClass = Class.forName(
                         "android.support.v4.media.session.MediaControllerCompat");
-                Object tokenArg = token != null ? token : frameworkToken;
                 android.content.Context ctx = appleApplication();
-                Constructor<?> best = null;
                 for (Constructor<?> ctor : controllerClass.getDeclaredConstructors()) {
                     Class<?>[] pt = ctor.getParameterTypes();
-                    if (pt.length == 2
-                            && pt[0].isInstance(ctx)
-                            && (pt[1].isInstance(tokenArg)
-                                || pt[1].isAssignableFrom(tokenArg.getClass()))) {
-                        best = ctor;
-                        break;
+                    if (pt.length == 2 && pt[0].isInstance(ctx)) {
+                        try {
+                            ctor.setAccessible(true);
+                            controllerToUse = ctor.newInstance(ctx, token);
+                            break;
+                        } catch (Throwable ignored) {
+                        }
                     }
                 }
-                if (best != null) {
-                    best.setAccessible(true);
-                    controllerToUse = best.newInstance(ctx, tokenArg);
-                } else {
-                    diag.append(" ctlErr:noCtor");
-                }
+                if (controllerToUse == null) diag.append(" ctlErr:noCtor");
             } catch (Throwable ex) {
                 diag.append(" ctlErr:").append(ex.getClass().getSimpleName());
             }
