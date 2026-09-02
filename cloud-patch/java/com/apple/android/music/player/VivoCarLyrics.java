@@ -260,6 +260,20 @@ public final class VivoCarLyrics {
                 long since = trackStartUptime > 0L
                         ? android.os.SystemClock.uptimeMillis() - trackStartUptime : -1L;
                 atomicConnectDiag = "conn=y@" + since;
+                // Probe exactly what Atomic sees at connection time
+                Object mgr;
+                synchronized (STATE_LOCK) {
+                    mgr = currentManager;
+                }
+                if (mgr != null) {
+                    MAIN.post(() -> {
+                        String result = probeSessionAsAtomicSees(mgr);
+                        synchronized (STATE_LOCK) {
+                            sessionProbeDiag = result;
+                            sessionProbeGeneration = GENERATION.get();
+                        }
+                    });
+                }
             }
 
             Object manager;
