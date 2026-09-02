@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-probe-token-r25-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-legacy-token-r26-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -159,6 +159,8 @@ public final class VivoCarLyrics {
             if (itemDur > 0L) {
                 lastKnownDuration = itemDur;
             }
+            // Keep lastKnownDuration across tracks: if the new item has no duration yet,
+            // injecting the previous track's duration is better than injecting 0 or nothing.
             currentExpectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
             currentPlaybackItem = null;
             resetPublishCache();
@@ -1037,13 +1039,36 @@ public final class VivoCarLyrics {
             step = "1.5sess";
             Object session = getFieldValue(sessionManager, "b");  // E3.P1$b = MediaLibrarySession
             step = "2tokcls";
-            Class<?> tokenClass =
+            Class<?> compatTokenClass =
                     Class.forName("android.support.v4.media.session.MediaSessionCompat$Token");
+
             step = "3tok.method";
-            Object token = invokeOptional(session, "getSessionToken");
+            Object rawToken = invokeOptional(session, "getSessionToken");
+            Object token = null;
+
+            if (rawToken != null) {
+                step = "3tok.compat?";
+                if (compatTokenClass.isInstance(rawToken)) {
+                    token = rawToken;
+                    step = "3tok.compat.yes";
+                } else {
+                    // Media3 SessionToken -> call getLegacyToken()
+                    step = "3tok.legacy";
+                    token = invokeOptional(rawToken, "getLegacyToken");
+                    if (token == null) {
+                        step = "3tok.sesscompat";
+                        // Fallback: getSessionCompat().getSessionToken()
+                        Object compat = invokeOptional(session, "getSessionCompat");
+                        if (compat != null) {
+                            token = invokeOptional(compat, "getSessionToken");
+                        }
+                    }
+                }
+            }
+
             if (token == null) {
                 step = "3tok.find";
-                token = findCompatToken(session != null ? session : sessionManager, tokenClass);
+                token = findCompatToken(session != null ? session : sessionManager, compatTokenClass);
             }
             if (token == null) {
                 return "D1 tok=NONE@" + step;
