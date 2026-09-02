@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-token-call-r27-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-atomic-multipath-diag-r28-2026-09-02";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -1046,77 +1046,114 @@ public final class VivoCarLyrics {
      * Bundle this helper wrote.
      */
     private static String probeSessionAsAtomicSees(Object manager) {
-        String step = "0";
+        // Probe multiple token paths in a single call so one APK install surfaces all
+        // the diagnostic data we need. Each path is independent and failures are silent.
+        StringBuilder diag = new StringBuilder();
+        Object token = null;
+
+        // Path A: I3.l.e() – the static getter Apple Music's own MediaRouter dialogs use.
+        // Decoded from smali: .method public static e()
+        //   Landroid/support/v4/media/session/MediaSessionCompat$Token;
+        // Returns null when the internal singleton I3.l.c is not yet initialised.
+        String pathA = "null";
         try {
-            step = "1tokcls";
-            Class<?> compatTokenClass =
-                    Class.forName("android.support.v4.media.session.MediaSessionCompat$Token");
-
-            step = "2call";
-            // Apple Music exposes its own compat token through a public static method that its
-            // own MediaRouter dialogs already call (androidx/mediarouter/app/{i,q} -> I3.l.e()).
-            // Verified from the decoded smali: .method public static e()
-            //   Landroid/support/v4/media/session/MediaSessionCompat$Token;
-            // Using it avoids guessing at the obfuscated Media3 object graph, where every
-            // method name this helper tried (getSessionToken/getLegacyToken/getSessionCompat)
-            // does not survive obfuscation.
             Class<?> tokenSource = Class.forName("I3.l");
-            Object token = invokeStaticOptional(tokenSource, "e");
-            if (token == null) {
-                return "D1 tok=NONE@" + step;
+            // Also check the singleton field state for timing diagnosis
+            Field c = tokenSource.getDeclaredField("c");
+            c.setAccessible(true);
+            Object singleton = c.get(null);
+            pathA = singleton == null ? "sing=null" : "sing=ok";
+            Object t = invokeStaticOptional(tokenSource, "e");
+            if (t != null) { token = t; pathA = "ok"; }
+        } catch (Throwable ex) {
+            pathA = "exc:" + ex.getClass().getSimpleName();
+        }
+
+        // Path B: manager.a (k0) → field h (MediaPlayerController, confirmed in smali) → walk
+        String pathB = "skip";
+        if (token == null) {
+            try {
+                Object sm = getFieldValue(manager, "a");      // P.a = k0
+                Object mpc = getFieldValue(sm, "h");          // k0.h = MediaPlayerController
+                Class<?> tclass = Class.forName(
+                        "android.support.v4.media.session.MediaSessionCompat$Token");
+                token = findCompatToken(mpc, tclass);
+                pathB = token != null ? "ok" : "null";
+            } catch (Throwable ex) {
+                pathB = "exc:" + ex.getClass().getSimpleName();
             }
+        }
 
-            step = "4ctl";
-            Class<?> controllerClass =
-                    Class.forName("android.support.v4.media.session.MediaControllerCompat");
-            Constructor<?> constructor = controllerClass.getConstructor(
+        // Path C: k0 field b (LE3/P1$b = MediaLibrarySession) → walk
+        String pathC = "skip";
+        if (token == null) {
+            try {
+                Object sm = getFieldValue(manager, "a");      // P.a = k0
+                Object sess = getFieldValue(sm, "b");         // k0.b = E3.P1$b
+                Class<?> tclass = Class.forName(
+                        "android.support.v4.media.session.MediaSessionCompat$Token");
+                token = findCompatToken(sess, tclass);
+                pathC = token != null ? "ok" : "null";
+            } catch (Throwable ex) {
+                pathC = "exc:" + ex.getClass().getSimpleName();
+            }
+        }
+
+        diag.append("D1 A=").append(pathA)
+            .append(" B=").append(pathB)
+            .append(" C=").append(pathC);
+
+        if (token == null) {
+            return diag.toString();
+        }
+
+        // Got a token — build MediaControllerCompat and read what Atomic sees.
+        try {
+            Class<?> compatTokenClass = Class.forName(
+                    "android.support.v4.media.session.MediaSessionCompat$Token");
+            Class<?> controllerClass = Class.forName(
+                    "android.support.v4.media.session.MediaControllerCompat");
+            Constructor<?> ctor = controllerClass.getConstructor(
                     android.content.Context.class, compatTokenClass);
-            constructor.setAccessible(true);
-            Object controller = constructor.newInstance(appleApplication(), token);
+            ctor.setAccessible(true);
+            Object controller = ctor.newInstance(appleApplication(), token);
 
-            step = "5meta";
             Object metadata = invokeOptional(controller, "getMetadata");
             long metaDuration = -1L;
             long metaSupport = -1L;
             int metaKeys = -1;
             boolean metaHasLine = false;
             if (metadata != null) {
-                metaDuration = longValue(
-                        invokeOptional(metadata, "getLong", PUBLIC_DURATION), -1L);
-                metaSupport = longValue(
-                        invokeOptional(metadata, "getLong", ATOMIC_SUPPORT_EVENTS), -1L);
-                Object keySet = invokeOptional(metadata, "keySet");
-                if (keySet instanceof java.util.Set) {
-                    metaKeys = ((java.util.Set<?>) keySet).size();
-                    metaHasLine = ((java.util.Set<?>) keySet).contains(META_LINE);
+                metaDuration = longValue(invokeOptional(metadata, "getLong", PUBLIC_DURATION), -1L);
+                metaSupport = longValue(invokeOptional(metadata, "getLong", ATOMIC_SUPPORT_EVENTS), -1L);
+                Object ks = invokeOptional(metadata, "keySet");
+                if (ks instanceof java.util.Set) {
+                    metaKeys = ((java.util.Set<?>) ks).size();
+                    metaHasLine = ((java.util.Set<?>) ks).contains(META_LINE);
                 }
             }
 
-            step = "6state";
             Object state = invokeOptional(controller, "getPlaybackState");
-            long statePosition = -1L;
-            long stateActions = -1L;
-            int stateCode = -1;
+            long statePos = -1L; long stateAct = -1L; int stateSt = -1;
             if (state != null) {
-                statePosition = longValue(invokeOptional(state, "getPosition"), -1L);
-                stateActions = longValue(invokeOptional(state, "getActions"), -1L);
-                stateCode = intValue(invokeOptional(state, "getState"), -1);
+                statePos = longValue(invokeOptional(state, "getPosition"), -1L);
+                stateAct = longValue(invokeOptional(state, "getActions"), -1L);
+                stateSt = intValue(invokeOptional(state, "getState"), -1);
             }
 
-            StringBuilder out = new StringBuilder();
-            out.append("D1 tok=y ctl=y meta=").append(metadata != null ? "y" : "n")
-                    .append(" ps=").append(state != null ? "y" : "n").append('\n');
-            out.append("[00:00.30]D2 mDUR=").append(metaDuration)
-                    .append(" mSE=").append(metaSupport).append('\n');
-            out.append("[00:00.60]D3 psST=").append(stateCode)
-                    .append(" psPOS=").append(statePosition)
-                    .append(" psACT=").append(Long.toHexString(stateActions)).append('\n');
-            out.append("[00:00.90]D4 keys=").append(metaKeys)
-                    .append(" ucarLine=").append(metaHasLine ? "y" : "n");
-            return out.toString();
-        } catch (Throwable failure) {
-            return "D1 err@" + step + " " + failure.getClass().getSimpleName();
+            diag.append(" meta=").append(metadata != null ? "y" : "n")
+                .append(" ps=").append(state != null ? "y" : "n").append('\n');
+            diag.append("[00:00.30]D2 mDUR=").append(metaDuration)
+                .append(" mSE=").append(metaSupport).append('\n');
+            diag.append("[00:00.60]D3 psST=").append(stateSt)
+                .append(" psPOS=").append(statePos)
+                .append(" psACT=").append(Long.toHexString(stateAct)).append('\n');
+            diag.append("[00:00.90]D4 keys=").append(metaKeys)
+                .append(" ucarLine=").append(metaHasLine ? "y" : "n");
+        } catch (Throwable ex) {
+            diag.append(" ctlErr:").append(ex.getClass().getSimpleName());
         }
+        return diag.toString();
     }
 
     /** Builds the LRC-formatted probe header, computed once per track. */
