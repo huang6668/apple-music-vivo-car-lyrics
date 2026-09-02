@@ -389,6 +389,67 @@ config/search-patterns.txt
 
 在 379acd9 分支中完成，包括 duration 诊断、能力位基线调整、null extras 防护等。这些改动已合并至 r12。
 
+### r35 (2026-09-02) - 诊断关闭基准
+
+关闭 `DIAGNOSTIC_MODE`（改为 `false`），撤销 r34 中的 `manager.I()` 重发布调用。诊断字段和方法保留编译但全部被门控，下次需要重新诊断时直接改回 `true` 即可，无需另行添加代码。
+
+**当前状态：**
+- 歌词（每首曲目）：正常，lrc 时间轴精确同步
+- 车机歌词路径（music.media.extras.*）：正常
+- 仪表分页（ucar.media.metadata.*）：代码存在，但仪表长歌词滚动问题**未解决**（见 KNOWN_ISSUES.md）
+- 原子随身听歌词（vivomusicmix.extra.key.lyric）：正常，每首歌都有
+- 原子随身听进度条：**未解决**（见 KNOWN_ISSUES.md）
+
+**已确认的死路（后续不要重试）：**
+- 往 `MediaItem.metadata.extras` 写 `DURATION`：对框架层 `android.media.session.MediaController` 有效（r32 诊断证明 `mDUR=258000`），但 Atomic 走的是独立的 compat session，`MediaSessionCompat.Token.fromToken(frameworkToken)` 返回 null（r33 诊断证明），两层完全独立，extras 写入对 compat 层无影响
+- `manager.I(mediaItem, 0)` 重新发布 MediaItem：会重置 PlaybackState，进度条反而消失（r34 测试证明；与 f984add revert 原因相同）
+- compat token 反射路径（A/B/C）：本地播放时全部 null；`I3.l` 是 MediaRouter/AirPlay 注册表，只在 Cast 活跃时有值
+
+**构建标识：** vivo-car-atomic-diag-off-r35-2026-09-02
+
+### r34 (2026-09-02) - MediaItem 重发布尝试（已撤销）
+
+在 `onAtomicControllerConnected` 时调用 `manager.I(mediaItem, 0)` 触发 Media3 重新运行 `LegacyConversions`，目的是让 compat session 在播放器已知时长后更新 `METADATA_KEY_DURATION`。测试结果：进度条不但没有出现，连显示也变成不正常。原因与 f984add 中记录的完全相同——MediaItem 重新发布会重置 PlaybackState，进度条依赖 PlaybackState，发布一次进度条就消失。已在 r35 中撤销。
+
+### r23–r33 (2026-09-02) - 原子随身听进度条诊断
+
+对 Atomic Player 进度条问题进行了 11 轮诊断。核心发现：
+
+1. 框架层数据完全正确（r32）：通过 `android.media.session.MediaController`（框架层）读到 `mDUR=258000 mSE=15 psST=3 psPOS=14078`，说明 Media3 的框架 session 里时长和能力位都正确
+2. compat token 无法转换（r33）：`MediaSessionCompat.Token.fromToken(frameworkToken)` 返回 null，证明框架 token 和 Atomic 通过 `MediaBrowserCompat` 连接的那个 compat session 是两个完全独立注册的 session，不是同一个 session 的两种视图
+3. 所有 compat token 路径（A/B/C）在本地播放时全部 null；`I3.l`（Apple Music 的 MediaRouter 注册表）在本地播放时 singleton 存在但其 MediaSessionCompat 字段为空（只在 AirPlay/Cast 活跃时有值）
+
+诊断证明：问题不在于数据有没有写入，而在于 Atomic 的 compat session 和我们操作的框架层根本是两条独立的数据通道，目前没有找到从 Apple Music 侧修改、在不破坏 PlaybackState 的前提下向 compat session 注入 DURATION 的方法。
+
+### r12 (2026-09-01) - 三方合并：车机 + 仪表分页 + 原子随身听
+
+将 release-44 分支（96312d1，车机和仪表分页）与 379acd9（原子随身听支持）合并至 feat/atomic-lyrics-on-main。
+
+**保留特性：**
+- 车机歌词：META_WHOLE / META_LINE / META_STATUS 写入 MediaMetadata Extras
+- 仪表分页：ClusterLyricsPaginator 把长句拆成 ≤20 UTF-16 单元的多页 LRC；仪表使用 clusterWhole / clusterTimes / clusterTexts
+- 原子随身听：vivomusicmix.* 协议字段、onNativeMediaItem 和 onAtomicControllerConnected 回调、能力位写入
+
+**关键实现：**
+- LyricsState 同时保存原始和分页时间轴
+- META_WHOLE 使用 clusterWhole（仪表读取），vivomusicmix.extra.key.lyric 使用原始 whole（原子随身听读取）
+- publishSessionExtras 中为仪表动态计算 clusterLine，为车机保留原始 safeLine
+- 两条歌词路径完全独立，互不干扰
+
+**构建标识：**
+- BUILD_MARKER: vivo-car-atomic-lyrics-on-main-r12-2026-09-01
+- 包含 ClusterLyricsPaginator.java 和 VivoCarLyrics.java
+- apply.sh 验证 onNativeMediaItem 和 onAtomicControllerConnected 在正确位置
+- rebuild.sh 验证所有协议字符串和分页 marker
+
+### r21 (2026-09-01) - 原子随身听进度条修复（duration republish on looper）
+
+在 r12 之前的分支中完成，修复原子随身听进度条问题。duration republish 改为在 playback manager 的 looper 上执行，避免线程检查抛出 InvocationTargetException。
+
+### r10-r20 - 原子随身听调试与诊断
+
+在 379acd9 分支中完成，包括 duration 诊断、能力位基线调整、null extras 防护等。这些改动已合并至 r12。
+
 ### r9 (2026-08-29) - 仪表分页初版（release-44）
 
 在 96312d1 提交中完成，引入 ClusterLyricsPaginator，按 20 UTF-16 单元拆分长句，为仪表生成独立时间轴。
