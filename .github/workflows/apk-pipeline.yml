@@ -185,6 +185,31 @@ jobs:
             fi
           fi
           cat "$report/legacy-bridge-paths.txt" >> "$report/focused-paths.txt"
+
+          # Second pass: Media3's session classes themselves. The first pass keys on DURATION and
+          # MediaMetadataCompat, which the session class does not mention, so MediaLibrarySession
+          # (the obfuscated holder of the compat token) was never collected. Without its field and
+          # method tables the token has to be guessed by reflection, which is what kept failing.
+          # Key on the session-token surface instead.
+          session_pattern='MediaSessionCompat\$Token|getSessionCompat|MediaSessionService|onGetSession'
+          : > "$report/session-class-paths.txt"
+          if ((${#legacy_roots[@]} > 0)); then
+            grep -RIlE "$session_pattern" "${legacy_roots[@]}" \
+              | grep -vE '/com/apple/android/music/|/android/support/v4/' \
+              | LC_ALL=C sort -u \
+              | head -n 80 \
+              > "$report/session-class-paths.txt" || true
+
+            if [[ -s "$report/session-class-paths.txt" ]]; then
+              head -n 30 "$report/session-class-paths.txt" \
+                | tr '\n' '\0' \
+                | xargs -0 --no-run-if-empty \
+                    grep -InE -C 12 "$session_pattern" \
+                  > "$report/session-class-context.txt" 2>/dev/null || true
+            fi
+          fi
+          cat "$report/session-class-paths.txt" >> "$report/focused-paths.txt"
+
           LC_ALL=C sort -u "$report/focused-paths.txt" -o "$report/focused-paths.txt"
 
           while IFS= read -r source; do
