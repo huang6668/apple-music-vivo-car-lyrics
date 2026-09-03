@@ -767,7 +767,6 @@ public final class VivoCarLyrics {
             requestLinePublish(manager, currentLine, currentClusterLine, generation, false);
             MAIN.postDelayed(this, LINE_POLL_MS);
         }
-        }
     }
 
     private static void scheduleAtomicReplays(Object manager, long generation, String whole,
