@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-no-cluster-lyrics-r37-2026-09-03";
+    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r38-2026-09-03";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -50,12 +50,20 @@ public final class VivoCarLyrics {
     private static final long ATOMIC_ACTION_CLEAR_MS = 750L;
     private static final long ATOMIC_LYRIC_SUPPORT_EVENT = 8L;
     /**
+     * Seek / time-info capability bit. Atomic's SeekBarLayout only renders position, duration
+     * and an enabled thumb when {@code (support_event & 16) == 16} AND duration > 0
+     * (MusicWidgetManager.isSupportSeek / isSupportTimeInfo). Its generic MediaSession
+     * controller sets this bit itself from PlaybackState ACTION_SEEK_TO, but the cooperation
+     * controller (c0, selected once our manifest advertises the vivo service action) trusts
+     * the app-published value verbatim. Without this bit the widget shows "--:--" no matter
+     * what METADATA_KEY_DURATION says.
+     */
+    private static final long ATOMIC_SEEK_SUPPORT_EVENT = 16L;
+    /**
      * Baseline Atomic Player capability bits. Atomic's own getSupportEvent() falls back to 7
      * (bits 1|2|4) whenever it cannot query an app's vivo service, so 7 is what it assumes for
      * an ordinary cooperating player. Publishing only the lyric bit would report 8, which
-     * actively declares those three baseline capabilities as unsupported and leaves the
-     * progress bar widget disabled even though position and duration are readable from the
-     * standard PlaybackState / METADATA_KEY_DURATION.
+     * actively declares those three baseline capabilities as unsupported.
      */
     private static final long ATOMIC_BASELINE_SUPPORT_EVENTS = 7L;
 
@@ -1208,7 +1216,7 @@ public final class VivoCarLyrics {
                 Object ks = invokeOptional(metadata, "keySet");
                 if (ks instanceof java.util.Set) {
                     metaKeys = ((java.util.Set<?>) ks).size();
-                    metaHasLine = ((java.util.Set<?>) ks).contains(META_LINE);
+                    metaHasLine = ((java.util.Set<?>) ks).contains("ucar.media.metadata.LYRICS_LINE");
                 }
             }
 
@@ -1325,7 +1333,8 @@ public final class VivoCarLyrics {
         }
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
-                | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT);
+                | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT
+                | ATOMIC_SEEK_SUPPORT_EVENT);
         return true;
     }
 

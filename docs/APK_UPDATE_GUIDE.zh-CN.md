@@ -360,6 +360,19 @@ config/search-patterns.txt
 
 ## 13. 版本变更记录
 
+### r38 (2026-09-03) - 原子随身听进度条：补上 seek 能力位 16
+
+通过 GitHub Actions 新增的 `Decompile Atomic Player APK` 工作流（`.github/workflows/atomic-decompile.yml`，从 Release `atomic-apk-6.2.5.6` 下载 APK 用 jadx 反编译）对原子随身听 6.2.5.6 做静态分析，定位到进度条根因：`SeekBarLayout` 只在 `duration > 0 && (support_event & 16) == 16` 时显示时间和进度；合作控制器 `c0` 原样使用应用发布的 `vivomusicmix.media.metadata.support_event`，而补丁只写了 `7 | 8 = 15`。详见 `docs/KNOWN_ISSUES.zh-CN.md` 第 1 节。
+
+- `VivoCarLyrics.advertiseAtomicLyricSupport` 新增 `ATOMIC_SEEK_SUPPORT_EVENT = 16`，发布值变为 `7 | 8 | 16 = 31`
+- `verify_source_contract.py` 要求该常量出现在能力位代码中
+- 顺带修复 r37 遗留的两个构建阻塞：诊断探针里残留的 `META_LINE` 引用（改为字面量），以及 `rebuild.sh` 仍在检查 r36 marker 和已删除的 `ucar.*` 字符串
+- 构建标识：`vivo-car-atomic-seek-bit-r38-2026-09-03`
+
+### r37 (2026-09-03) - 停止向仪表推送歌词
+
+删除 `META_LINE / META_WHOLE / META_STATUS` 的 session Extras 写入，只保留车机 `music.media.extras.*` 和原子随身听 `vivomusicmix.*`。`ClusterLyricsPaginator` 保留编译。该版本本身未成功构建（见 r38）。
+
 ### r12 (2026-09-01) - 三方合并：车机 + 仪表分页 + 原子随身听
 
 将 release-44 分支（96312d1，车机和仪表分页）与 379acd9（原子随身听支持）合并至 feat/atomic-lyrics-on-main。

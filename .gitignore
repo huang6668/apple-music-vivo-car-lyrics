@@ -11,3 +11,5 @@ payload.tar.part.*
 *.pem
 input/*.apk
 !input/parts/
+*.apk.*
+.DS_Store

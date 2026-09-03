@@ -53,22 +53,25 @@ assert "setFieldValue(" not in text, (
 # The only permitted MediaMetadata mutation is the in-place Atomic capability bit.
 assert "ATOMIC_SUPPORT_EVENTS" in capability
 assert "ATOMIC_LYRIC_SUPPORT_EVENT" in capability
+# Atomic's SeekBarLayout needs (support_event & 16) or it renders "--:--" regardless of duration.
+assert "ATOMIC_SEEK_SUPPORT_EVENT" in capability, (
+    "Seek/time-info bit 16 must be ORed in, Atomic hides the progress bar without it"
+)
 for forbidden in ("new Bundle(", "constructCompatible(", 'invokeRequired(manager, "I"'):
     assert forbidden not in capability, (
         f"Capability bit must be ORed in place, not republished: {forbidden}"
     )
 
-# Both consumers are served through session Extras: car head unit keys and ucar cluster keys.
+# Only the car head unit is served through session Extras. r37 stopped publishing the ucar
+# instrument-cluster keys entirely; they must not come back through this path.
 for required in (
     "extras.putString(EXTRA_LINE",
     "extras.putBoolean(EXTRA_ALLOWED",
-    "extras.putString(META_LINE",
-    "extras.putString(META_WHOLE",
-    "extras.putLong(META_STATUS",
-    "clusterState.clusterWhole",
-    "clusterState.clusterTimes",
 ):
     assert required in session_extras, f"Missing session Extras contract: {required}"
+assert "ucar.media.metadata" not in session_extras, (
+    "Instrument-cluster keys were removed in r37; do not publish them from session Extras"
+)
 
 for forbidden in (
     'extras.remove("android.media.metadata.ART")',

@@ -1,46 +1,75 @@
 # 已知未解决问题
 
-最后更新：2026-09-02
+最后更新：2026-09-03
 
-本文档记录当前版本（r35 基准）中确认存在但尚未解决的问题，以及已经验证行不通的修复方向，避免后续重复踩坑。
+本文档记录当前版本（r38 基准）中确认存在但尚未解决的问题，以及已经验证行不通的修复方向，避免后续重复踩坑。
 
 ---
 
-## 1. 原子随身听进度条不显示
+## 1. 原子随身听进度条不显示（r38 已定位根因，待实车验证）
 
-**现象：** 歌词正常显示，但原子随身听界面上的进度条控件没有时长数据，始终显示为空或 0/0。
+**现象：** 歌词正常显示，但原子随身听界面上的进度条控件没有时长数据，始终显示 `--:--`，进度为 0。
 
-**已确认的根因（r32 + r33 诊断数据）：**
+**根因（2026-09-03，jadx 反编译原子随身听 6.2.5.6 静态分析确认）：**
 
-原子随身听的进度条依赖它通过 `MediaBrowserCompat → MediaControllerCompat`（support library compat 层）连接时读到的 `METADATA_KEY_DURATION`。这个值由 Media3 的 `LegacyConversions` 从 `player.getDuration()` 独立计算并写入 compat session，和 Apple Music 的 MediaItem extras 是两条完全独立的数据通道。
+进度条的显示条件不在时长，而在能力位。原子随身听 `SeekBarLayout` 是否显示时间和进度由 `MusicWidgetManager`（`t4.d0`）的两个方法决定：
 
-具体诊断结果：
-- r32：通过框架层 `android.media.session.MediaController` 读到 `mDUR=258000 mSE=15 psST=3`，框架层数据完全正确。
-- r33：`MediaSessionCompat.Token.fromToken(frameworkToken)` 返回 null，证明框架 token 和原子随身听连接的 compat session 是两个完全独立注册的 session，不是同一个 session 的两种视图。
+```java
+// t4/d0.java
+public boolean Y0() {            // isSupportSeek
+    if (B0() <= 0) return false; // B0() = getDuration()
+    return b1.c(P0(), 16);       // P0() = getSupportEvent(); b1.c(a, m) == ((a & m) == m)
+}
+public boolean Z0() {            // isSupportTimeInfo，逻辑完全相同
+    if (B0() <= 0) return false;
+    return b1.c(P0(), 16);
+}
+```
+
+`SeekBarLayout.refreshPosition()` 在 `isSupportTimeInfo == false` 时直接 `setProgress(0)` 并把当前/总时长都设为 `--:--`，根本不去看 DURATION。
+
+`getSupportEvent()` 的值取决于原子随身听选择的控制器：
+
+| 控制器 | 何时选中 | support_event 来源 |
+|---|---|---|
+| `y2`（通用 MediaSession） | 包名不在合作名单 | 原子自己算：`PlaybackState.actions` 含 `ACTION_SEEK_TO(256)` 则 23（7\|16），否则 7 |
+| `c0`（合作控制器） | 应用 Manifest 声明 `com.vivo.musicwidgetmix.support.service` | **原样读取** `MediaMetadata` 里的 `vivomusicmix.media.metadata.support_event` |
+
+我们的补丁只写了 `7 | 8 = 15`（r32 诊断 `mSE=15` 与之吻合），缺少 bit 16。所以在合作路径下 `Y0()/Z0()` 恒为 false，进度条永远 `--:--`；而在通用路径下原子自己把 16 位补上了，进度条正常。这就是 "manifest action 一加进度条就没" 的真正原因，与 DURATION 无关。
+
+**之前 "compat 与框架层是两条独立通道" 的结论是错的。** 原子随身听自带的 `MediaControllerCompat`（`MediaControllerImplApi21`）就是 `new android.media.session.MediaController(context, token.getToken())` 的薄包装，`getMetadata()` 直接 `MediaMetadataCompat.fromMediaMetadata(framework.getMetadata())`。r32 用框架层读到的 `mDUR=258000 mSE=15` 就是 `c0.k0()` 看到的值：时长本来就有，只是 16 位没有。r33 的 `fromToken` 返回 null 应是补丁侧反射失败，不能作为两层独立的证据。
+
+**已知的能力位含义（来自原子随身听源码）：**
+
+| bit | 用途 | 依据 |
+|---|---|---|
+| 1/2/4 | 基础播控（原子对未知应用默认 7） | `b1.a()` / `getSupportEvent()` 默认值 |
+| 8 | 歌词 | `f5/n.java`、`f5/b.java`：`b1.c(P0(), 8)` |
+| 16 | 进度条 / seek / 时间显示 | `t4/d0.java` `Y0()/Z0()` |
+| 32 | 自定义颜色 / 互传 | `SettingsMainView`、锁屏组件 |
+| 64 | 列表入口 | `MusicControlPanelView`、`f5/w0.java` |
+| 128 | 未确认 | `f5/w0.java` |
+
+**r38 修复：** `VivoCarLyrics.advertiseAtomicLyricSupport` 改为 OR 入 `7 | 8 | 16 = 31`。Apple Music 的 PlaybackState 本身带 `ACTION_SEEK_TO`，seek 走 `MediaControllerCompat.getTransportControls().seekTo()`，无需其它改动。
+
+**仍需实车确认：**
+
+1. 进度条是否随之出现（预期出现）。
+2. 换歌瞬间 Media3 的 DURATION 可能短暂为 0（`B0() <= 0`），`SeekBarLayout.refresh()` 只在两个标志都为 false 时重新评估，理论上会自愈；若观察到首曲 `--:--` 而后续正常，就是这个时序。
 
 **已验证的死路（不要重试）：**
 
 | 方法 | 结论 | 依据 |
 |---|---|---|
-| 往 `MediaItem.metadata.extras` 写 `DURATION` | 无效：只影响框架层，compat 层完全独立 | r33 诊断 `D5e compat=tok=null` |
-| `manager.I(mediaItem, 0)` 重新发布 MediaItem | 破坏进度条：重置 PlaybackState，进度条反而消失 | r34 测试；与 f984add revert 原因相同 |
-| compat token 反射路径 A（`I3.l.e()`）| 本地播放时返回 null；`I3.l` 是 MediaRouter/AirPlay 注册表，只在 Cast 活跃时有值 | r28 诊断 `D1 A=sing=ok` 但 token=null |
-| compat token 反射路径 B（`k0.h` 字段遍历）| null | r28 诊断 |
-| compat token 反射路径 C（`k0.b` 字段遍历）| null | r28 诊断 |
-| `MediaSessionCompat.Token.fromToken(frameworkToken)` | 返回 null；两个 session 完全独立，不可互转 | r33 诊断 `D5e compat=tok=null cDUR=-2` |
-
-**可能的后续调查方向（未尝试）：**
-
-原子随身听在 `onConnect` 回调时可能通过 `MediaBrowserCompat.subscribe` 主动拉取一次 metadata，如果那个时刻 compat session 里的 DURATION 已经是正确值，进度条就会正常。需要确认：
-
-1. 原子随身听 `c0` 控制器的 `onMetadataChanged` 回调在 Atomic 连接后是否会被再次触发（如果 Media3 在 Atomic 连接之前已经把正确 DURATION 写入 compat session，那么 Atomic 连接时拿到的值应该已经是正确的——那样的话问题根本不是 DURATION 缺失，而是另一个原因）。
-2. `c0` 里进度条 widget 是否有额外的显示条件（除 DURATION 之外）。
-
-这两个问题只能通过对原子随身听 APK 的更深入静态分析（jadx 反编译 `c0.java`）或者通过给原子随身听的 `onMetadataChanged` 打诊断日志来确认，目前没有条件。
+| 往 `MediaItem.metadata.extras` 写 `DURATION` | 无意义：DURATION 本来就到了，问题是 16 位 | r32 `mDUR=258000` |
+| `manager.I(mediaItem, 0)` 重新发布 MediaItem | 破坏进度条：重置 PlaybackState | r34 测试；与 f984add revert 原因相同 |
+| compat token 反射路径 A/B/C、`Token.fromToken` | 方向错误，compat 层不是独立通道 | 见上文 |
 
 ---
 
 ## 2. 仪表盘（instrument cluster）长歌词不滚动
+
+> r37 起已不再向仪表推送任何 `ucar.media.metadata.*` 键，本节仅作历史记录；若将来恢复仪表歌词，需要重新面对下面的问题。
 
 **现象：** 仪表盘分页逻辑代码已存在（`ClusterLyricsPaginator`），但在实车上超过 20 个 UTF-16 单元的长句仍然不会滚动，而是永久停留在前 17 个字加省略号（`…`）。
 
