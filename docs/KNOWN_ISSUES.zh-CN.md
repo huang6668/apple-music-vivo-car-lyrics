@@ -67,27 +67,57 @@ public boolean Z0() {            // isSupportTimeInfo，逻辑完全相同
 
 ---
 
-## 2. 仪表盘（instrument cluster）长歌词不滚动
+## 2. 仪表盘长歌词截断、每句歌词都重载封面（根因在车联侧，Apple Music 侧不修）
 
-> r37 起已不再向仪表推送任何 `ucar.media.metadata.*` 键，本节仅作历史记录；若将来恢复仪表歌词，需要重新面对下面的问题。
+**现象（2026-09-03 实车，r38）：** 车机端一切正常；仪表盘上超过 20 个字的歌词行被截成前 17 个字加 `...`，不滚动；每来一句新歌词，仪表盘的专辑图背景都会随歌词一起重新加载一次。
 
-**现象：** 仪表盘分页逻辑代码已存在（`ClusterLyricsPaginator`），但在实车上超过 20 个 UTF-16 单元的长句仍然不会滚动，而是永久停留在前 17 个字加省略号（`…`）。
+**根因（2026-09-03，jadx 反编译车联 `com.vivo.car.networking` 6.0.8.3 静态分析确认，APK 存于本仓库 Release `carnetworking-apk-6.0.8.3`，用 `Decompile vivo APK` 工作流可复现）：**
 
-**已知情况：**
+两个问题都在车联的仪表发送类 `gg/d.java`（`HudManager`）里，Apple Music 侧无法影响：
 
-`ClusterLyricsPaginator` 会把长句拆成多条不超过 20 UTF-16 单元的子句，并为每条子句分配递增时间戳，写入 `clusterWhole`。`META_WHOLE`（`ucar.media.metadata.LYRICS_WHOLE`）里发送的就是这个分页后的 LRC。
+```java
+// gg/d.java  内部类 C0317d.excute()  —— CarLife 仪表路径（bb.a.g(la.c.x().u())）
+String trim = this.f22279a.getLineLyrics().trim();
+...
+} else if (trim.length() > 20) {
+    trim = trim.substring(0, 17) + "...";      // 写死：>20 字就截成 17 字 + "..."
+}
+intent.putExtra("song", trim);                 // 仪表只收到一条字符串，没有整首 LRC，没有滚动
+intent.putExtra("cover", this.f22280b);        // 每次都附带封面 Bitmap
+this.f22281c.p(intent);                        // AIDL 发给 CarLife（com.baidu.carlife.vivo）
+```
 
-问题尚未定位到具体位置，有以下几种可能：
+```java
+// gg/d.java  a.l(CarMusicInfo)
+if (bb.a.g(la.c.x().u())) {
+    if (!carMusicInfo.equals(d.this.f22270b)) {  // CarMusicInfo.equals 包含 lineLyrics
+        d.this.n(carMusicInfo, coverBitmap);       // 所以每换一句就整包重发（含封面）
+    }
+    d.this.r(carMusicInfo);
+}
+```
 
-1. **仪表盘固件读取逻辑**：仪表盘可能只取整首歌词 LRC 里的第一条时间轴条目作为"当前行"，而不是根据播放位置动态选择。如果固件的滚动逻辑不依赖时间轴而是依赖 `LYRICS_LINE`（当前行），那么分页写入 `LYRICS_WHOLE` 无效，需要改为在 `LYRICS_LINE` 里直接按时间轴翻页。
-2. **时间戳间距太小**：分页子句的时间戳递增量（当前为逐毫秒递增）可能被固件忽略或合并，导致显示效果没有变化。需要测试较大的时间间隔（如每页间隔 500-1000ms）。
-3. **分页逻辑在超长中文字符上有 bug**：中文字符 UTF-16 编码通常每字 1 个单元，但部分 emoji 和罕见汉字是 2 个单元（代理对）。`ClusterLyricsPaginator` 的 20 单元切割是否正确处理了代理对需要验证。
+- 截断：车联写死 `substring(0,17)+"..."`。仪表通道（CarLife `carlife_vehicle_music_info` intent 的 `song` 字段）只承载一条字符串，协议上不存在滚动或整首歌词。
+- 封面重载：`CarMusicInfo.equals()` 把 `lineLyrics` 算进相等判断，行变化即重发完整音乐信息，而封面 Bitmap 是车联自己塞进每个 intent 的；车端收到新封面就重绘背景。
 
-**未尝试的调试步骤：**
+**车联到底怎么拿到歌词的（对后续移植很重要）：**
 
-- 在 `DIAGNOSTIC_MODE = true` 时把 `clusterWhole` 内容打印到原子随身听歌词头部（目前诊断只打印 session probe 数据），确认分页 LRC 内容确实发送出去了。
-- 检查实车上仪表盘固件对 `META_LINE` 和 `META_WHOLE` 的处理优先级：如果固件优先使用 `META_LINE` 作为显示内容，那么分页需要在 `META_LINE` 上实现动态翻页，而不只是写 `META_WHOLE`。
-- 对应的代码路径：`VivoCarLyrics.java` 的 `publishSessionExtras` 方法里，`clusterLine` 的计算逻辑（通过 `lineForPosition` 从 `clusterTimes / clusterTexts` 选当前行）和 `META_LINE` 的写入。
+- 车联 6.0.8.3 **从不读取** `music.media.extras.LYRIC / LYRIC_IS_ALLOWED / NOTICE_CAR`：这三个 key 只在常量类 `aa/b.java` 里定义，整个包里没有任何读取点。
+- 车联实际消费的是我们发给原子随身听的整首 LRC 事件：`eg/l.java onExtrasChanged()` 判断 `vivomusicmix.meida.extra.key.action == vivomusicmix.extra.lrc_change` 且 `meidia_id`、`lyric` 非空 → `jg.e.g0(lyric)` → `fg/l.java`（WholeLyricManager，解析器 `ub/e.java`）按播放位置自行切出当前行 → `jg.e.f25613f`。这一个字符串同时喂给车机（`fg.c.y` → LauncherProxy）和仪表（`HudManager`）。整首 LRC 另经 `fg.c.w` 发给车机歌词页。
+- 另一条输入是 `MediaMetadata` 里的 `ucar.media.metadata.LYRICS_WHOLE / LYRICS_LINE`（`q9/a.java`、`eg/l.java c()`）。r9–r36 把分页后的 LRC 写在 **session extras** 的同名 key 里，车联从不读 session extras 里的这两个 key，所以当年"分页无效"的真正原因是写错了通道，与仪表固件无关。
+- 因此 3.1 节的 `music.media.extras.*` 对 6.0.8.3 是无效负载（保留只是为了兼容其它车联版本），**原子随身听的 `lrc_change` 事件才是车机歌词的真正来源**，不能删。
+
+**Apple Music 侧为什么不修：**
+
+| 方案 | 结论 |
+|---|---|
+| 把发布的整首 LRC 按 ≤20 字切段（`ClusterLyricsPaginator` 已能算出 `clusterWhole`） | 技术上可让仪表轮播长句，但原子随身听和车机歌词页读的是同一个 key、同一套解析器，会一起变成切段行；而且每段都触发一次封面重发，封面重载问题反而加重。用户决定不采用。 |
+| 给车联和原子发不同的 LRC | 不可行：两者都读 `vivomusicmix.extra.key.lyric`，后写覆盖先写。用 mediaId 区分也不行——原子在 `t4/d0.java E0()/z1()` 里要求 mediaId 等于当前歌曲否则隐藏歌词，车联只要求非空。 |
+| 通过 `MediaMetadata` 的 `ucar.media.metadata.LYRICS_WHOLE` 单独喂车联 | 需要在歌词加载完成后重发 MediaItem，是第 1 节已验证的死路。 |
+| 停止封面重发 | 封面由车联自己附带，Apple Music 无任何杠杆。 |
+| 改车联 APK | 需要 vivo 签名私钥，改了装不上。 |
+
+结论：维持 r38 现状。将来若车联新版本改了 `HudManager`（例如 ucar 路径 `ControlChannel.sendMusicInfo` 不截断、只在封面变化时发送），再重新评估。
 
 ---
 

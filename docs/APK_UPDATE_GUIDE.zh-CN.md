@@ -65,6 +65,8 @@ music.media.extras.NOTICE_CAR        = true
 
 发布方式：取 Apple Music 的 MediaSession 管理器，调用其"设置会话 Extras"的方法（6.5.2 中为 `P.a` → `k0`，方法 `j(Bundle)`）。Apple Music 的 Extras 更新是合并式的，所以每次逐句更新都要显式清空 `vivomusicmix.meida.extra.key.action`（见 3.2）。
 
+**重要（2026-09-03 反编译车联 6.0.8.3 确认）：** 车联 6.0.8.3 并不读取上面三个 key，车机和仪表的歌词实际来自 3.2(c) 的原子随身听 `lrc_change` 整首 LRC 事件——车联在 `eg/l.java onExtrasChanged()` 里消费同一个事件并自己按时间切行。所以 3.2(c) 事件是车机歌词的真正来源，**不能删也不能改拼写**；3.1 的三个 key 保留是为了兼容其它车联版本。仪表长句截断与逐句封面重载是车联 `HudManager` 的固定逻辑，详见 `docs/KNOWN_ISSUES.zh-CN.md` 第 2 节。
+
 ### 3.2 vivo 原子随身听——两处写入
 
 **(a) AndroidManifest：** 在 `com.apple.android.music.player.MediaPlaybackService` 已有的、含 `android.media.browse.MediaBrowserService` 的那个 `intent-filter` 里追加：
@@ -104,17 +106,38 @@ vivomusicmix.extra.key.lyric          = 完整带时间戳 LRC
 
 `meida` / `meidia` 是协议的真实拼写，不能改。切歌时先发一次空歌词事件（`lrc_change` + 新曲 ID + 空 lyric）清除原子内存中的上一首；公开 ID 尚未出现时用新队列项的 store ID 兜底，连兜底也没有就发空 ID。
 
-### 3.3 原子随身听侧的参考源码
+### 3.3 vivo 侧的参考源码
 
-需要查原子随身听内部逻辑时，运行 workflow **Decompile vivo APK**（`.github/workflows/vivo-decompile.yml`，输入 Release tag，默认 `atomic-apk-6.2.5.6`），下载 `atomic-decompile-<run>` artifact。关键文件：
+需要查原子随身听或车联内部逻辑时，运行 workflow **Decompile vivo APK**（`.github/workflows/vivo-decompile.yml`，输入 `release_tag` 和 `label`），下载 `<label>-decompile-<run>` artifact。已上传的 APK：
+
+| Release tag | 包 | label |
+|---|---|---|
+| `atomic-apk-6.2.5.6` | 原子随身听 `com.vivo.musicwidgetmix` 6.2.5.6 | `atomic`（默认） |
+| `carnetworking-apk-6.0.8.3` | 车联 `com.vivo.car.networking` 6.0.8.3 | `carnetworking` |
+
+原子随身听关键文件：
 
 ```text
 com/vivo/musicwidgetmix/controller/c3.java   控制器工厂（根据包名 / manifest action 选控制器）
 com/vivo/musicwidgetmix/controller/c0.java   合作控制器：k0() 读 support_event 与 DURATION；内部类 b 处理 lrc_change
 com/vivo/musicwidgetmix/controller/y2.java   通用 MediaSession 控制器：j0() 自算 support_event
-t4/d0.java                                   MusicWidgetManager：Y0()/Z0() 决定进度条是否显示
+t4/d0.java                                   MusicWidgetManager：Y0()/Z0() 决定进度条是否显示；E0()/z1() 要求 lrc 的 mediaId 等于当前歌曲
 view/SeekBarLayout.java                      refreshPosition()：!isSupportTimeInfo 时显示 --:--
+com/vivo/musicwidgetmix/lrc/e.java           LRC 解析器（与车联 ub/e.java 同源）
 utils/b1.java                                位运算工具 c(a, m)
+```
+
+车联关键文件：
+
+```text
+aa/b.java        协议常量（music.media.extras.*、ucar.media.metadata.*、vivomusicmix.*）
+eg/l.java        MediaClientDelegate：c(MediaMetadata) 读 ucar.* 键；onExtrasChanged() 消费 lrc_change 事件
+jg/e.java        MusicInfoHolder：g0()/h0() 设整首歌词，f25613f 为当前行，N() 组装 CarMusicInfo
+fg/l.java        WholeLyricManager：按播放位置从整首 LRC 切出当前行
+ub/e.java        LyricParseManager：LRC 解析
+gg/d.java        HudManager：仪表发送（CarLife 路径截断 17 字 + "..."，每次附带封面）
+gg/f.java        LauncherProxy：车机歌词页 N(whole)/P(line)
+com/vivo/ucar/databus/ControlChannel.java    ucar 路径 sendMusicInfo()
 ```
 
 原子随身听的 `MediaControllerCompat` 只是 `android.media.session.MediaController` 的薄包装，compat 层与框架层是同一个 session，不是两条通道。
@@ -311,7 +334,7 @@ Key alias:     apple-music-vivo-car-lyrics
 
 ```text
 .github/workflows/apk-pipeline.yml       分析 + 重建 + Release 入口（workflow_dispatch，输入 rebuild）
-.github/workflows/vivo-decompile.yml   jadx 反编译原子随身听 APK，上传源码 artifact
+.github/workflows/vivo-decompile.yml     jadx 反编译 vivo 侧 APK（原子随身听 / 车联），上传源码 artifact
 .github/workflows/kuwo-bridge.yml        独立的 KuWo 桥接原型构建
 payload.tar.part.* / payload.sha256      原 APK 切片 + CI 脚本 + search-patterns（见 7.1）
 cloud-patch/apple-vivo-car-lyrics.patch  六个 Smali Hook 的 unified diff
@@ -338,6 +361,10 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 - 在第 13 节追加变更记录，并更新 `docs/KNOWN_ISSUES.zh-CN.md`。
 
 ## 13. 版本变更记录
+
+### 2026-09-03 - 车联 6.0.8.3 静态分析（无代码改动）
+
+反编译车联 APK（Release `carnetworking-apk-6.0.8.3`）确认：仪表长句截断（`HudManager` 写死 17 字 + `...`）和逐句封面重载（`CarMusicInfo.equals` 含 `lineLyrics`，每次重发都附带封面）都是车联侧固定逻辑，Apple Music 侧不修；同时发现车联 6.0.8.3 不读 `music.media.extras.*`，车机歌词实际来自原子随身听的 `lrc_change` 事件。详见 3.1 节与 `docs/KNOWN_ISSUES.zh-CN.md` 第 2 节。
 
 ### r38 (2026-09-03) - 原子随身听进度条：补上 seek 能力位 16（Build #83）
 
