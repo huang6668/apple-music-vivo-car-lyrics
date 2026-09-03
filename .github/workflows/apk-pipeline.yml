@@ -154,6 +154,64 @@ jobs:
               > "$report/focused-context.txt" || true
           fi
 
+          # Media3's legacy MediaSession bridge lives outside com/apple/android/music, in
+          # obfuscated top-level packages, so the roots above never captured it. Atomic Player
+          # reads the top-level legacy METADATA_KEY_DURATION that this bridge produces, so its
+          # source is required to see where that value actually comes from. Narrow pattern on
+          # purpose: the whole smali tree is far too large to collect wholesale.
+          legacy_pattern='android\.media\.metadata\.DURATION|METADATA_KEY_DURATION|MediaMetadataCompat'
+          legacy_roots=()
+          for root in work/apktool/smali work/apktool/smali_classes2 \
+                      work/apktool/smali_classes3 work/apktool/smali_classes4; do
+            [[ -d "$root" ]] && legacy_roots+=("$root")
+          done
+
+          : > "$report/legacy-bridge-paths.txt"
+          if ((${#legacy_roots[@]} > 0)); then
+            grep -RIlE "$legacy_pattern" "${legacy_roots[@]}" \
+              | grep -vE '/com/apple/android/music/' \
+              | LC_ALL=C sort -u \
+              | head -n 120 \
+              > "$report/legacy-bridge-paths.txt" || true
+
+            # Must stay guarded: with an empty path list grep would get no file arguments and
+            # block reading stdin, hanging the job.
+            if [[ -s "$report/legacy-bridge-paths.txt" ]]; then
+              head -n 40 "$report/legacy-bridge-paths.txt" \
+                | tr '\n' '\0' \
+                | xargs -0 --no-run-if-empty \
+                    grep -InE -C 24 "$legacy_pattern" \
+                  > "$report/legacy-bridge-context.txt" 2>/dev/null || true
+            fi
+          fi
+          cat "$report/legacy-bridge-paths.txt" >> "$report/focused-paths.txt"
+
+          # Second pass: Media3's session classes themselves. The first pass keys on DURATION and
+          # MediaMetadataCompat, which the session class does not mention, so MediaLibrarySession
+          # (the obfuscated holder of the compat token) was never collected. Without its field and
+          # method tables the token has to be guessed by reflection, which is what kept failing.
+          # Key on the session-token surface instead.
+          session_pattern='MediaSessionCompat\$Token|getSessionCompat|MediaSessionService|onGetSession'
+          : > "$report/session-class-paths.txt"
+          if ((${#legacy_roots[@]} > 0)); then
+            grep -RIlE "$session_pattern" "${legacy_roots[@]}" \
+              | grep -vE '/com/apple/android/music/|/android/support/v4/' \
+              | LC_ALL=C sort -u \
+              | head -n 80 \
+              > "$report/session-class-paths.txt" || true
+
+            if [[ -s "$report/session-class-paths.txt" ]]; then
+              head -n 30 "$report/session-class-paths.txt" \
+                | tr '\n' '\0' \
+                | xargs -0 --no-run-if-empty \
+                    grep -InE -C 12 "$session_pattern" \
+                  > "$report/session-class-context.txt" 2>/dev/null || true
+            fi
+          fi
+          cat "$report/session-class-paths.txt" >> "$report/focused-paths.txt"
+
+          LC_ALL=C sort -u "$report/focused-paths.txt" -o "$report/focused-paths.txt"
+
           while IFS= read -r source; do
             [[ -f "$source" ]] || continue
             mkdir -p "$focused/files/$(dirname "$source")"

@@ -23,33 +23,66 @@ def method_body(signature: str) -> str:
 
 metadata = method_body("private static boolean publishMetadata(")
 session_extras = method_body("private static void publishSessionExtras(")
+capability = method_body("private static boolean advertiseAtomicLyricSupport(")
 line_publish = method_body(
-    "private static void requestLinePublish(Object manager, String line, long generation,"
+    "private static void requestLinePublish(Object manager, String line, String clusterLine,"
 )
 
-for required in (
+# The playback manager's MediaItem publish path rebuilds session MediaMetadata and resets the
+# native PlaybackState, which removes Atomic Player's progress bar and reloads cluster cover art.
+# publishMetadata must stay an inert no-op.
+for forbidden in (
+    'invokeRequired(manager, "I", newMediaItem',
+    "constructCompatible(",
+    "setFieldValue(",
     "extras.putString(META_LINE",
     "extras.putString(META_WHOLE",
     "extras.putLong(META_STATUS",
-    'invokeRequired(manager, "I", newMediaItem',
 ):
-    assert required in metadata, f"Missing MediaMetadata contract: {required}"
+    assert forbidden not in metadata, f"publishMetadata must not republish MediaMetadata: {forbidden}"
+assert "return false;" in metadata, "publishMetadata must remain a no-op"
+
+# Nothing anywhere may republish the MediaItem or write cluster keys into MediaMetadata.
+assert 'invokeRequired(manager, "I", newMediaItem' not in text, (
+    "MediaItem republication resets the native progress bar"
+)
+assert "setFieldValue(" not in text, (
+    "Mutating MediaItem/Metadata builder fields reintroduces MediaMetadata override"
+)
+
+# The only permitted MediaMetadata mutation is the in-place Atomic capability bit.
+assert "ATOMIC_SUPPORT_EVENTS" in capability
+assert "ATOMIC_LYRIC_SUPPORT_EVENT" in capability
+# Atomic's SeekBarLayout needs (support_event & 16) or it renders "--:--" regardless of duration.
+assert "ATOMIC_SEEK_SUPPORT_EVENT" in capability, (
+    "Seek/time-info bit 16 must be ORed in, Atomic hides the progress bar without it"
+)
+for forbidden in ("new Bundle(", "constructCompatible(", 'invokeRequired(manager, "I"'):
+    assert forbidden not in capability, (
+        f"Capability bit must be ORed in place, not republished: {forbidden}"
+    )
+
+# Only the car head unit is served through session Extras. r37 stopped publishing the ucar
+# instrument-cluster keys entirely; they must not come back through this path.
+for required in (
+    "extras.putString(EXTRA_LINE",
+    "extras.putBoolean(EXTRA_ALLOWED",
+):
+    assert required in session_extras, f"Missing session Extras contract: {required}"
+assert "ucar.media.metadata" not in session_extras, (
+    "Instrument-cluster keys were removed in r37; do not publish them from session Extras"
+)
 
 for forbidden in (
     'extras.remove("android.media.metadata.ART")',
     'extras.remove("android.media.metadata.ALBUM_ART")',
     'extras.remove("android.media.metadata.DISPLAY_ICON")',
 ):
-    assert forbidden not in metadata, f"Native artwork must stay intact: {forbidden}"
+    assert forbidden not in session_extras, f"Native artwork must stay intact: {forbidden}"
 
-assert "META_LINE" not in session_extras
-assert "META_WHOLE" not in session_extras
-assert "META_STATUS" not in session_extras
 assert "publishLineExtras" in line_publish
 assert "publishMetadata" not in line_publish
 assert "metadataLine" not in text
-assert "latestStatus != STATUS_LOADING" in text
-assert "!safeEquals(latestClusterWhole, metadataWhole)" in text
 assert "ClusterLyricsPaginator.paginate" in text
 
 print("VivoCarLyrics source contract passed")

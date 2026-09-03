@@ -1,6 +1,6 @@
 # Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
-最后整理日期：2026-08-31
+最后整理日期：2026-09-01
 
 本文档用于把新版 Apple Music APK 交给后续 AI 重新分析、适配并通过 GitHub Actions 构建。不要把本文档中的混淆类名、字段名或补丁行号当成跨版本稳定接口。
 
@@ -25,7 +25,7 @@
 2. 每 250 毫秒根据播放位置计算当前歌词行。
 3. 快进或拖动进度时立即切换到目标歌词行，不等待下一次自然播放回调。
 4. 歌词行变化只更新 MediaSession Extras，不能每句都重建歌曲元数据，否则车端会重复加载专辑图。
-5. 完整歌词、歌词状态或歌曲发生变化时才更新 MediaMetadata。
+5. 只在 Apple Music 原生发布 MediaMetadata 的路径中幂等补入原子歌词能力位；辅助类不额外重发 MediaItem。
 6. 不修改解码器、音频格式、AudioTrack、ExoPlayer 音频输出、音频焦点或码率选择，避免影响音质。
 7. 原子随身听只在换歌、完整歌词或状态变化时收到完整 LRC；普通逐句更新必须清空原子事件 action，不能每 250 毫秒重复触发整段歌词解析。
 8. 原子随身听建立 MediaSession 控制器连接后，按短延迟补发当前状态，避免晚打开时等待下一轮低频保活。
@@ -109,11 +109,12 @@ vivomusicmix.media.metadata.support_event = 原有能力位 | 8
 
 辅助类通过反射访问这些私有对象，因此新版首先要检查类、方法、构造函数和字段是否仍然存在。
 
-## 5. 五个必要 Hook
+## 5. 六个必要 Hook
 
-当前补丁在播放管理器和 MediaSession 连接回调中插入五个调用：
+当前补丁在播放管理器和 MediaSession 连接回调中插入六个调用：
 
 ```text
+onNativeMediaItem(nativeMediaItem)
 onCurrentItemChanged(playbackManager, newQueueItem)
 onMetadataUpdated(playbackManager, queueItem)
 onPlaybackError(playbackManager)
@@ -123,23 +124,27 @@ onAtomicControllerConnected(controllerPackageName)
 
 新版本必须根据方法语义重新定位：
 
-### 5.1 当前歌曲改变
+### 5.1 原生元数据发布
+
+寻找 Apple Music 用当前 MediaItem 通知 `onMediaMetadataChanged` 的原生发布路径。在发布前只向现有 Metadata Extras 原位写入 `support_event | 8`，不得构造替代 MediaItem，也不得从辅助代码再次调用播放管理器的发布方法。
+
+### 5.2 当前歌曲改变
 
 寻找接收新队列项、更新当前 MediaItem 或切换播放项的方法。Hook 后应清除上一首歌词、增加 generation，并延迟加载新歌词。
 
-### 5.2 元数据重新发布
+### 5.3 元数据重新发布
 
-寻找 Apple Music 重建或重新发送当前 MediaMetadata 的路径。Hook 用于在官方代码覆盖元数据后重新补回车联歌词字段。
+寻找 Apple Music 重建或重新发送当前 MediaMetadata 的路径。Hook 用于重新加载歌词状态；原子歌词能力位由 5.1 的原生发布 Hook 补入。
 
-### 5.3 播放错误
+### 5.4 播放错误
 
 寻找当前播放项错误回调。Hook 应清空歌词并发布失败状态。
 
-### 5.4 Seek
+### 5.5 Seek
 
 寻找最终调用 `MediaPlayerController.seekToPosition(long)` 的路径。必须把同一个目标毫秒位置传给 `onSeek`，立即发布对应歌词行。
 
-### 5.5 原子随身听连接
+### 5.6 原子随身听连接
 
 寻找 Media3 的 `onPostConnect` 回调，从 controller info 读取包名。仅当包名为 `com.vivo.musicwidgetmix` 时调用连接补发；不得对所有车联或蓝牙控制器广播完整 LRC。
 
@@ -156,14 +161,16 @@ onAtomicControllerConnected(controllerPackageName)
 - Apple Music 自己覆盖元数据且车联字段消失：延迟补写一次。
 - 仪表元数据去重只比较分页后的 `whole` 和 `status`，不能因为原始当前行变化而重建。
 - 仪表 `LYRICS_LINE` 在 Metadata 写入时取当前分页行；后续翻页由 `LYRICS_WHOLE` 中的时间戳驱动。
+- 原子随身听能力位：Apple Music 原生发布 MediaItem 时，只向它已有的 Metadata Extras 原位 OR 歌词能力位 `8`（`vivomusicmix.media.metadata.support_event`），然后让原生流程继续发布同一个对象，不替换 MediaItem，避免重置原生进度条。
+- Apple Music 自己覆盖元数据：下一次原生发布 Hook 会再次幂等补入能力位。
+- 原子随身听完整 LRC 通过 Session Extras 发布（`vivomusicmix.extra.key.lyric`），并在其控制器连接后重放一次。
 
 6.5.2 中，辅助类通过反射访问：
 
 ```text
 MediaItem 字段 d          -> metadata
 Metadata 字段 I           -> extras Bundle
-MediaItem builder 字段 k  -> metadata
-播放管理器方法 I(item, 0) -> 发布更新后的 MediaItem
+播放管理器方法 I(item, 0) -> Apple Music 原生 MediaItem 发布路径，只在方法内部插入能力位 Hook
 MediaSession 管理器方法 j(Bundle) -> 发布会话 Extras
 ```
 
@@ -251,7 +258,7 @@ apksigner verify 成功
 目标辅助类存在于新增 DEX
 六个车联协议字符串、五个原子随身听协议字符串和辅助类 marker 存在
 导出的 MediaPlaybackService 同时声明标准 MediaBrowser 和原子随身听合作 action
-五个 Smali Hook 存在于对应方法体内
+六个 Smali Hook 存在于对应方法体内
 输出 APK SHA-256 已生成
 ```
 
@@ -341,7 +348,7 @@ config/search-patterns.txt
 
 ## 12. 完成标准
 
-后续 AI 只有在以下条件全部满足时才能说“适配完成”：
+后续 AI 只有在以下条件全部满足时才能说”适配完成”：
 
 - 新版本已重新分析，不是盲目套用旧补丁。
 - 五个 Hook 均按语义确认。
@@ -349,4 +356,113 @@ config/search-patterns.txt
 - GitHub Actions 构建成功。
 - APK 签名、包名、DEX 和协议 marker 验证成功。
 - 明确说明签名和卸载风险。
-- 实车歌词、快进同步和封面刷新至少完成一次测试；未实测时必须明确标为“待实车验证”。
+- 实车歌词、快进同步和封面刷新至少完成一次测试；未实测时必须明确标为”待实车验证”。
+
+## 13. 版本变更记录
+
+### r38 (2026-09-03) - 原子随身听进度条：补上 seek 能力位 16
+
+通过 GitHub Actions 新增的 `Decompile Atomic Player APK` 工作流（`.github/workflows/atomic-decompile.yml`，从 Release `atomic-apk-6.2.5.6` 下载 APK 用 jadx 反编译）对原子随身听 6.2.5.6 做静态分析，定位到进度条根因：`SeekBarLayout` 只在 `duration > 0 && (support_event & 16) == 16` 时显示时间和进度；合作控制器 `c0` 原样使用应用发布的 `vivomusicmix.media.metadata.support_event`，而补丁只写了 `7 | 8 = 15`。详见 `docs/KNOWN_ISSUES.zh-CN.md` 第 1 节。
+
+- `VivoCarLyrics.advertiseAtomicLyricSupport` 新增 `ATOMIC_SEEK_SUPPORT_EVENT = 16`，发布值变为 `7 | 8 | 16 = 31`
+- `verify_source_contract.py` 要求该常量出现在能力位代码中
+- 顺带修复 r37 遗留的两个构建阻塞：诊断探针里残留的 `META_LINE` 引用（改为字面量），以及 `rebuild.sh` 仍在检查 r36 marker 和已删除的 `ucar.*` 字符串
+- 构建标识：`vivo-car-atomic-seek-bit-r38-2026-09-03`
+
+### r37 (2026-09-03) - 停止向仪表推送歌词
+
+删除 `META_LINE / META_WHOLE / META_STATUS` 的 session Extras 写入，只保留车机 `music.media.extras.*` 和原子随身听 `vivomusicmix.*`。`ClusterLyricsPaginator` 保留编译。该版本本身未成功构建（见 r38）。
+
+### r12 (2026-09-01) - 三方合并：车机 + 仪表分页 + 原子随身听
+
+将 release-44 分支（96312d1，车机和仪表分页）与 379acd9（原子随身听支持）合并至 feat/atomic-lyrics-on-main。
+
+**保留特性：**
+- 车机歌词：META_WHOLE / META_LINE / META_STATUS 写入 MediaMetadata Extras
+- 仪表分页：ClusterLyricsPaginator 把长句拆成 ≤20 UTF-16 单元的多页 LRC；仪表使用 clusterWhole / clusterTimes / clusterTexts
+- 原子随身听：vivomusicmix.* 协议字段、onNativeMediaItem 和 onAtomicControllerConnected 回调、能力位写入
+
+**关键实现：**
+- LyricsState 同时保存原始和分页时间轴
+- META_WHOLE 使用 clusterWhole（仪表读取），vivomusicmix.extra.key.lyric 使用原始 whole（原子随身听读取）
+- publishSessionExtras 中为仪表动态计算 clusterLine，为车机保留原始 safeLine
+- 两条歌词路径完全独立，互不干扰
+
+**构建标识：**
+- BUILD_MARKER: vivo-car-atomic-lyrics-on-main-r12-2026-09-01
+- 包含 ClusterLyricsPaginator.java 和 VivoCarLyrics.java
+- apply.sh 验证 onNativeMediaItem 和 onAtomicControllerConnected 在正确位置
+- rebuild.sh 验证所有协议字符串和分页 marker
+
+### r21 (2026-09-01) - 原子随身听进度条修复（duration republish on looper）
+
+在 r12 之前的分支中完成，修复原子随身听进度条问题。duration republish 改为在 playback manager 的 looper 上执行，避免线程检查抛出 InvocationTargetException。
+
+### r10-r20 - 原子随身听调试与诊断
+
+在 379acd9 分支中完成，包括 duration 诊断、能力位基线调整、null extras 防护等。这些改动已合并至 r12。
+
+### r35 (2026-09-02) - 诊断关闭基准
+
+关闭 `DIAGNOSTIC_MODE`（改为 `false`），撤销 r34 中的 `manager.I()` 重发布调用。诊断字段和方法保留编译但全部被门控，下次需要重新诊断时直接改回 `true` 即可，无需另行添加代码。
+
+**当前状态：**
+- 歌词（每首曲目）：正常，lrc 时间轴精确同步
+- 车机歌词路径（music.media.extras.*）：正常
+- 仪表分页（ucar.media.metadata.*）：代码存在，但仪表长歌词滚动问题**未解决**（见 KNOWN_ISSUES.md）
+- 原子随身听歌词（vivomusicmix.extra.key.lyric）：正常，每首歌都有
+- 原子随身听进度条：**未解决**（见 KNOWN_ISSUES.md）
+
+**已确认的死路（后续不要重试）：**
+- 往 `MediaItem.metadata.extras` 写 `DURATION`：对框架层 `android.media.session.MediaController` 有效（r32 诊断证明 `mDUR=258000`），但 Atomic 走的是独立的 compat session，`MediaSessionCompat.Token.fromToken(frameworkToken)` 返回 null（r33 诊断证明），两层完全独立，extras 写入对 compat 层无影响
+- `manager.I(mediaItem, 0)` 重新发布 MediaItem：会重置 PlaybackState，进度条反而消失（r34 测试证明；与 f984add revert 原因相同）
+- compat token 反射路径（A/B/C）：本地播放时全部 null；`I3.l` 是 MediaRouter/AirPlay 注册表，只在 Cast 活跃时有值
+
+**构建标识：** vivo-car-atomic-diag-off-r35-2026-09-02
+
+### r34 (2026-09-02) - MediaItem 重发布尝试（已撤销）
+
+在 `onAtomicControllerConnected` 时调用 `manager.I(mediaItem, 0)` 触发 Media3 重新运行 `LegacyConversions`，目的是让 compat session 在播放器已知时长后更新 `METADATA_KEY_DURATION`。测试结果：进度条不但没有出现，连显示也变成不正常。原因与 f984add 中记录的完全相同——MediaItem 重新发布会重置 PlaybackState，进度条依赖 PlaybackState，发布一次进度条就消失。已在 r35 中撤销。
+
+### r23–r33 (2026-09-02) - 原子随身听进度条诊断
+
+对 Atomic Player 进度条问题进行了 11 轮诊断。核心发现：
+
+1. 框架层数据完全正确（r32）：通过 `android.media.session.MediaController`（框架层）读到 `mDUR=258000 mSE=15 psST=3 psPOS=14078`，说明 Media3 的框架 session 里时长和能力位都正确
+2. compat token 无法转换（r33）：`MediaSessionCompat.Token.fromToken(frameworkToken)` 返回 null，证明框架 token 和 Atomic 通过 `MediaBrowserCompat` 连接的那个 compat session 是两个完全独立注册的 session，不是同一个 session 的两种视图
+3. 所有 compat token 路径（A/B/C）在本地播放时全部 null；`I3.l`（Apple Music 的 MediaRouter 注册表）在本地播放时 singleton 存在但其 MediaSessionCompat 字段为空（只在 AirPlay/Cast 活跃时有值）
+
+诊断证明：问题不在于数据有没有写入，而在于 Atomic 的 compat session 和我们操作的框架层根本是两条独立的数据通道，目前没有找到从 Apple Music 侧修改、在不破坏 PlaybackState 的前提下向 compat session 注入 DURATION 的方法。
+
+### r12 (2026-09-01) - 三方合并：车机 + 仪表分页 + 原子随身听
+
+将 release-44 分支（96312d1，车机和仪表分页）与 379acd9（原子随身听支持）合并至 feat/atomic-lyrics-on-main。
+
+**保留特性：**
+- 车机歌词：META_WHOLE / META_LINE / META_STATUS 写入 MediaMetadata Extras
+- 仪表分页：ClusterLyricsPaginator 把长句拆成 ≤20 UTF-16 单元的多页 LRC；仪表使用 clusterWhole / clusterTimes / clusterTexts
+- 原子随身听：vivomusicmix.* 协议字段、onNativeMediaItem 和 onAtomicControllerConnected 回调、能力位写入
+
+**关键实现：**
+- LyricsState 同时保存原始和分页时间轴
+- META_WHOLE 使用 clusterWhole（仪表读取），vivomusicmix.extra.key.lyric 使用原始 whole（原子随身听读取）
+- publishSessionExtras 中为仪表动态计算 clusterLine，为车机保留原始 safeLine
+- 两条歌词路径完全独立，互不干扰
+
+**构建标识：**
+- BUILD_MARKER: vivo-car-atomic-lyrics-on-main-r12-2026-09-01
+- 包含 ClusterLyricsPaginator.java 和 VivoCarLyrics.java
+- apply.sh 验证 onNativeMediaItem 和 onAtomicControllerConnected 在正确位置
+- rebuild.sh 验证所有协议字符串和分页 marker
+
+### r21 (2026-09-01) - 原子随身听进度条修复（duration republish on looper）
+
+在 r12 之前的分支中完成，修复原子随身听进度条问题。duration republish 改为在 playback manager 的 looper 上执行，避免线程检查抛出 InvocationTargetException。
+
+### r10-r20 - 原子随身听调试与诊断
+
+在 379acd9 分支中完成，包括 duration 诊断、能力位基线调整、null extras 防护等。这些改动已合并至 r12。
+
+### r9 (2026-08-29) - 仪表分页初版（release-44）
+
+在 96312d1 提交中完成，引入 ClusterLyricsPaginator，按 20 UTF-16 单元拆分长句，为仪表生成独立时间轴。

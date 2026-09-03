@@ -62,10 +62,8 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
   'com/apple/android/music/player/ClusterLyricsPaginator' \
-  'vivo-car-cluster-pagination-r10-2026-08-31' \
-  'ucar.media.metadata.LYRICS_LINE' \
-  'ucar.media.metadata.LYRICS_WHOLE' \
-  'ucar.media.metadata.LYRICS_STATUS' \
+  'vivo-car-atomic-seek-bit-r38-2026-09-03' \
+  'onNativeMediaItem' \
   'music.media.extras.LYRIC' \
   'music.media.extras.LYRIC_IS_ALLOWED' \
   'music.media.extras.NOTICE_CAR' \
@@ -144,11 +142,11 @@ java -Xmx4g -jar "$APKTOOL_JAR" d -f \
   out/apple-music-vivo-car-lyrics-debug.apk -o "$FINAL_MANIFEST_DIR" \
   > out/report/final-apktool.log 2>&1
 cp "$FINAL_MANIFEST_DIR/AndroidManifest.xml" out/report/patched-manifest-decoded.xml
-python3 - "$FINAL_MANIFEST_DIR/AndroidManifest.xml" <<PY
+python3 - "$FINAL_MANIFEST_DIR/AndroidManifest.xml" "$ATOMIC_SERVICE_ACTION" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
-manifest_path = sys.argv[1]
+manifest_path, action_name = sys.argv[1:]
 name_attr = "{http://schemas.android.com/apk/res/android}name"
 exported_attr = "{http://schemas.android.com/apk/res/android}exported"
 root = ET.parse(manifest_path).getroot()
@@ -156,7 +154,26 @@ services = [item for item in root.findall("./application/service")
             if item.get(name_attr) == "com.apple.android.music.player.MediaPlaybackService"]
 if len(services) != 1 or services[0].get(exported_attr) != "true":
     raise SystemExit("MediaPlaybackService rebuilt manifest verification failed")
+required = {
+    action_name,
+    "android.media.browse.MediaBrowserService",
+    "androidx.media3.session.MediaSessionService",
+    "android.intent.action.MEDIA_BUTTON",
+}
+filters = [[action.get(name_attr) for action in intent_filter.findall("action")]
+           for intent_filter in services[0].findall("intent-filter")]
+matching_filters = [actions for actions in filters if required.issubset(set(actions))]
+if len(matching_filters) != 1:
+    raise SystemExit("Native and Atomic Player actions must share one rebuilt intent-filter")
+for required_action in required:
+    if matching_filters[0].count(required_action) != 1:
+        raise SystemExit("Rebuilt service action must occur exactly once in target filter: %s" %
+                         required_action)
+all_actions = [action.get(name_attr) for action in root.findall(".//action")]
+if all_actions.count(action_name) != 1:
+    raise SystemExit("Atomic Player service action must occur exactly once in final manifest")
 PY
+printf '%s\n' "$ATOMIC_SERVICE_ACTION" > out/report/verified-atomic-player-action.txt
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' out/report/patched-signature.txt || {
   echo "APK v3 signature verification is missing" >&2
   exit 1
@@ -201,6 +218,9 @@ connection_text = open(connection_paths[0], encoding="utf-8").read()
 
 checks = (
     (text,
+     "public final I(Lv3/t;I)V",
+     "Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
+    (text,
      "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onCurrentItemChanged(Ljava/lang/Object;Ljava/lang/Object;)V"),
     (text,
@@ -234,6 +254,22 @@ for source, signature, call in checks:
             "Final hook must occur exactly once in %s: %s (method=%d, file=%d)" %
             (signature, call, method_count, file_count)
         )
+
+native_blocks = re.findall(
+    r"(?ms)^\.method public final I\(Lv3/t;I\)V\n.*?^\.end method$",
+    text,
+)
+if len(native_blocks) != 1:
+    raise SystemExit("Expected exactly one final native MediaItem publish method")
+native_block = native_blocks[0]
+native_order = (
+    native_block.find("if-nez p2, :cond_4"),
+    native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
+    native_block.find("invoke-virtual {p1}, Lv3/t;->hashCode()I"),
+    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/P;->j:Lv3/t;"),
+)
+if -1 in native_order or tuple(sorted(native_order)) != native_order:
+    raise SystemExit("Final native metadata hook is outside the guarded stock publish path")
 PY
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
