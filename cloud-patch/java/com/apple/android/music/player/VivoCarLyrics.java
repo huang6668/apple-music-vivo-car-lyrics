@@ -20,10 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cluster-page-scroll-r36-2026-09-03";
-    private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
-    private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
-    private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
+    private static final String BUILD_MARKER = "vivo-car-no-cluster-lyrics-r37-2026-09-03";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -758,13 +755,7 @@ public final class VivoCarLyrics {
             }
             long position = controllerPosition(manager);
             String currentLine = lineForPosition(position, times, texts);
-            // Compute the cluster page too so the dedup gate fires on page turns even when the
-            // original lyric line hasn't changed.  publishSessionExtras recomputes clusterLine
-            // from controllerPosition independently, so passing it here only affects dedup.
-            String currentClusterLine = state.clusterTexts.length > 0
-                    ? lineForPosition(position, state.clusterTimes, state.clusterTexts)
-                    : currentLine;
-            requestLinePublish(manager, currentLine, currentClusterLine, generation, false);
+            requestLinePublish(manager, currentLine, generation, false);
             MAIN.postDelayed(this, LINE_POLL_MS);
         }
     }
@@ -1416,31 +1407,11 @@ public final class VivoCarLyrics {
             Bundle extras = new Bundle();
             String safeLine = line == null ? "" : line;
             String safeWhole = whole == null ? "" : whole;
-            int status;
-            synchronized (STATE_LOCK) {
-                status = lastStatus == Integer.MIN_VALUE ? STATUS_SUCCESS : lastStatus;
-            }
 
             // Car head unit keys
             extras.putBoolean(EXTRA_ALLOWED, true);
             extras.putString(EXTRA_LINE, safeLine);
             extras.putBoolean(EXTRA_NOTICE, true);
-
-            // Dashboard instrument cluster keys (ucar), delivered through session Extras only.
-            // These must never travel in MediaMetadata: republishing the MediaItem resets the
-            // native PlaybackState and removes Atomic Player's progress bar. Paginated values
-            // are read from the shared lyrics state so line ticks keep carrying the full
-            // paginated body instead of blanking it.
-            LyricsState clusterState = lyricsState;
-            boolean haveCluster = clusterState.clusterTexts.length > 0;
-            String clusterWhole = haveCluster ? clusterState.clusterWhole : safeWhole;
-            String clusterLine = haveCluster
-                    ? lineForPosition(controllerPosition(manager),
-                            clusterState.clusterTimes, clusterState.clusterTexts)
-                    : safeLine;
-            extras.putString(META_LINE, clusterLine);
-            extras.putString(META_WHOLE, clusterWhole);
-            extras.putLong(META_STATUS, (long) status);
 
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
