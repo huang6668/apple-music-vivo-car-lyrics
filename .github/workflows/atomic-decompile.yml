@@ -1,0 +1,132 @@
+name: Decompile Atomic Player APK
+
+# Static analysis only. Downloads the vivo 原子随身听 (com.vivo.musicwidgetmix) APK from a
+# private release asset, decompiles it with jadx and uploads the sources plus a focused
+# grep report so the progress-bar / lyric protocol logic can be read locally without
+# installing any tooling on the Mac.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag holding the Atomic Player APK asset
+        required: true
+        default: atomic-apk-6.2.5.6
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  decompile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      JADX_VERSION: '1.5.1'
+      JADX_SHA256: '12fd966431903b8e15c36e5007f19343475be7d8f2a55f082e7a929eeabc937e'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install jadx
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          curl --fail --location --retry 3 \
+            "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
+            -o "$tools/jadx.zip"
+          actual="$(sha256sum "$tools/jadx.zip" | awk '{print $1}')"
+          [[ "${JADX_SHA256,,}" == "$actual" ]] || { echo "jadx SHA-256 mismatch" >&2; exit 1; }
+          unzip -q "$tools/jadx.zip" -d "$tools/jadx"
+          chmod +x "$tools/jadx/bin/jadx"
+          echo "JADX_BIN=$tools/jadx/bin/jadx" >> "$GITHUB_ENV"
+
+      - name: Download Atomic Player APK from release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p work/atomic
+          gh release download "${{ inputs.release_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.apk' \
+            --dir work/atomic
+          apk="$(find work/atomic -maxdepth 1 -name '*.apk' | head -n 1)"
+          [[ -f "$apk" ]] || { echo "no APK asset found in release ${{ inputs.release_tag }}" >&2; exit 1; }
+          sha256sum "$apk"
+          echo "ATOMIC_APK=$apk" >> "$GITHUB_ENV"
+
+      - name: Decompile with jadx
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out=work/atomic/jadx
+          mkdir -p "$out"
+          # Keep original (obfuscated) names so class references in docs/KNOWN_ISSUES stay
+          # comparable. --show-bad-code keeps methods jadx could not fully restore.
+          "$JADX_BIN" \
+            --threads-count 4 \
+            --show-bad-code \
+            --no-debug-info \
+            -d "$out" \
+            "$ATOMIC_APK" 2>&1 | tail -n 40 || true
+          find "$out/sources" -name '*.java' | wc -l
+
+      - name: Build focused report
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src=work/atomic/jadx/sources
+          res=work/atomic/jadx/resources
+          report=work/atomic/report
+          mkdir -p "$report"
+
+          cp "$res/AndroidManifest.xml" "$report/AndroidManifest.xml" 2>/dev/null || true
+
+          # Protocol strings and the legacy duration key: where Atomic reads what we publish.
+          proto='vivomusicmix|musicwidgetmix\.support|lrc_change|support_event|meidia_id|android\.media\.metadata\.DURATION|METADATA_KEY_DURATION'
+          grep -RInE "$proto" "$src" > "$report/protocol-hits.txt" || true
+          grep -RIlE "$proto" "$src" | LC_ALL=C sort -u > "$report/protocol-files.txt" || true
+
+          # Media session plumbing: which classes subscribe to metadata / playback state.
+          session='onMetadataChanged|onPlaybackStateChanged|MediaControllerCompat|MediaBrowserCompat|getMetadata\(\)|getPlaybackState\(\)|getLong\("android\.media\.metadata'
+          grep -RInE "$session" "$src" > "$report/session-hits.txt" || true
+          grep -RIlE "$session" "$src" | LC_ALL=C sort -u > "$report/session-files.txt" || true
+
+          # Progress widget: setMax / setProgress / duration fields.
+          progress='setMax\(|setProgress\(|SeekBar|ProgressBar|getDuration|duration|Duration'
+          grep -RIlE "$progress" "$src" | LC_ALL=C sort -u > "$report/progress-files.txt" || true
+
+          # Cooperation vs generic controller selection.
+          coop='cooperat|Cooperat|isSupportLyric|supportLyric|SUPPORT_LYRIC|queryIntentServices|resolveService'
+          grep -RInE "$coop" "$src" > "$report/cooperation-hits.txt" || true
+
+          wc -l "$report"/*.txt
+
+      - name: Pack sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tar -C work/atomic -czf work/atomic/atomic-jadx-sources.tar.gz jadx/sources
+          tar -C work/atomic -czf work/atomic/atomic-jadx-resources.tar.gz jadx/resources
+          ls -la work/atomic/*.tar.gz
+
+      - name: Upload decompiled sources and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: atomic-decompile-${{ github.run_number }}
+          path: |
+            work/atomic/atomic-jadx-sources.tar.gz
+            work/atomic/atomic-jadx-resources.tar.gz
+            work/atomic/report/
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
