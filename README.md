@@ -8,10 +8,11 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - Analysis runs in GitHub Actions; no Android SDK, apktool, jadx, or signing tools are installed on the local Mac.
 - Rebuild is opt-in and produces a test APK signed by a fixed PKCS12 key stored in GitHub Secrets.
 - The pinned test certificate lets later builds update one another, but it cannot replace Apple's signed package or older builds signed with a different temporary key.
-- One in-process lyrics state machine loads and parses Apple Music lyrics. The head unit receives the native current-line Extras, while the instrument cluster receives a timestamped LRC through `MediaMetadata`.
-- Instrument-cluster lines longer than 20 UTF-16 code units are split into timestamped pages. The original LRC remains unchanged for Atomic Player events.
-- Current-line changes do not rebuild `MediaMetadata`; only a track, complete lyric, status, or native metadata replacement can trigger a rebuild. This removes Apple Music's per-line metadata churn, but CarNetworking may still resend artwork when its own parsed lyric page changes.
-- The current baseline keeps Apple Music's native `MediaPlaybackService` manifest to preserve the native progress bar. Atomic Player protocol fields are retained, but cooperation-controller selection remains device/firmware dependent.
+- One in-process lyrics state machine (`VivoCarLyrics`) loads and parses Apple Music's private lyrics. The head unit receives the current line through `music.media.extras.*` session Extras; Atomic Player receives the full timestamped LRC through `vivomusicmix.*` session Extras.
+- Current-line changes only touch session Extras. `MediaMetadata` is never rebuilt and the `MediaItem` is never republished by the helper, so the native progress bar and artwork stay intact.
+- `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see `docs/KNOWN_ISSUES.zh-CN.md`).
+- Instrument-cluster (`ucar.media.metadata.*`) publishing was removed in r37; `ClusterLyricsPaginator` is kept compiled but unused.
+- Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Progress bar fix awaits in-car confirmation.
 
 ## KuWo bridge prototype
 
@@ -44,21 +45,23 @@ third-party proxy session must be verified on the target vehicle.
 
 ## Workflow
 
-1. Upload `input/SHA256SUMS` and `input/parts/*` for the APK.
-2. Run **Actions -> APK analysis and rebuild** with `rebuild=false`.
-3. Review the location report before enabling rebuild.
-4. Run again with `rebuild=true` only after the reviewed patch under `cloud-patch/` is ready.
+1. The original APK lives inside `payload.tar.part.*` (`input/parts/*` + `input/SHA256SUMS` + `scripts/ci/*`), verified by `payload.sha256`.
+2. Run **Actions -> APK analysis and rebuild** with `rebuild=false` and review the `apk-results-<run>-report` artifact.
+3. Run again with `rebuild=true` once `cloud-patch/` is ready; a successful run publishes Release `v1.0.0-build-<run>`.
+4. **Actions -> Decompile Atomic Player APK** decompiles the Atomic Player APK stored under Release `atomic-apk-6.2.5.6` when the vivo side needs to be inspected.
 
-The workflow is deliberately `workflow_dispatch` only. It does not run for pull requests or pushes.
+All workflows are `workflow_dispatch` only and must exist on `main` to be triggered by name.
 Rebuilds require the repository secrets `ANDROID_SIGNING_KEY_BASE64` and
 `ANDROID_SIGNING_PASSWORD`; the certificate digest is pinned in
 `config/signing-cert-sha256.txt` so an accidental key change fails the build.
 
 ## Future Apple Music updates
 
-- [APK update and handoff guide](docs/APK_UPDATE_GUIDE.zh-CN.md)
+- [APK update and porting guide](docs/APK_UPDATE_GUIDE.zh-CN.md) — roadmap, stable protocol contract, reflection/hook relocation recipes, payload packaging, CI commands
 - [Prompt template for the next AI](docs/AI_HANDOFF_PROMPT.zh-CN.md)
+- [Known issues and dead ends](docs/KNOWN_ISSUES.zh-CN.md)
 
-For a new Apple Music version, provide the new APK and both documents to the AI.
+For a new Apple Music version, hand the new APK plus the prompt template to the AI.
 The obfuscated classes and Smali hook locations must be rediscovered for every
-version; the 6.5.2 class names and line numbers are not stable interfaces.
+version; the 6.5.2 class names and line numbers are not stable interfaces, but the
+protocol fields, capability bits, and the six hook semantics are.
