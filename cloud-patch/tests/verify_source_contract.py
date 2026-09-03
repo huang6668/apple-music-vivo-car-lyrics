@@ -25,7 +25,7 @@ metadata = method_body("private static boolean publishMetadata(")
 session_extras = method_body("private static void publishSessionExtras(")
 capability = method_body("private static boolean advertiseAtomicLyricSupport(")
 line_publish = method_body(
-    "private static void requestLinePublish(Object manager, String line, long generation,"
+    "private static void requestLinePublish(Object manager, String line, String clusterLine,"
 )
 
 # The playback manager's MediaItem publish path rebuilds session MediaMetadata and resets the

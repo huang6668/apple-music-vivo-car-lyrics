@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-diag-off-r35-2026-09-02";
+    private static final String BUILD_MARKER = "vivo-car-cluster-page-scroll-r36-2026-09-03";
     private static final String META_LINE = "ucar.media.metadata.LYRICS_LINE";
     private static final String META_WHOLE = "ucar.media.metadata.LYRICS_WHOLE";
     private static final String META_STATUS = "ucar.media.metadata.LYRICS_STATUS";
@@ -88,6 +88,7 @@ public final class VivoCarLyrics {
     private static long currentPlaybackItemGeneration = -1L;
     private static volatile LyricsState lyricsState = EMPTY_LYRICS;
     private static String lastLine;
+    private static String lastClusterLine;
     private static String lastWhole;
     private static int lastStatus = Integer.MIN_VALUE;
     private static String metadataWhole;
@@ -755,9 +756,17 @@ public final class VivoCarLyrics {
             if (times.length == 0 || texts.length == 0) {
                 return;
             }
-            String currentLine = lineForPosition(controllerPosition(manager), times, texts);
-            requestLinePublish(manager, currentLine, generation);
+            long position = controllerPosition(manager);
+            String currentLine = lineForPosition(position, times, texts);
+            // Compute the cluster page too so the dedup gate fires on page turns even when the
+            // original lyric line hasn't changed.  publishSessionExtras recomputes clusterLine
+            // from controllerPosition independently, so passing it here only affects dedup.
+            String currentClusterLine = state.clusterTexts.length > 0
+                    ? lineForPosition(position, state.clusterTimes, state.clusterTexts)
+                    : currentLine;
+            requestLinePublish(manager, currentLine, currentClusterLine, generation, false);
             MAIN.postDelayed(this, LINE_POLL_MS);
+        }
         }
     }
 
@@ -811,20 +820,39 @@ public final class VivoCarLyrics {
     }
 
     private static void requestLinePublish(Object manager, String line, long generation) {
-        requestLinePublish(manager, line, generation, false);
+        requestLinePublish(manager, line, null, generation, false);
     }
 
     private static void requestLinePublish(Object manager, String line, long generation,
                                            boolean forceExtras) {
+        requestLinePublish(manager, line, null, generation, forceExtras);
+    }
+
+    /**
+     * Publishes a lyric-line extras update, deduplicating on both the car-unit line and the
+     * cluster page. The cluster page is tracked separately because a single original lyric line
+     * can span several seconds: without the extra check the dedup gate blocks every 250 ms tick
+     * for that duration and META_LINE never advances to the next paginated cluster page.
+     *
+     * @param clusterLine the current cluster page (may be null to skip cluster-dedup check)
+     */
+    private static void requestLinePublish(Object manager, String line, String clusterLine,
+                                           long generation, boolean forceExtras) {
         if (!isCurrent(manager, generation)) {
             return;
         }
         final String latestLine = line == null ? "" : line;
+        final String latestCluster = clusterLine == null ? "" : clusterLine;
         synchronized (STATE_LOCK) {
-            if (!forceExtras && lastStatus == STATUS_SUCCESS && safeEquals(latestLine, lastLine)) {
+            if (!forceExtras && lastStatus == STATUS_SUCCESS
+                    && safeEquals(latestLine, lastLine)
+                    && (clusterLine == null || safeEquals(latestCluster, lastClusterLine))) {
                 return;
             }
             lastLine = latestLine;
+            if (clusterLine != null) {
+                lastClusterLine = latestCluster;
+            }
             lastStatus = STATUS_SUCCESS;
         }
 
@@ -1701,6 +1729,7 @@ public final class VivoCarLyrics {
         synchronized (STATE_LOCK) {
             lyricsState = EMPTY_LYRICS;
             lastLine = null;
+            lastClusterLine = null;
             lastWhole = null;
             lastStatus = Integer.MIN_VALUE;
             metadataWhole = null;
