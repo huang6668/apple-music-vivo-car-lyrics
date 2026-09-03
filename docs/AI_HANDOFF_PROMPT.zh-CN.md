@@ -50,5 +50,5 @@ F. 在指南第 13 节追加变更记录；如有新的未解决问题写入 KNO
 - 没有实车验证时，必须写"待实车验证"，不能宣称功能已恢复。
 - 遇到新版结构变化先分析再改，不要为了构建通过而删掉 apply.sh / rebuild.sh / verify_source_contract.py 里的校验或静默吞掉异常。
 - 不要声称普通外挂 App 能跨进程读取 Apple Music 私有同步歌词，也不要声称新签名 APK 可以直接覆盖官方包。
-- 原子随身听内部逻辑有疑问时，运行 "Decompile Atomic Player APK" workflow 看源码，不要凭猜测改能力位。
+- 原子随身听内部逻辑有疑问时，运行 "Decompile vivo APK" workflow 看源码，不要凭猜测改能力位。
 ```

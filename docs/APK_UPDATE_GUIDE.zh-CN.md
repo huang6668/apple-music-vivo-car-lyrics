@@ -106,7 +106,7 @@ vivomusicmix.extra.key.lyric          = 完整带时间戳 LRC
 
 ### 3.3 原子随身听侧的参考源码
 
-需要查原子随身听内部逻辑时，运行 workflow **Decompile Atomic Player APK**（`.github/workflows/atomic-decompile.yml`，输入 Release tag，默认 `atomic-apk-6.2.5.6`），下载 `atomic-decompile-<run>` artifact。关键文件：
+需要查原子随身听内部逻辑时，运行 workflow **Decompile vivo APK**（`.github/workflows/vivo-decompile.yml`，输入 Release tag，默认 `atomic-apk-6.2.5.6`），下载 `atomic-decompile-<run>` artifact。关键文件：
 
 ```text
 com/vivo/musicwidgetmix/controller/c3.java   控制器工厂（根据包名 / manifest action 选控制器）
@@ -311,7 +311,7 @@ Key alias:     apple-music-vivo-car-lyrics
 
 ```text
 .github/workflows/apk-pipeline.yml       分析 + 重建 + Release 入口（workflow_dispatch，输入 rebuild）
-.github/workflows/atomic-decompile.yml   jadx 反编译原子随身听 APK，上传源码 artifact
+.github/workflows/vivo-decompile.yml   jadx 反编译原子随身听 APK，上传源码 artifact
 .github/workflows/kuwo-bridge.yml        独立的 KuWo 桥接原型构建
 payload.tar.part.* / payload.sha256      原 APK 切片 + CI 脚本 + search-patterns（见 7.1）
 cloud-patch/apple-vivo-car-lyrics.patch  六个 Smali Hook 的 unified diff
@@ -341,7 +341,7 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 
 ### r38 (2026-09-03) - 原子随身听进度条：补上 seek 能力位 16（Build #83）
 
-通过新增的 `Decompile Atomic Player APK` 工作流对原子随身听 6.2.5.6 做静态分析，定位到进度条根因：`SeekBarLayout` 只在 `duration > 0 && (support_event & 16) == 16` 时显示时间和进度；合作控制器 `c0` 原样使用应用发布的 `support_event`，而补丁只写了 `7 | 8 = 15`。详见 `docs/KNOWN_ISSUES.zh-CN.md` 第 1 节。
+通过新增的 `Decompile vivo APK` 工作流对原子随身听 6.2.5.6 做静态分析，定位到进度条根因：`SeekBarLayout` 只在 `duration > 0 && (support_event & 16) == 16` 时显示时间和进度；合作控制器 `c0` 原样使用应用发布的 `support_event`，而补丁只写了 `7 | 8 = 15`。详见 `docs/KNOWN_ISSUES.zh-CN.md` 第 1 节。
 
 - `VivoCarLyrics.advertiseAtomicLyricSupport` 新增 `ATOMIC_SEEK_SUPPORT_EVENT = 16`，发布值变为 `7 | 8 | 16 = 31`
 - `verify_source_contract.py` 要求该常量出现在能力位代码中

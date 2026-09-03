@@ -1,0 +1,156 @@
+name: Decompile vivo APK
+
+# Static analysis only. Downloads a vivo companion APK (原子随身听 com.vivo.musicwidgetmix or
+# 车联 com.vivo.car.networking) from a private release asset, decompiles it with jadx and
+# uploads the sources plus a focused grep report so protocol / progress-bar / lyric /
+# cover-art logic can be read locally without installing any tooling on the Mac.
+#
+# Known release tags:
+#   atomic-apk-6.2.5.6          原子随身听 6.2.5.6
+#   carnetworking-apk-6.0.8.3   车联 6.0.8.3 (a8c846888)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag holding the APK asset
+        required: true
+        default: atomic-apk-6.2.5.6
+        type: string
+      label:
+        description: Short label used in the artifact name (atomic / carnetworking)
+        required: true
+        default: atomic
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  decompile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      JADX_VERSION: '1.5.1'
+      JADX_SHA256: '12fd966431903b8e15c36e5007f19343475be7d8f2a55f082e7a929eeabc937e'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install jadx
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          curl --fail --location --retry 3 \
+            "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
+            -o "$tools/jadx.zip"
+          actual="$(sha256sum "$tools/jadx.zip" | awk '{print $1}')"
+          [[ "${JADX_SHA256,,}" == "$actual" ]] || { echo "jadx SHA-256 mismatch" >&2; exit 1; }
+          unzip -q "$tools/jadx.zip" -d "$tools/jadx"
+          chmod +x "$tools/jadx/bin/jadx"
+          echo "JADX_BIN=$tools/jadx/bin/jadx" >> "$GITHUB_ENV"
+
+      - name: Download APK from release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p work/target
+          gh release download "${{ inputs.release_tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.apk' \
+            --dir work/target
+          apk="$(find work/target -maxdepth 1 -name '*.apk' | head -n 1)"
+          [[ -f "$apk" ]] || { echo "no APK asset found in release ${{ inputs.release_tag }}" >&2; exit 1; }
+          sha256sum "$apk"
+          unzip -l "$apk" | grep -E 'classes[0-9]*\.dex' || true
+          echo "TARGET_APK=$apk" >> "$GITHUB_ENV"
+
+      - name: Decompile with jadx
+        shell: bash
+        env:
+          JADX_OPTS: -Xmx10g
+        run: |
+          set -Eeuo pipefail
+          out=work/target/jadx
+          mkdir -p "$out"
+          # Keep original names so class references in docs stay comparable.
+          # --show-bad-code keeps methods jadx could not fully restore.
+          "$JADX_BIN" \
+            --threads-count 4 \
+            --show-bad-code \
+            --no-debug-info \
+            -d "$out" \
+            "$TARGET_APK" 2>&1 | tail -n 40 || true
+          find "$out/sources" -name '*.java' | wc -l
+
+      - name: Build focused report
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src=work/target/jadx/sources
+          res=work/target/jadx/resources
+          report=work/target/report
+          mkdir -p "$report"
+
+          cp "$res/AndroidManifest.xml" "$report/AndroidManifest.xml" 2>/dev/null || true
+
+          # --- Atomic Player (com.vivo.musicwidgetmix) ---
+          proto='vivomusicmix|musicwidgetmix\.support|lrc_change|support_event|meidia_id|android\.media\.metadata\.DURATION|METADATA_KEY_DURATION'
+          grep -RInE "$proto" "$src" > "$report/protocol-hits.txt" || true
+          grep -RIlE "$proto" "$src" | LC_ALL=C sort -u > "$report/protocol-files.txt" || true
+
+          session='onMetadataChanged|onPlaybackStateChanged|onExtrasChanged|MediaControllerCompat|MediaBrowserCompat|getMetadata\(\)|getPlaybackState\(\)|getLong\("android\.media\.metadata'
+          grep -RInE "$session" "$src" > "$report/session-hits.txt" || true
+          grep -RIlE "$session" "$src" | LC_ALL=C sort -u > "$report/session-files.txt" || true
+
+          progress='setMax\(|setProgress\(|SeekBar|ProgressBar|getDuration|duration|Duration'
+          grep -RIlE "$progress" "$src" | LC_ALL=C sort -u > "$report/progress-files.txt" || true
+
+          coop='cooperat|Cooperat|isSupportLyric|supportLyric|SUPPORT_LYRIC|queryIntentServices|resolveService'
+          grep -RInE "$coop" "$src" > "$report/cooperation-hits.txt" || true
+
+          # --- CarNetworking (com.vivo.car.networking): head unit + instrument cluster ---
+          # Where the ucar / music.media.extras keys are read and how lyrics reach the cluster.
+          car='ucar\.media\.metadata|music\.media\.extras|key_lyrics_whole|WholeLyrics|LineLyric|lineLyrics|LyricsSync|LyricParseManager|LyricsDisplayBean|not_support_scroll|postLineLyric|SEND_LYRICS'
+          grep -RInE "$car" "$src" > "$report/car-lyrics-hits.txt" || true
+          grep -RIlE "$car" "$src" | LC_ALL=C sort -u > "$report/car-lyrics-files.txt" || true
+
+          # Cover art: who sends the album picture to the car and what triggers a resend.
+          cover='sendMusicInfo|onCarMusicInfoChanged|CarMusicInfo|needMusicCover|ALBUM_ART|albumArt|AlbumPath|ALBUM_PATH|getBbkAlbumPath|MusicCover|coverBitmap|setCover|sendCover'
+          grep -RInE "$cover" "$src" > "$report/car-cover-hits.txt" || true
+          grep -RIlE "$cover" "$src" | LC_ALL=C sort -u > "$report/car-cover-files.txt" || true
+
+          # Cluster / launcher side text limits: ellipsize, maxLength, substring on lyric text.
+          trunc='ellipsize|setMaxEms|setMaxLines|maxLength|substring\(0, 1[0-9]\)|length\(\) > [12][0-9]|isMarquee|setSelected\(true\)|marquee'
+          grep -RInE "$trunc" "$src" | grep -iE 'lyric|lrc|music' > "$report/car-truncate-hits.txt" || true
+
+          wc -l "$report"/*.txt
+
+      - name: Pack sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tar -C work/target -czf "work/target/${{ inputs.label }}-jadx-sources.tar.gz" jadx/sources
+          tar -C work/target -czf "work/target/${{ inputs.label }}-jadx-resources.tar.gz" jadx/resources
+          ls -la work/target/*.tar.gz
+
+      - name: Upload decompiled sources and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.label }}-decompile-${{ github.run_number }}
+          path: |
+            work/target/*-jadx-sources.tar.gz
+            work/target/*-jadx-resources.tar.gz
+            work/target/report/
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0

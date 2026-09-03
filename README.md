@@ -48,7 +48,7 @@ third-party proxy session must be verified on the target vehicle.
 1. The original APK lives inside `payload.tar.part.*` (`input/parts/*` + `input/SHA256SUMS` + `scripts/ci/*`), verified by `payload.sha256`.
 2. Run **Actions -> APK analysis and rebuild** with `rebuild=false` and review the `apk-results-<run>-report` artifact.
 3. Run again with `rebuild=true` once `cloud-patch/` is ready; a successful run publishes Release `v1.0.0-build-<run>`.
-4. **Actions -> Decompile Atomic Player APK** decompiles the Atomic Player APK stored under Release `atomic-apk-6.2.5.6` when the vivo side needs to be inspected.
+4. **Actions -> Decompile vivo APK** decompiles the Atomic Player APK stored under Release `atomic-apk-6.2.5.6` when the vivo side needs to be inspected.
 
 All workflows are `workflow_dispatch` only and must exist on `main` to be triggered by name.
 Rebuilds require the repository secrets `ANDROID_SIGNING_KEY_BASE64` and
