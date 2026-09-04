@@ -35,7 +35,7 @@
 - 签名：GitHub Secrets 里的固定 PKCS12 测试密钥，证书 SHA-256 pin 在 `config/signing-cert-sha256.txt`
 - 辅助类在 6.5.2 中被加入为 `classes5.dex`（`rebuild.sh` 会自动选下一个未占用编号）
 
-r38 实车状态：车机歌词、原子随身听歌词均正常；原子随身听进度条根因已定位并修复，待实车确认（见 `docs/KNOWN_ISSUES.zh-CN.md` 第 1 节）。
+r38 实车状态（2026-09-04 确认）：车机歌词、原子随身听歌词、原子随身听进度条全部正常。
 
 **r38 是用户确认的冻结基线（2026-09-03）。** 后续所有方案（包括新版 Apple Music 的移植）都以这一版的行为为准：只发 3.1 + 3.2 的字段，不做 LRC 切段，不向仪表单独推送，不重发 MediaItem。仪表长句截断与逐句封面重载属车联侧限制，已决定不处理（`docs/KNOWN_ISSUES.zh-CN.md` 第 2 节），不要再提出绕过方案。
 
@@ -375,7 +375,7 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 - `VivoCarLyrics.advertiseAtomicLyricSupport` 新增 `ATOMIC_SEEK_SUPPORT_EVENT = 16`，发布值变为 `7 | 8 | 16 = 31`
 - `verify_source_contract.py` 要求该常量出现在能力位代码中
 - 修复 r37 遗留的两个构建阻塞：诊断探针里残留的 `META_LINE` 引用，以及 `rebuild.sh` 仍在检查 r36 marker 和已删除的 `ucar.*` 字符串
-- 构建标识：`vivo-car-atomic-seek-bit-r38-2026-09-03`；待实车确认进度条
+- 构建标识：`vivo-car-atomic-seek-bit-r38-2026-09-03`；2026-09-04 实车确认进度条正常显示、随播放前进、可拖动
 
 ### r37 (2026-09-03) - 停止向仪表推送歌词
 

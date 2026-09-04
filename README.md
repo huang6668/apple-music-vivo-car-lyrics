@@ -12,7 +12,7 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - Current-line changes only touch session Extras. `MediaMetadata` is never rebuilt and the `MediaItem` is never republished by the helper, so the native progress bar and artwork stay intact.
 - `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see `docs/KNOWN_ISSUES.zh-CN.md`).
 - Instrument-cluster (`ucar.media.metadata.*`) publishing was removed in r37; `ClusterLyricsPaginator` is kept compiled but unused.
-- Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Progress bar fix awaits in-car confirmation.
+- Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Head-unit lyrics, Atomic Player lyrics and the Atomic progress bar are all confirmed working in the car (2026-09-04); r38 is the frozen baseline for future ports.
 
 ## KuWo bridge prototype
 
