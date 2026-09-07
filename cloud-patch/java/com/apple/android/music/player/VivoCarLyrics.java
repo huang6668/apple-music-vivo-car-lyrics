@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r38-2026-09-03";
+    private static final String BUILD_MARKER = "vivo-car-first-track-init-r39-2026-09-07";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -138,12 +138,25 @@ public final class VivoCarLyrics {
     /** Adds Atomic lyric capability and duration before Apple Music publishes its native MediaItem. */
     public static void onNativeMediaItem(Object mediaItem) {
         try {
-            if (advertiseAtomicLyricSupport(mediaItem) && lastKnownDuration > 0L) {
-                Object metadata = getFieldValue(mediaItem, "d");
-                if (metadata != null) {
-                    Bundle extras = (Bundle) getFieldValue(metadata, "I");
-                    if (extras != null && !extras.containsKey(PUBLIC_DURATION)) {
-                        extras.putLong(PUBLIC_DURATION, lastKnownDuration);
+            advertiseAtomicLyricSupport(mediaItem);
+
+            // Extract duration from the mediaItem itself for first-track initialization
+            Object metadata = getFieldValue(mediaItem, "d");
+            if (metadata != null) {
+                Bundle extras = (Bundle) getFieldValue(metadata, "I");
+                if (extras != null && !extras.containsKey(PUBLIC_DURATION)) {
+                    long duration = lastKnownDuration;
+                    if (duration <= 0L) {
+                        // First track: try to extract duration from the metadata extras
+                        duration = longValue(extras.get("android.media.metadata.DURATION"), 0L);
+                    }
+                    if (duration <= 0L && currentQueueItem != null) {
+                        // Fallback: extract from current queue item
+                        duration = extractDurationFromItem(currentQueueItem);
+                    }
+                    if (duration > 0L) {
+                        lastKnownDuration = duration;
+                        extras.putLong(PUBLIC_DURATION, duration);
                     }
                 }
             }
