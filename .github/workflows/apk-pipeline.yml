@@ -255,14 +255,18 @@ jobs:
       # own 17 is left as the default for everything else. Installing it here rather than at job
       # level keeps the main path unchanged when embed_ampp is off.
       - name: Set up Java 21 for LSPatch
-        if: ${{ inputs.rebuild && inputs.embed_ampp && success() }}
+        if: ${{ inputs.rebuild && inputs.embed_ampp }}
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
+      # continue-on-error, and gated on nothing but the input: the embedded build is a side
+      # experiment on top of the real one, and it must never be able to cost the main APK its
+      # Release or its artifact.
       - name: Embed AM++ module with LSPatch
-        if: ${{ inputs.rebuild && inputs.embed_ampp && success() }}
+        if: ${{ inputs.rebuild && inputs.embed_ampp }}
+        continue-on-error: true
         shell: bash
         working-directory: payload
         env:
@@ -321,7 +325,7 @@ jobs:
       # the same r38 build inside a different shell, and the two must never be confused when
       # flashing or comparing in the car.
       - name: Upload AM++-embedded APK
-        if: ${{ inputs.rebuild && inputs.embed_ampp && success() }}
+        if: ${{ inputs.rebuild && inputs.embed_ampp && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-lspatched.apk') != '' }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:

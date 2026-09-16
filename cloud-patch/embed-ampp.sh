@@ -118,22 +118,27 @@ LSPATCHED_APK="${produced[0]}"
 expected_signer="$(tr -d '[:space:]' < "$SIGNING_CERT_SHA256_FILE" | tr '[:upper:]' '[:lower:]')"
 actual_signer="$(awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($2); exit}' \
   "$REPORT/embed-signature.txt")"
+# Every one of these prints the whole verification report on the way out. A signature
+# failure here is rare and its cause is always in the report, not in the sentence.
+signature_failure() {
+  echo "$1" >&2
+  echo "--- apksigner verify report ---" >&2
+  cat "$REPORT/embed-signature.txt" >&2
+  exit 1
+}
+
 [[ "$expected_signer" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid signing certificate pin" >&2; exit 1; }
 [[ "$actual_signer" == "$expected_signer" ]] || {
-  echo "Embedded APK signing certificate SHA-256 mismatch" >&2
-  exit 1
+  signature_failure "Embedded APK signing certificate SHA-256 mismatch"
 }
 grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' "$REPORT/embed-signature.txt" || {
-  echo "Embedded APK v2 signature verification is missing" >&2
-  exit 1
+  signature_failure "Embedded APK v2 signature verification is missing"
 }
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' "$REPORT/embed-signature.txt" || {
-  echo "Embedded APK v3 signature verification is missing" >&2
-  exit 1
+  signature_failure "Embedded APK v3 signature verification is missing"
 }
 grep -Fq 'Number of signers: 1' "$REPORT/embed-signature.txt" || {
-  echo "Embedded APK must have exactly one signer" >&2
-  exit 1
+  signature_failure "Embedded APK must have exactly one signer"
 }
 
 "$BT/aapt2" dump badging "$EMBED_OUT_DIR/$EMBED_APK_NAME" > "$REPORT/embed-badging.txt"
