@@ -226,14 +226,18 @@ import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
-occurrences = text.count("com.vivo.musicwidgetmix.support.service")
-if occurrences != 1:
-    # aapt2 prints every attribute as "value (Raw: \"value\")", so a single declaration
-    # can look like two hits; print the surrounding lines rather than guessing which.
-    lines = [line.strip() for line in text.splitlines()
-             if "com.vivo.musicwidgetmix.support.service" in line]
-    raise SystemExit("Atomic action occurs %d times in the embedded manifest:\n  %s"
-                     % (occurrences, "\n  ".join(lines[:8])))
+
+# aapt2 prints each attribute on one line as:  A: <ns>:name(0x01010003)="value" (Raw: "value")
+# -- the value twice. Counting occurrences of the string therefore reports 2 for a single
+# declaration, so count the *lines* that declare it and require exactly one.
+declarations = [line for line in text.splitlines()
+                if "com.vivo.musicwidgetmix.support.service" in line]
+if len(declarations) != 1:
+    raise SystemExit("Atomic action is declared on %d manifest lines, expected 1:\n  %s"
+                     % (len(declarations),
+                        "\n  ".join(line.strip() for line in declarations[:8])))
+if "android:name" not in declarations[0] and ":name(0x01010003)=" not in declarations[0]:
+    raise SystemExit("Atomic action is not declared as an android:name attribute")
 name_attr = re.compile(
     r':name\(0x01010003\)="com\.apple\.android\.music\.player\.MediaPlaybackService"')
 if not name_attr.search(text):
