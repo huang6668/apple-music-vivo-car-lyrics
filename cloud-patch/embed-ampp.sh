@@ -183,8 +183,11 @@ with zipfile.ZipFile(embed_path) as apk:
         raise SystemExit("Embedded APK was patched in manager mode")
     if config.get("sigBypassLevel") != 2:
         raise SystemExit("Unexpected signature bypass level: %r" % config.get("sigBypassLevel"))
-    if config.get("appComponentFactory") != PROXY_FACTORY:
-        raise SystemExit("Unexpected proxied appComponentFactory: %r" % config.get("appComponentFactory"))
+    # config records the *original* factory, which the loader restores after it brings the
+    # framework up; the proxy stub is what the manifest points at instead (checked below).
+    # Seeing the proxy here would mean the original was lost and the app would never resume.
+    if config.get("appComponentFactory") == PROXY_FACTORY:
+        raise SystemExit("config recorded the proxy factory instead of the app's own")
     if "originalSignature" not in config or not config["originalSignature"]:
         raise SystemExit("Embedded APK did not record the original signature")
 
