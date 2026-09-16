@@ -9,7 +9,7 @@ on:
         default: true
         type: boolean
       embed_ampp:
-        description: Also wrap the rebuilt APK in an LSPatch shell with the AM++ module embedded
+        description: Also wrap the rebuilt APK in an NPatch shell with the AM++ module embedded
         required: true
         default: false
         type: boolean
@@ -34,8 +34,10 @@ jobs:
       JADX_SHA256: '12fd966431903b8e15c36e5007f19343475be7d8f2a55f082e7a929eeabc937e'
       # Pinned by content hash, not by tag: both artifacts are third-party release assets and a
       # re-upload under an unchanged tag would otherwise silently change the opt-in build.
-      LSPATCH_URL: 'https://github.com/JingMatrix/LSPatch/releases/download/v1.2/lspatch-v1.2-487-release.jar'
-      LSPATCH_SHA256: 'd238fdc414d121b7fa454d8b4ccf420df3a8c97d563761861ff92bd9c5da2165'
+      # NPatch (not JingMatrix LSPatch) is the framework the AM++ author builds and ships the
+      # embedded Apple Music with, and the only one 歌名修正 is proven to work under.
+      NPATCH_URL: 'https://github.com/7723mod/NPatch/releases/download/v1.0.7/jar-v1.0.7-741-release.jar'
+      NPATCH_SHA256: '855c6499ac871663ae6c02dcb3a32cbbdfa88d67a312094249cc54e7f3ec8252'
       AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.5.5/AM-plus-plus-v1.5.5.apk'
       AMPP_SHA256: '2cc83a041eb0ffb382c8dbe07736d50fee4544961cf517b3f911d103aa279c92'
 
@@ -251,10 +253,10 @@ jobs:
         run: bash ../cloud-patch/rebuild.sh
         working-directory: payload
 
-      # lspatch.jar targets class file version 65, so it needs a Java 21 runtime; the pipeline's
+      # NPatch's jar targets class file version 65, so it needs a Java 21 runtime; the pipeline's
       # own 17 is left as the default for everything else. Installing it here rather than at job
       # level keeps the main path unchanged when embed_ampp is off.
-      - name: Set up Java 21 for LSPatch
+      - name: Set up Java 21 for NPatch
         if: ${{ inputs.rebuild && inputs.embed_ampp }}
         uses: actions/setup-java@v5
         with:
@@ -264,7 +266,7 @@ jobs:
       # continue-on-error, and gated on nothing but the input: the embedded build is a side
       # experiment on top of the real one, and it must never be able to cost the main APK its
       # Release or its artifact.
-      - name: Embed AM++ module with LSPatch
+      - name: Embed AM++ module with NPatch
         if: ${{ inputs.rebuild && inputs.embed_ampp }}
         continue-on-error: true
         shell: bash
@@ -277,13 +279,13 @@ jobs:
           tools="$RUNNER_TEMP/tools"
           mkdir -p "$tools"
 
-          curl --fail --location --retry 3 "$LSPATCH_URL" -o "$tools/lspatch.jar"
+          curl --fail --location --retry 3 "$NPATCH_URL" -o "$tools/npatch.jar"
           curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.5.5.apk"
 
-          lspatch_actual="$(sha256sum "$tools/lspatch.jar" | awk '{print $1}')"
+          npatch_actual="$(sha256sum "$tools/npatch.jar" | awk '{print $1}')"
           ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.5.5.apk" | awk '{print $1}')"
-          [[ "${LSPATCH_SHA256,,}" == "$lspatch_actual" ]] || {
-            echo "lspatch.jar SHA-256 mismatch" >&2
+          [[ "${NPATCH_SHA256,,}" == "$npatch_actual" ]] || {
+            echo "npatch.jar SHA-256 mismatch" >&2
             exit 1
           }
           [[ "${AMPP_SHA256,,}" == "$ampp_actual" ]] || {
@@ -291,7 +293,7 @@ jobs:
             exit 1
           }
 
-          LSPATCH_JAR="$tools/lspatch.jar" \
+          NPATCH_JAR="$tools/npatch.jar" \
           AMPP_MODULE_APK="$tools/AM-plus-plus-v1.5.5.apk" \
             bash ../cloud-patch/embed-ampp.sh
 
@@ -303,12 +305,12 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          embedded=payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-lspatched.apk
+          embedded=payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk
           if [[ -f "$embedded" ]]; then
-            printf '### AM++ embedded APK built\n\n`%s`\n\n```\n%s\n```\n' \
+            printf '### AM++ embedded APK built (NPatch)\n\n`%s`\n\n```\n%s\n```\n\nFramework/module health is mirrored on-device to `/sdcard/Android/media/com.apple.android.music/npatch/log/<date>.log` (no adb needed); look for the `title_correction:` line.\n' \
               "$(basename "$embedded")" "$(cat "$embedded.sha256")" >> "$GITHUB_STEP_SUMMARY"
           else
-            printf '### AM++ embedding FAILED\n\nThe main APK and its Release are unaffected. See the "Embed AM++ module with LSPatch" step log.\n' \
+            printf '### AM++ embedding FAILED\n\nThe main APK and its Release are unaffected. See the "Embed AM++ module with NPatch" step log.\n' \
               >> "$GITHUB_STEP_SUMMARY"
             echo "::warning::AM++ embedding did not produce an APK; the main build is unaffected"
           fi
@@ -343,14 +345,14 @@ jobs:
       # the same r38 build inside a different shell, and the two must never be confused when
       # flashing or comparing in the car.
       - name: Upload AM++-embedded APK
-        if: ${{ inputs.rebuild && inputs.embed_ampp && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-lspatched.apk') != '' }}
+        if: ${{ inputs.rebuild && inputs.embed_ampp && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk') != '' }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: apple-music-vivo-car-lyrics-ampp-lspatched
+          name: apple-music-vivo-car-lyrics-ampp-npatched
           path: |
-            payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-lspatched.apk
-            payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-lspatched.apk.sha256
+            payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk
+            payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
           retention-days: 7
           if-no-files-found: error
           compression-level: 0
@@ -361,7 +363,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apk-results-${{ github.run_number }}-report
-          path: payload/out/report/
+          path: |
+            payload/out/report/
+            payload/out/embed-ampp/report/
           retention-days: 7
           if-no-files-found: warn
           compression-level: 0
