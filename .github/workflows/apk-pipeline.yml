@@ -295,6 +295,24 @@ jobs:
           AMPP_MODULE_APK="$tools/AM-plus-plus-v1.5.5.apk" \
             bash ../cloud-patch/embed-ampp.sh
 
+      # continue-on-error above keeps a broken wrapper from costing the main build its Release,
+      # but it also paints the step green in the step list. Say plainly which way it went, in the
+      # job summary, so a failed embed cannot be read as a successful one.
+      - name: Report AM++ embedding outcome
+        if: ${{ inputs.rebuild && inputs.embed_ampp }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          embedded=payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-lspatched.apk
+          if [[ -f "$embedded" ]]; then
+            printf '### AM++ embedded APK built\n\n`%s`\n\n```\n%s\n```\n' \
+              "$(basename "$embedded")" "$(cat "$embedded.sha256")" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### AM++ embedding FAILED\n\nThe main APK and its Release are unaffected. See the "Embed AM++ module with LSPatch" step log.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::AM++ embedding did not produce an APK; the main build is unaffected"
+          fi
+
       - name: Create GitHub Release
         if: ${{ inputs.rebuild && success() }}
         env:

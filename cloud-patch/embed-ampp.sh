@@ -131,9 +131,10 @@ signature_failure() {
 [[ "$actual_signer" == "$expected_signer" ]] || {
   signature_failure "Embedded APK signing certificate SHA-256 mismatch"
 }
-grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' "$REPORT/embed-signature.txt" || {
-  signature_failure "Embedded APK v2 signature verification is missing"
-}
+# v3 is the requirement, matching rebuild.sh's own check on the main artifact. v2 is not
+# asserted: apksigner picks the schemes from the apk's minSdkVersion, and the loader raises
+# it to 28, above the v2-only range -- so demanding v2 here would fail a build that installs
+# perfectly well. Both may be absent only if the file is effectively unsigned.
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' "$REPORT/embed-signature.txt" || {
   signature_failure "Embedded APK v3 signature verification is missing"
 }
