@@ -251,6 +251,16 @@ jobs:
         run: bash ../cloud-patch/rebuild.sh
         working-directory: payload
 
+      # lspatch.jar targets class file version 65, so it needs a Java 21 runtime; the pipeline's
+      # own 17 is left as the default for everything else. Installing it here rather than at job
+      # level keeps the main path unchanged when embed_ampp is off.
+      - name: Set up Java 21 for LSPatch
+        if: ${{ inputs.rebuild && inputs.embed_ampp && success() }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Embed AM++ module with LSPatch
         if: ${{ inputs.rebuild && inputs.embed_ampp && success() }}
         shell: bash
