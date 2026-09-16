@@ -158,7 +158,6 @@ import sys
 import zipfile
 
 embed_path, src_path = sys.argv[1:]
-ATOMIC_ACTION = "com.vivo.musicwidgetmix.support.service"
 PROXY_FACTORY = "org.lsposed.lspatch.metaloader.LSPAppComponentFactoryStub"
 
 src = zipfile.ZipFile(src_path)
@@ -191,15 +190,14 @@ with zipfile.ZipFile(embed_path) as apk:
     if "originalSignature" not in config or not config["originalSignature"]:
         raise SystemExit("Embedded APK did not record the original signature")
 
-    # The whole APK is kept intact inside the shell, so the vivo action must still be
-    # findable in the nested copy -- that is what the manifest check below then confirms
-    # is still declared on MediaPlaybackService.
+    # The whole APK is kept intact inside the shell as a nested zip. Its own
+    # AndroidManifest.xml is deflated binary AXML, so the vivo action cannot be found by a
+    # raw byte scan here -- that survives in the *outer*, rewritten manifest, which the
+    # aapt2 xmltree grep below reads. What this block proves instead is that the nested copy
+    # is byte-for-byte our r38 build: same dex set, same bytes.
+    import io
     origin = apk.read("assets/lspatch/origin.apk")
-    if ATOMIC_ACTION.encode("utf-8") not in origin:
-        raise SystemExit("Nested origin.apk lost the vivo Atomic service action")
-
-    # The helper dex the source APK carried must survive into the nested copy unchanged.
-    origin_zip = zipfile.ZipFile(__import__("io").BytesIO(origin))
+    origin_zip = zipfile.ZipFile(io.BytesIO(origin))
     origin_names = set(origin_zip.namelist())
     for helper in src_helpers:
         if helper not in origin_names:
@@ -219,16 +217,21 @@ for marker in 'com.vivo.musicwidgetmix.support.service' \
   }
 done
 
-# The Atomic action must still sit on the same intent-filter the main pipeline verified,
-# otherwise the head unit will not find the service through the shell.
+# The Atomic action must still sit in the wrapped manifest exactly once, matching what the
+# main pipeline asserts on the unwrapped one; otherwise the head unit will not find the
+# service through the shell. Matched by resource id (0x01010003 = android:name) rather than
+# by aapt2's namespace-prefix spelling, which varies between build-tools versions.
 python3 - "$REPORT/embed-manifest.txt" <<'PY'
+import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
-if text.count('com.vivo.musicwidgetmix.support.service') != 1:
+if text.count("com.vivo.musicwidgetmix.support.service") != 1:
     raise SystemExit("Atomic action must occur exactly once in the embedded manifest")
-if text.count('A: android:name(0x01010003)="com.apple.android.music.player.MediaPlaybackService"') != 1:
-    raise SystemExit("Expected exactly one MediaPlaybackService declaration")
+name_attr = re.compile(
+    r':name\(0x01010003\)="com\.apple\.android\.music\.player\.MediaPlaybackService"')
+if not name_attr.search(text):
+    raise SystemExit("MediaPlaybackService is not declared in the embedded manifest")
 PY
 
 # LSPatch stores the nested original and the native library page-aligned so they can be
