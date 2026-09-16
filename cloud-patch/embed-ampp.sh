@@ -226,8 +226,14 @@ import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
-if text.count("com.vivo.musicwidgetmix.support.service") != 1:
-    raise SystemExit("Atomic action must occur exactly once in the embedded manifest")
+occurrences = text.count("com.vivo.musicwidgetmix.support.service")
+if occurrences != 1:
+    # aapt2 prints every attribute as "value (Raw: \"value\")", so a single declaration
+    # can look like two hits; print the surrounding lines rather than guessing which.
+    lines = [line.strip() for line in text.splitlines()
+             if "com.vivo.musicwidgetmix.support.service" in line]
+    raise SystemExit("Atomic action occurs %d times in the embedded manifest:\n  %s"
+                     % (occurrences, "\n  ".join(lines[:8])))
 name_attr = re.compile(
     r':name\(0x01010003\)="com\.apple\.android\.music\.player\.MediaPlaybackService"')
 if not name_attr.search(text):
