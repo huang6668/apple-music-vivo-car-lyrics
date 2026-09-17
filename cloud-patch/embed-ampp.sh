@@ -110,7 +110,29 @@ chmod 600 "$SIGNING_KEY"
 # what NPatch's own embedded build ships with; it keeps the original signature readable at
 # runtime so AM++ cannot notice the rewrite. --outputLog mirrors the framework and module
 # health lines to external media so a degraded feature can be diagnosed without adb.
-java -Xmx4g -jar "$NPATCH_JAR" \
+#
+# NPatch signs with a BKS keystore (both its built-in key and any -k key), and BKS is a
+# BouncyCastle type that a stock temurin JDK does not provide -- so a plain `java -jar` dies
+# with "BKS not found" at signer registration. The jar bundles BouncyCastle but never
+# registers the provider, so a one-line launcher installs it before delegating to NPatch's
+# real entry point. Compiled against the jar with the runner's own javac.
+mkdir -p "$PATCH_WORK/launcher"
+cat > "$PATCH_WORK/launcher/NPatchLauncher.java" <<'JAVA'
+import java.security.Security;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+public final class NPatchLauncher {
+    public static void main(String[] args) throws Exception {
+        if (Security.getProvider("BC") == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+        top.nkbe.npatch.patch.NPatch.main(args);
+    }
+}
+JAVA
+javac -cp "$NPATCH_JAR" -d "$PATCH_WORK/launcher" "$PATCH_WORK/launcher/NPatchLauncher.java"
+
+java -Xmx4g -cp "$PATCH_WORK/launcher:$NPATCH_JAR" NPatchLauncher \
   -m "$PATCH_WORK/in/AM-plus-plus.apk" \
   -npa \
   -l "$SIG_BYPASS_LEVEL" \
@@ -119,12 +141,39 @@ java -Xmx4g -jar "$NPATCH_JAR" \
   "$PATCH_WORK/in/apple-music-vivo-car-lyrics-debug.apk" \
   2>&1 | tee "$REPORT/npatch.log"
 
+# NPatch's main() catches its own PatchError, prints the stack trace, and still exits 0 --
+# and it creates the output zip before the signer runs, so a failed patch can leave a broken
+# stub that a bare existence check would wave through. Fail loudly if the log carries the
+# stack trace, and validate the produced file is a real APK below.
+if grep -q 'PatchError' "$REPORT/npatch.log"; then
+  echo "NPatch reported a PatchError; see $REPORT/npatch.log" >&2
+  exit 1
+fi
+
 mapfile -t produced < <(find "$PATCH_WORK/out" -maxdepth 1 -type f -name '*-npatched.apk' -print)
 [[ "${#produced[@]}" == 1 ]] || {
   echo "Expected exactly one npatched APK, found ${#produced[@]}" >&2
   exit 1
 }
 NPATCHED_APK="${produced[0]}"
+
+# A swallowed PatchError can leave a truncated or near-empty zip. Prove the file is a real
+# NPatch output -- a valid zip carrying the nested origin and the metaloader -- before we
+# spend an apksigner pass on it.
+python3 - "$NPATCHED_APK" <<'PY'
+import sys
+import zipfile
+
+path = sys.argv[1]
+if not zipfile.is_zipfile(path):
+    raise SystemExit("NPatch output is not a valid zip: %s" % path)
+with zipfile.ZipFile(path) as apk:
+    names = set(apk.namelist())
+for entry in ("assets/npatch/origin.apk", "assets/npatch/config.json", "classes.dex"):
+    if entry not in names:
+        raise SystemExit("NPatch output is missing %s -- patch did not complete" % entry)
+print("NPatch produced a valid embed with %d entries" % len(names))
+PY
 
 # NPatch signs as it writes with its own key; re-signing with our fixed key puts the output
 # on exactly the footing the main artifact is on: our pinned certificate, one signer. Which
