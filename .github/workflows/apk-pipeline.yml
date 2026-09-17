@@ -311,7 +311,7 @@ jobs:
           set -Eeuo pipefail
           embedded=payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk
           if [[ "$EMBED_OUTCOME" == success && -f "$embedded" && -f "$embedded.sha256" ]]; then
-            printf '### AM++ embedded APK built (NPatch)\n\n`%s`\n\n```\n%s\n```\n\nFramework/module health is mirrored on-device to `/sdcard/Android/media/com.apple.android.music/npatch/log/<date>.log` (no adb needed); look for the `title_correction:` line.\n' \
+              printf '### AM++ embedded APK built (NPatch)\n\n`%s`\n\n```\n%s\n```\n\nPackaging success is not runtime verification. Check `adb logcat` for module health and catalog query errors; the NPatch file log may contain only bootstrap messages. `title_correction: ACTIVE` alone does not prove that song titles are corrected.\n' \
               "$(basename "$embedded")" "$(cat "$embedded.sha256")" >> "$GITHUB_STEP_SUMMARY"
           else
             printf '### AM++ embedding FAILED\n\nThe main APK and its Release are unaffected. See the "Embed AM++ module with NPatch" step log.\n' \
