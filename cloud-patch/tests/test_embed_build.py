@@ -13,6 +13,31 @@ APK_NAME = "apple-music-vivo-car-lyrics-ampp-npatched.apk"
 
 
 class EmbedBuildTest(unittest.TestCase):
+    def test_catalog_query_patch_is_scoped_and_rejects_drift(self):
+        spec = importlib.util.spec_from_file_location(
+            "catalog_patch", ROOT / "cloud-patch/ampp/patch_catalog_query.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        method = (
+            ".method private final findDirectCatalogQueryMethod"
+            "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Method;\n"
+            "    .locals 10\n"
+            "    return-object v0\n"
+            ".end method"
+        )
+        before = ".method public unrelated()V\n    return-void\n.end method\n"
+        after = "\n.method public after()V\n    return-void\n.end method\n"
+        patched = module.patch(before + method + after)
+        self.assertTrue(patched.startswith(before))
+        self.assertTrue(patched.endswith(after))
+        self.assertIn("invoke-static {p1, p2}", patched)
+        self.assertIn("CatalogQueryMethod;->resolve", patched)
+        self.assertNotIn(".locals 10", patched)
+        for invalid in ("", method + "\n" + method, method.replace("private final", "public")):
+            with self.assertRaises(ValueError):
+                module.patch(invalid)
+
     def test_native_directory_patch_preserves_registers_and_rejects_drift(self):
         spec = importlib.util.spec_from_file_location(
             "native_patch", ROOT / "cloud-patch/ampp/patch_native_directory.py"

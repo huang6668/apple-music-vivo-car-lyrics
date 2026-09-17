@@ -10,10 +10,18 @@ input="$1"
 output="$2"
 
 mkdir -p "$work/classes" "$work/dex"
+mkdir -p "$work/test-classes"
+javac --release 8 -d "$work/test-classes" \
+  "$compat_root/java/dev/amenhancer/compat/CatalogQueryMethod.java" \
+  "$compat_root/../tests/catalog_query/kotlin/coroutines/Continuation.java" \
+  "$compat_root/../tests/catalog_query/s8/F.java" \
+  "$compat_root/../tests/catalog_query/CatalogQueryMethodTest.java"
+java -cp "$work/test-classes" CatalogQueryMethodTest
 java -Xmx2g -jar "$tools/apktool.jar" d -f -r "$input" -o "$work/module"
 python3 "$compat_root/patch_native_directory.py" "$work/module"
+python3 "$compat_root/patch_catalog_query.py" "$work/module"
 javac --release 8 -classpath "$platform" -d "$work/classes" \
-  "$compat_root/java/dev/amenhancer/compat/ModuleNativeLibrary.java"
+  "$compat_root"/java/dev/amenhancer/compat/*.java
 jar --create --file "$work/compat.jar" -C "$work/classes" .
 "$bt/d8" --min-api 30 --output "$work/dex" "$work/compat.jar"
 java -Xmx2g -jar "$tools/apktool.jar" b "$work/module" -o "$work/module-unsigned.apk"

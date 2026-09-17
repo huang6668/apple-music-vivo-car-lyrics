@@ -115,7 +115,7 @@ chmod 600 "$SIGNING_KEY"
 [[ -s "$SIGNING_KEY" ]] || { echo "Decoded signing key is empty" >&2; exit 1; }
 
 # NPatch 741 exposes a null module nativeLibraryDir on the tested Android 16 device.
-# Preserve the upstream module except for a native directory fallback in HLE setup.
+# Also adapt the catalog query lookup to the r38 host's R8 method mapping.
 bash "$(dirname "${BASH_SOURCE[0]}")/ampp/prepare-module.sh" \
   "$AMPP_MODULE_APK" "$PATCH_WORK/in/AM-plus-plus.apk" \
   2>&1 | tee "$REPORT/module-native-compat.log"
