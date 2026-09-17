@@ -114,6 +114,13 @@ printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$SIGNING_KEY"
 chmod 600 "$SIGNING_KEY"
 [[ -s "$SIGNING_KEY" ]] || { echo "Decoded signing key is empty" >&2; exit 1; }
 
+# NPatch 741 exposes a null module nativeLibraryDir on the tested Android 16 device.
+# Preserve the upstream module except for a native directory fallback in HLE setup.
+bash "$(dirname "${BASH_SOURCE[0]}")/ampp/prepare-module.sh" \
+  "$AMPP_MODULE_APK" "$PATCH_WORK/in/AM-plus-plus.apk" \
+  2>&1 | tee "$REPORT/module-native-compat.log"
+sha256sum "$PATCH_WORK/in/AM-plus-plus.apk" > "$REPORT/patched-module.sha256"
+
 # -m embeds the module; --manager would instead resolve modules live from an installed
 # manager app, and the two are mutually exclusive by construction. -npa signs with NPatch's
 # built-in keystore (its -k custom-keystore path only accepts a BKS store, not our PKCS12),

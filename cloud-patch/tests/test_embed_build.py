@@ -4,6 +4,7 @@ import shlex
 import subprocess
 import tempfile
 import unittest
+import importlib.util
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +13,23 @@ APK_NAME = "apple-music-vivo-car-lyrics-ampp-npatched.apk"
 
 
 class EmbedBuildTest(unittest.TestCase):
+    def test_native_directory_patch_preserves_registers_and_rejects_drift(self):
+        spec = importlib.util.spec_from_file_location(
+            "native_patch", ROOT / "cloud-patch/ampp/patch_native_directory.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        original = (
+            "    iget-object v2, v1, "
+            "Landroid/content/pm/ApplicationInfo;->nativeLibraryDir:Ljava/lang/String;\n"
+        )
+        patched = module.patch(original)
+        self.assertIn("invoke-static {v1}", patched)
+        self.assertIn("move-result-object v2", patched)
+        for invalid in ("", original + original):
+            with self.assertRaises(ValueError):
+                module.patch(invalid)
+
     def test_failed_preflight_removes_stale_deliverables(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
