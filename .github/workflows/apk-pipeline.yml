@@ -34,8 +34,8 @@ jobs:
       JADX_SHA256: '12fd966431903b8e15c36e5007f19343475be7d8f2a55f082e7a929eeabc937e'
       # Pinned by content hash, not by tag: both artifacts are third-party release assets and a
       # re-upload under an unchanged tag would otherwise silently change the opt-in build.
-      # NPatch (not JingMatrix LSPatch) is the framework the AM++ author builds and ships the
-      # embedded Apple Music with, and the only one 歌名修正 is proven to work under.
+      # Use the author's framework family; this pin is not the same framework build as
+      # the author's 902 embed. Runtime feature compatibility still needs device testing.
       NPATCH_URL: 'https://github.com/7723mod/NPatch/releases/download/v1.0.7/jar-v1.0.7-741-release.jar'
       NPATCH_SHA256: '855c6499ac871663ae6c02dcb3a32cbbdfa88d67a312094249cc54e7f3ec8252'
       AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.5.5/AM-plus-plus-v1.5.5.apk'
@@ -73,6 +73,7 @@ jobs:
             cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java
           java -cp "$test_classes" com.apple.android.music.player.ClusterLyricsPaginatorTest
           python3 cloud-patch/tests/verify_source_contract.py
+          python3 -m unittest discover -s cloud-patch/tests -p 'test_embed_build.py'
 
       - name: Install Android build tools
         shell: bash
@@ -267,6 +268,7 @@ jobs:
       # experiment on top of the real one, and it must never be able to cost the main APK its
       # Release or its artifact.
       - name: Embed AM++ module with NPatch
+        id: embed_ampp
         if: ${{ inputs.rebuild && inputs.embed_ampp }}
         continue-on-error: true
         shell: bash
@@ -303,10 +305,12 @@ jobs:
       - name: Report AM++ embedding outcome
         if: ${{ inputs.rebuild && inputs.embed_ampp }}
         shell: bash
+        env:
+          EMBED_OUTCOME: ${{ steps.embed_ampp.outcome }}
         run: |
           set -Eeuo pipefail
           embedded=payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk
-          if [[ -f "$embedded" ]]; then
+          if [[ "$EMBED_OUTCOME" == success && -f "$embedded" && -f "$embedded.sha256" ]]; then
             printf '### AM++ embedded APK built (NPatch)\n\n`%s`\n\n```\n%s\n```\n\nFramework/module health is mirrored on-device to `/sdcard/Android/media/com.apple.android.music/npatch/log/<date>.log` (no adb needed); look for the `title_correction:` line.\n' \
               "$(basename "$embedded")" "$(cat "$embedded.sha256")" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -345,7 +349,7 @@ jobs:
       # the same r38 build inside a different shell, and the two must never be confused when
       # flashing or comparing in the car.
       - name: Upload AM++-embedded APK
-        if: ${{ inputs.rebuild && inputs.embed_ampp && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk') != '' }}
+        if: ${{ inputs.rebuild && inputs.embed_ampp && steps.embed_ampp.outcome == 'success' && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk') != '' && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256') != '' }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:

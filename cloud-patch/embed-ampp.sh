@@ -9,14 +9,10 @@
 # theirs is a shell around a patched app; patching theirs would mean reaching into the
 # nested origin.apk of a 3-split APK Set, which is the harder direction and was rejected.
 #
-# Why NPatch and not JingMatrix LSPatch: the AM++ author only builds, tests and ships the
-# embedded Apple Music with NPatch (7723mod/NPatch, "Neo LSPatch Framework"). An earlier
-# LSPatch v1.2 wrapper loaded the module -- liquid glass worked -- but 歌名修正 (title
-# correction) silently degraded, because that feature needs the module's own native library
-# dir (libdexkit.so) wired into a runtime ApplicationInfo, and the two loaders wire that
-# differently. NPatch is the environment the feature is actually proven in, so this path
-# reproduces it verbatim, and turns on --outputLog so the framework/module health lines are
-# written to /sdcard/Android/media/<pkg>/npatch/log/<date>.log -- readable without adb.
+# Use the same framework family as the author's embedded release. This pinned NPatch
+# build is not identical to the author's build, and successful packaging does not prove
+# runtime compatibility. Title correction needs device-side module/Hook diagnostics.
+# Keep outputLog enabled for that investigation; do not pass its boolean toggle.
 #
 # Nothing here feeds back into the main build. The input is the finished, verified
 # artifact, the output is a separate file, and a failure in this path cannot change what
@@ -43,6 +39,19 @@ PROXY_FACTORY="top.nkbe.npatch.metaloader.LSPAppComponentFactoryStub"
 # The embedded module always lands here, keyed by its own package name.
 MODULE_ASSET="assets/npatch/modules/dev.amenhancer.module.apk"
 
+# The workflow treats this optional build as non-fatal. Do not leave a signed-but-unverified
+# APK behind when a later structural check fails, or the artifact upload step could mistake
+# that partial output for a successful embed.
+cleanup_incomplete_output() {
+  local status=$?
+  if (( status != 0 )); then
+    rm -f "$EMBED_OUT_DIR/$EMBED_APK_NAME" \
+      "$EMBED_OUT_DIR/$EMBED_APK_NAME.sha256"
+  fi
+  return "$status"
+}
+trap cleanup_incomplete_output EXIT
+
 [[ -f "$SRC_APK" ]] || { echo "Patched APK is missing: $SRC_APK" >&2; exit 1; }
 [[ -f "$BT/apksigner" ]] || { echo "apksigner is missing at $BT" >&2; exit 1; }
 [[ -f "$NPATCH_JAR" ]] || { echo "npatch.jar is missing: $NPATCH_JAR" >&2; exit 1; }
@@ -52,11 +61,9 @@ MODULE_ASSET="assets/npatch/modules/dev.amenhancer.module.apk"
 [[ -n "${SIGNING_PASSWORD:-}" ]] || { echo "ANDROID_SIGNING_PASSWORD secret is missing" >&2; exit 1; }
 
 # The module is an LSPosed module in the libxposed layout; its own metadata declares the
-# API level it was built against, and the loader must be able to serve that API. Checked
-# here rather than after a two-minute patch, because a mismatch is the one failure that
-# would otherwise look like "the module just does nothing" at runtime. libdexkit.so is what
-# the title-correction resolver falls back to, so its presence for the device ABI is part
-# of the same up-front check.
+# API level it was built against. These checks validate the pinned module's metadata and
+# required assets, not successful runtime loading. libdexkit.so is required when title
+# correction falls back to DexKit resolution.
 python3 - "$AMPP_MODULE_APK" "$NPATCH_JAR" <<'PY'
 import sys
 import zipfile
@@ -64,11 +71,15 @@ import zipfile
 module_path, jar_path = sys.argv[1:]
 with zipfile.ZipFile(module_path) as apk:
     names = set(apk.namelist())
-    for required in ("META-INF/xposed/module.prop", "META-INF/xposed/scope.list"):
+    for required in ("META-INF/xposed/module.prop", "META-INF/xposed/scope.list",
+                     "META-INF/xposed/java_init.list"):
         if required not in names:
             raise SystemExit("%s is not an LSPosed module: %s is absent" % (module_path, required))
     prop = apk.read("META-INF/xposed/module.prop").decode("utf-8")
     scope = apk.read("META-INF/xposed/scope.list").decode("utf-8")
+    entries = apk.read("META-INF/xposed/java_init.list").decode("utf-8").splitlines()
+    if "dev.amenhancer.module.hook.HookEntry" not in [line.strip() for line in entries]:
+        raise SystemExit("Module is missing the expected modern Xposed entry point")
     if "lib/arm64-v8a/libdexkit.so" not in names:
         raise SystemExit("Module is missing lib/arm64-v8a/libdexkit.so; title correction cannot resolve symbols")
 
@@ -108,8 +119,9 @@ chmod 600 "$SIGNING_KEY"
 # built-in keystore (its -k custom-keystore path only accepts a BKS store, not our PKCS12),
 # which is fine because we re-sign with our pinned key below. Level 2 signature bypass is
 # what NPatch's own embedded build ships with; it keeps the original signature readable at
-# runtime so AM++ cannot notice the rewrite. --outputLog mirrors the framework and module
-# health lines to external media so a degraded feature can be diagnosed without adb.
+# runtime so AM++ cannot notice the rewrite. NPatch v1.0.7 defaults outputLog to true;
+# JCommander's boolean flag handling flips a true default when --outputLog is supplied, so
+# deliberately omit the flag and verify the serialized config after patching instead.
 #
 # NPatch signs with a BKS keystore (both its built-in key and any -k key), and BKS is a
 # BouncyCastle type that a stock temurin JDK does not provide -- so a plain `java -jar` dies
@@ -136,7 +148,6 @@ java -Xmx4g -cp "$PATCH_WORK/launcher:$NPATCH_JAR" NPatchLauncher \
   -m "$PATCH_WORK/in/AM-plus-plus.apk" \
   -npa \
   -l "$SIG_BYPASS_LEVEL" \
-  --outputLog \
   -f -o "$PATCH_WORK/out" \
   "$PATCH_WORK/in/apple-music-vivo-car-lyrics-debug.apk" \
   2>&1 | tee "$REPORT/npatch.log"
@@ -265,7 +276,7 @@ with zipfile.ZipFile(embed_path) as apk:
         raise SystemExit("Embedded APK did not record the original signature")
     # The whole point of this rebuild: the framework log must be mirrored to media so a
     # degraded feature is diagnosable without adb.
-    if not config.get("outputLog"):
+    if config.get("outputLog") is not True:
         raise SystemExit("Embedded APK did not enable outputLog")
 
     # The whole APK is kept intact inside the shell as a nested zip. Its own
