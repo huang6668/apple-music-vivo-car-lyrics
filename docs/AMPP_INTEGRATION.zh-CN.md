@@ -2,6 +2,15 @@
 
 更新：2026-09-17。分支：`embed-ampp-npatch`。
 
+## 上游 PR
+
+已提交 [Zennmn/AM-plus-plus#57](https://github.com/Zennmn/AM-plus-plus/pull/57)，
+源码提交 `db55bc6`。包含 nullable nativeLibraryDir 的空值处理，以及
+已验证的 `s8.F.B` → `s8.F.x` 查询兼容；不包含本项目的 NPatch 原生库提取代码。
+因此该 PR 的空值修复不等同于解决所有原生库加载问题。
+JDK 17 / Kotlin 1.9.24 编译并运行了 22 项相关 JVM 测试，全部通过；
+提交时尚无上游 Android CI 结果。手机仍保留已验证的 #97，不受 PR 影响。
+
 ## 安装约束
 
 - 不卸载 Apple Music，不清除数据；只允许同签名 `adb install -r`。
