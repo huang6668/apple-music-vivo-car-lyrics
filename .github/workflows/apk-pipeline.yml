@@ -232,6 +232,15 @@ jobs:
             cp "$source" "$focused/files/$source"
           done < "$report/focused-paths.txt"
 
+          # 6.5.3 renamed Media3's ControllerInfo from B2$e to t2$e. Keep the full
+          # class beside the callback source so a package-name hook is derived from
+          # its actual field layout rather than an obfuscation guess.
+          controller_info=work/apktool/smali/E3/t2\$e.smali
+          if [[ -f "$controller_info" ]]; then
+            mkdir -p "$focused/files/$(dirname "$controller_info")"
+            cp "$controller_info" "$focused/files/$controller_info"
+          fi
+
           cp "$report"/*.txt "$focused/" 2>/dev/null || true
           cp "$report"/*.log "$focused/" 2>/dev/null || true
           tar -C "$focused" -czf "$report/focused-sources.tar.gz" files
