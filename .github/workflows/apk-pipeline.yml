@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      APK_NAME: apple-music-6-5-2.apk
+      APK_NAME: apple-music-6-5-3-base.apk
       APKTOOL_VERSION: '2.11.1'
       JADX_VERSION: '1.5.1'
       BUILD_TOOLS_VERSION: '35.0.0'
@@ -38,8 +38,8 @@ jobs:
       # the author's 902 embed. Runtime feature compatibility still needs device testing.
       NPATCH_URL: 'https://github.com/7723mod/NPatch/releases/download/v1.0.7/jar-v1.0.7-741-release.jar'
       NPATCH_SHA256: '855c6499ac871663ae6c02dcb3a32cbbdfa88d67a312094249cc54e7f3ec8252'
-      AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.5.5/AM-plus-plus-v1.5.5.apk'
-      AMPP_SHA256: '2cc83a041eb0ffb382c8dbe07736d50fee4544961cf517b3f911d103aa279c92'
+      AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.6.1/AM-plus-plus-v1.6.1.apk'
+      AMPP_SHA256: '424bbfd7697ce72a308c1bb2deba80e3656e40cb3c052efce578ceed8b7b4d02'
 
     steps:
       - uses: actions/checkout@v4
@@ -241,6 +241,18 @@ jobs:
           find "$report" -maxdepth 1 -type f -printf '%f\t%s bytes\n' \
             | LC_ALL=C sort > "$report/report-files.txt"
 
+      - name: Upload analysis report
+        if: ${{ !inputs.rebuild }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-music-analysis
+          path: |
+            payload/out/report
+            payload/out/focused
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Apply reviewed patches
         if: ${{ inputs.rebuild }}
         run: bash ../cloud-patch/apply.sh
@@ -282,10 +294,10 @@ jobs:
           mkdir -p "$tools"
 
           curl --fail --location --retry 3 "$NPATCH_URL" -o "$tools/npatch.jar"
-          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.5.5.apk"
+          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.1.apk"
 
           npatch_actual="$(sha256sum "$tools/npatch.jar" | awk '{print $1}')"
-          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.5.5.apk" | awk '{print $1}')"
+          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.1.apk" | awk '{print $1}')"
           [[ "${NPATCH_SHA256,,}" == "$npatch_actual" ]] || {
             echo "npatch.jar SHA-256 mismatch" >&2
             exit 1
@@ -296,7 +308,7 @@ jobs:
           }
 
           NPATCH_JAR="$tools/npatch.jar" \
-          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.5.5.apk" \
+          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.1.apk" \
             bash ../cloud-patch/embed-ampp.sh
 
       # continue-on-error above keeps a broken wrapper from costing the main build its Release,
