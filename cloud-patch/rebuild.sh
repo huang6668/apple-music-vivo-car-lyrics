@@ -89,6 +89,33 @@ if [[ -x "$BT/dexdump" ]]; then
 fi
 sha256sum "out/report/$HELPER_DEX_NAME" > out/report/helper-dex.sha256
 
+# Inject native libraries from split configs if available (to synthesize standalone APK)
+python3 - out/app-unsigned.apk <<'PY'
+import glob
+import os
+import sys
+import zipfile
+
+unsigned_apk = sys.argv[1]
+splits_dir = 'input/splits'
+if os.path.isdir(splits_dir):
+    split_apks = sorted(glob.glob(os.path.join(splits_dir, 'split_config.*.apk')))
+    lib_splits = [p for p in split_apks if any(a in p for a in ['arm64_v8a', 'armeabi_v7a'])]
+    if lib_splits:
+        print('Injecting native libraries from split APKs...')
+        added = 0
+        with zipfile.ZipFile(unsigned_apk, 'a') as apk:
+            existing = set(apk.namelist())
+            for split in lib_splits:
+                with zipfile.ZipFile(split, 'r') as sz:
+                    for item in sz.infolist():
+                        if item.filename.startswith('lib/') and item.filename not in existing:
+                            apk.writestr(item, sz.read(item.filename))
+                            existing.add(item.filename)
+                            added += 1
+        print('Injected %d native library files into %s' % (added, unsigned_apk))
+PY
+
 "$BT/zipalign" -p -f -v 4 out/app-unsigned.apk out/app-aligned.apk
 
 printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$SIGNING_KEY"
