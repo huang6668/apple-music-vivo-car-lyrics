@@ -110,6 +110,7 @@ if os.path.isdir(splits_dir):
                 with zipfile.ZipFile(split, 'r') as sz:
                     for item in sz.infolist():
                         if item.filename.startswith('lib/') and item.filename not in existing:
+                            item.compress_type = zipfile.ZIP_STORED
                             apk.writestr(item, sz.read(item.filename))
                             existing.add(item.filename)
                             added += 1
