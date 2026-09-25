@@ -207,18 +207,18 @@ import re
 import sys
 
 root = sys.argv[1]
-manager_paths = glob.glob(root + "/smali*/com/apple/android/music/player/P.smali")
+manager_paths = glob.glob(root + "/smali*/com/apple/android/music/player/Q.smali")
 if len(manager_paths) != 1:
     raise SystemExit("Expected exactly one final MediaPlaybackManager P.smali, found %d" % len(manager_paths))
 text = open(manager_paths[0], encoding="utf-8").read()
-connection_paths = glob.glob(root + "/smali*/com/apple/android/music/player/c0.smali")
+connection_paths = glob.glob(root + "/smali*/com/apple/android/music/player/e0.smali")
 if len(connection_paths) != 1:
     raise SystemExit("Expected exactly one final MediaSession callback c0.smali, found %d" % len(connection_paths))
 connection_text = open(connection_paths[0], encoding="utf-8").read()
 
 checks = (
     (text,
-     "public final I(Lv3/t;I)V",
+     "public final F(Lv3/t;I)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     (text,
      "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
@@ -233,7 +233,7 @@ checks = (
      "public final seekTo(J)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V"),
     (connection_text,
-     "public final e(LE3/B2;LE3/B2$e;)V",
+     "public final p(LE3/t2;LE3/t2$e;)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onAtomicControllerConnected(Ljava/lang/String;)V"),
 )
 
@@ -256,7 +256,7 @@ for source, signature, call in checks:
         )
 
 native_blocks = re.findall(
-    r"(?ms)^\.method public final I\(Lv3/t;I\)V\n.*?^\.end method$",
+    r"(?ms)^\.method public final F\(Lv3/t;I\)V\n.*?^\.end method$",
     text,
 )
 if len(native_blocks) != 1:
@@ -266,14 +266,14 @@ native_order = (
     native_block.find("if-nez p2, :cond_4"),
     native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     native_block.find("invoke-virtual {p1}, Lv3/t;->hashCode()I"),
-    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/P;->j:Lv3/t;"),
+    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/Q;->j:Lv3/t;"),
 )
 if -1 in native_order or tuple(sorted(native_order)) != native_order:
     raise SystemExit("Final native metadata hook is outside the guarded stock publish path")
 PY
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/Q.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/c0.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/e0.smali' -print -quit)" \
   > out/report/final-connection-smali-path.txt
 unzip -Z1 out/apple-music-vivo-car-lyrics-debug.apk \
   | grep -E '^classes[0-9]*\.dex$' \

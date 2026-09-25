@@ -5,8 +5,8 @@ patch_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 patch_file="$patch_root/apple-vivo-car-lyrics.patch"
 helper_source="$patch_root/java/com/apple/android/music/player/VivoCarLyrics.java"
 paginator_source="$patch_root/java/com/apple/android/music/player/ClusterLyricsPaginator.java"
-manager_target=work/apktool/smali_classes2/com/apple/android/music/player/P.smali
-connection_target=work/apktool/smali_classes2/com/apple/android/music/player/c0.smali
+manager_target=work/apktool/smali_classes2/com/apple/android/music/player/Q.smali
+connection_target=work/apktool/smali_classes2/com/apple/android/music/player/e0.smali
 manifest=work/apktool/AndroidManifest.xml
 atomic_service_action='com.vivo.musicwidgetmix.support.service'
 
@@ -31,7 +31,7 @@ connection_text = open(connection_path, encoding="utf-8").read()
 
 checks = (
     (manager_text,
-     "public final I(Lv3/t;I)V",
+     "public final F(Lv3/t;I)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     (manager_text,
      "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
@@ -46,7 +46,7 @@ checks = (
      "public final seekTo(J)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V"),
     (connection_text,
-     "public final e(LE3/B2;LE3/B2$e;)V",
+     "public final p(LE3/t2;LE3/t2$e;)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onAtomicControllerConnected(Ljava/lang/String;)V"),
 )
 
@@ -69,7 +69,7 @@ for text, signature, call in checks:
         )
 
 native_blocks = re.findall(
-    r"(?ms)^\.method public final I\(Lv3/t;I\)V\n.*?^\.end method$",
+    r"(?ms)^\.method public final F\(Lv3/t;I\)V\n.*?^\.end method$",
     manager_text,
 )
 if len(native_blocks) != 1:
