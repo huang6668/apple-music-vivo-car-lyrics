@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      APK_NAME: apple-music-6-5-3-base.apk
+      APK_NAME: apple-music-6-5-3.apk
       APKTOOL_VERSION: '2.11.1'
       JADX_VERSION: '1.5.1'
       BUILD_TOOLS_VERSION: '35.0.0'
