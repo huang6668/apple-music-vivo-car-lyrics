@@ -79,7 +79,7 @@ native_order = (
     native_block.find("if-nez p2, :cond_4"),
     native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     native_block.find("invoke-virtual {p1}, Lv3/t;->hashCode()I"),
-    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/P;->j:Lv3/t;"),
+    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/Q;->j:Lv3/t;"),
 )
 if -1 in native_order or tuple(sorted(native_order)) != native_order:
     raise SystemExit("Native metadata hook must remain between the publish guard and stock hash/store")
