@@ -646,7 +646,12 @@ public final class VivoCarLyrics {
     private static void consumeSongInfo(Object manager, long generation, Object songInfoPtr) throws Exception {
         Object songInfo = invokeRequired(songInfoPtr, "get");
         Object sections = invokeRequired(songInfo, "getSections");
-        Class<?> lineAccessClass = Class.forName("com.apple.android.music.ttml.i");
+        Class<?> lineAccessClass;
+        try {
+            lineAccessClass = Class.forName("com.apple.android.music.ttml.j");
+        } catch (ClassNotFoundException e) {
+            lineAccessClass = Class.forName("com.apple.android.music.ttml.i");
+        }
         Object lineAccess = constructCompatible(lineAccessClass, sections);
         int count = intValue(invokeRequired(lineAccess, "b"), 0);
         ArrayList<Long> times = new ArrayList<Long>();
