@@ -125,6 +125,30 @@ for required_action in native_actions:
         raise SystemExit("Native service action must occur exactly once in target filter: %s" %
                          required_action)
 
+# Remove split attributes from <manifest> so Android treats rebuilt package as a standalone APK
+split_attrs = [
+    "{%s}requiredSplitTypes" % android,
+    "{%s}splitTypes" % android,
+    "{%s}isSplitRequired" % android,
+    "requiredSplitTypes",
+    "splitTypes",
+    "isSplitRequired",
+]
+manifest_modified = False
+for attr in split_attrs:
+    if attr in root.attrib:
+        del root.attrib[attr]
+        manifest_modified = True
+
+# Remove split meta-data from <application> (e.g. com.android.vending.splits.required)
+app = root.find("./application")
+if app is not None:
+    for meta in list(app.findall("meta-data")):
+        m_name = meta.get(name_attr, "")
+        if m_name in ("com.android.vending.splits.required", "com.android.vending.splits") or "split" in m_name.lower():
+            app.remove(meta)
+            manifest_modified = True
+
 existing = [action for action in root.findall(".//action")
             if action.get(name_attr) == action_name]
 if len(existing) > 1:
@@ -135,6 +159,9 @@ if not existing:
     closing_indent = target_filter[-1].tail if len(target_filter) else None
     action = ET.SubElement(target_filter, "action", {name_attr: action_name})
     action.tail = closing_indent
+    manifest_modified = True
+
+if manifest_modified:
     directory = os.path.dirname(os.path.abspath(manifest_path))
     fd, temporary_path = tempfile.mkstemp(prefix="AndroidManifest.", suffix=".tmp",
                                           dir=directory)

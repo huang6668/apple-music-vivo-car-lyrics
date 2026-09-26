@@ -200,6 +200,25 @@ for required_action in required:
 all_actions = [action.get(name_attr) for action in root.findall(".//action")]
 if all_actions.count(action_name) != 1:
     raise SystemExit("Atomic Player service action must occur exactly once in final manifest")
+
+split_attrs = [
+    "{http://schemas.android.com/apk/res/android}requiredSplitTypes",
+    "{http://schemas.android.com/apk/res/android}splitTypes",
+    "{http://schemas.android.com/apk/res/android}isSplitRequired",
+    "requiredSplitTypes",
+    "splitTypes",
+    "isSplitRequired",
+]
+for attr in split_attrs:
+    if attr in root.attrib:
+        raise SystemExit("Final manifest still contains split attribute: %s" % attr)
+
+app = root.find("./application")
+if app is not None:
+    for meta in app.findall("meta-data"):
+        m_name = meta.get(name_attr, "")
+        if "split" in m_name.lower():
+            raise SystemExit("Final manifest still contains split meta-data: %s" % m_name)
 PY
 printf '%s\n' "$ATOMIC_SERVICE_ACTION" > out/report/verified-atomic-player-action.txt
 grep -Fq 'Verified using v3 scheme (APK Signature Scheme v3): true' out/report/patched-signature.txt || {
