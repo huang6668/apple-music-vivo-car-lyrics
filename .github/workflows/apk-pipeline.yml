@@ -109,10 +109,7 @@ jobs:
           apktool_actual="$(sha256sum "$tools/apktool.jar" | awk '{print $1}')"
           jadx_actual="$(sha256sum "$tools/jadx.zip" | awk '{print $1}')"
           apkeditor_actual="$(sha256sum "$tools/apkeditor.jar" | awk '{print $1}')"
-          printf 'apktool_%s.jar  %s
-jadx-%s.zip  %s
-apkeditor.jar  %s
-' \
+          printf 'apktool_%s.jar  %s\njadx-%s.zip  %s\napkeditor.jar  %s\n' \
             "$APKTOOL_VERSION" "$apktool_actual" \
             "$JADX_VERSION" "$jadx_actual" \
             "$apkeditor_actual" \
