@@ -508,11 +508,23 @@ public final class VivoCarLyrics {
         Constructor<?> constructor = viewModelClass.getConstructor(Application.class);
         Object viewModel = constructor.newInstance(application);
         Object liveData = invokeRequired(viewModel, "getLyricsResult");
-        Class<?> observerType = Class.forName("androidx.lifecycle.L");
+        Method observeForever = null;
+        for (Method method : liveData.getClass().getMethods()) {
+            if (!"observeForever".equals(method.getName()) || method.getParameterTypes().length != 1) {
+                continue;
+            }
+            Class<?> parameterType = method.getParameterTypes()[0];
+            if (observeForever == null || parameterType.isInterface()) {
+                observeForever = method;
+            }
+        }
+        if (observeForever == null) {
+            throw new NoSuchMethodException(liveData.getClass().getName() + ".observeForever(Observer)");
+        }
+        Class<?> observerType = observeForever.getParameterTypes()[0];
         final LyricsObserver handler = new LyricsObserver(manager, generation, playbackItem, liveData, observerType);
         Object observer = Proxy.newProxyInstance(observerType.getClassLoader(), new Class<?>[]{observerType}, handler);
         handler.observer = observer;
-        Method observeForever = liveData.getClass().getMethod("observeForever", observerType);
         observeForever.invoke(liveData, observer);
         MAIN.postDelayed(new Runnable() {
             @Override
