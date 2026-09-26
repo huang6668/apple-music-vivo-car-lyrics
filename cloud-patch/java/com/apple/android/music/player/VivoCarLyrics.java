@@ -1475,7 +1475,12 @@ public final class VivoCarLyrics {
             return null;
         }
         Object metadata = getFieldValue(mediaItem, "d");
-        Class<?> converter = Class.forName("com.apple.android.music.player.O");
+        Class<?> converter;
+        try {
+            converter = Class.forName("com.apple.android.music.player.P");
+        } catch (ClassNotFoundException e) {
+            converter = Class.forName("com.apple.android.music.player.O");
+        }
         Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
         return method.invoke(null, metadata);
     }
