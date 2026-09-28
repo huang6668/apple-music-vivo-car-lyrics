@@ -17,6 +17,17 @@ public final class ModuleNativeLibrary {
 
     public static synchronized String resolve(ApplicationInfo info) {
         if (info == null) throw new IllegalStateException("AM++ module ApplicationInfo is null");
+        if ("com.apple.android.music".equals(info.packageName)) {
+            Application app;
+            try {
+                app = (Application) Class.forName("android.app.ActivityThread")
+                        .getMethod("currentApplication").invoke(null);
+            } catch (Exception error) {
+                throw new IllegalStateException("Cannot resolve Apple Music application", error);
+            }
+            if (app == null) throw new IllegalStateException("Apple Music application is unavailable");
+            info = app.getApplicationInfo();
+        }
         if (info.nativeLibraryDir != null
                 && new File(info.nativeLibraryDir, "libdexkit.so").isFile()) {
             return info.nativeLibraryDir;

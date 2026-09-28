@@ -13,6 +13,11 @@ on:
         required: true
         default: false
         type: boolean
+      standalone_module:
+        description: Build the combined lyrics and title-correction LSPosed module
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -348,6 +353,44 @@ jobs:
             echo "::warning::AM++ embedding did not produce an APK; the main build is unaffected"
           fi
 
+      - name: Build combined LSPosed module
+        id: standalone_module
+        if: ${{ inputs.rebuild && inputs.standalone_module }}
+        shell: bash
+        working-directory: payload
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools" out/standalone-module
+          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.2.apk"
+          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.2.apk" | awk '{print $1}')"
+          [[ "${AMPP_SHA256,,}" == "$ampp_actual" ]] || {
+            echo "AM++ module SHA-256 mismatch" >&2
+            exit 1
+          }
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/apple-music-vivo-car-lyrics-signing.p12"
+          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.2.apk" \
+            bash ../cloud-patch/ampp/build-standalone.sh \
+              "$tools/AM-plus-plus-v1.6.2.apk" \
+              out/standalone-module/combined-lsp-module.apk \
+              out/standalone-module/report
+
+      - name: Upload combined LSPosed module
+        if: ${{ inputs.rebuild && inputs.standalone_module && steps.standalone_module.outcome == 'success' && hashFiles('payload/out/standalone-module/combined-lsp-module.apk') != '' && hashFiles('payload/out/standalone-module/combined-lsp-module.apk.sha256') != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-lsp-module
+          path: |
+            payload/out/standalone-module/combined-lsp-module.apk
+            payload/out/standalone-module/combined-lsp-module.apk.sha256
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Create GitHub Release
         if: ${{ inputs.rebuild && success() }}
         env:
@@ -399,6 +442,7 @@ jobs:
           path: |
             payload/out/report/
             payload/out/embed-ampp/report/
+            payload/out/standalone-module/report/
           retention-days: 7
           if-no-files-found: warn
           compression-level: 0

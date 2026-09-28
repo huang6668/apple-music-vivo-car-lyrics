@@ -100,6 +100,26 @@ class EmbedBuildTest(unittest.TestCase):
         self.assertIn("steps.embed_ampp.outcome == 'success'", condition)
         self.assertIn(APK_NAME + ".sha256", condition)
 
+    def test_standalone_module_workflow_and_patches_are_wired(self):
+        workflow = (ROOT / ".github/workflows/apk-pipeline.yml").read_text()
+        self.assertIn("standalone_module:", workflow)
+        self.assertIn("- name: Build combined LSPosed module", workflow)
+        upload = workflow.split("- name: Upload combined LSPosed module", 1)[1]
+        condition = upload.splitlines()[1]
+        self.assertIn("steps.standalone_module.outcome == 'success'", condition)
+        self.assertIn("combined-lsp-module.apk", condition)
+
+        script = (ROOT / "cloud-patch/ampp/build-standalone.sh").read_text()
+        for required in (
+            "patch_feature_trim.py",
+            "patch_catalog_concurrency.py",
+            "patch_title_correction_default.py",
+            "patch_hook_entry.py",
+            "com/vivo/musicwidgetmix/lyrics/*.java",
+            "com.apple.android.music\\ncom.vivo.musicwidgetmix",
+        ):
+            self.assertIn(required, script)
+
 
 if __name__ == "__main__":
     unittest.main()
