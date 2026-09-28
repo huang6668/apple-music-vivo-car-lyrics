@@ -21,30 +21,39 @@ def patch_file(path: Path) -> None:
         raise SystemExit("HookEntry.onPackageReady end not found")
     method_end += len(".end method")
     original = text[method_start:method_end]
+    method_locals = re.search(r"^    \.locals (?P<count>\d+)$", original, re.MULTILINE)
+    if not method_locals:
+        raise SystemExit("HookEntry.onPackageReady locals declaration not found")
+    locals_count = int(method_locals.group("count"))
+    if locals_count < 4:
+        original = original.replace(
+            method_locals.group(0),
+            "    .locals 4",
+            1,
+        )
 
-    marker = (
+    insert_at = original.find(
         "    invoke-direct {p0, p1, v0}, "
         "Ldev/amenhancer/module/hook/HookEntry;->installApplicationBootstrap"
-        "(Ljava/lang/String;Ljava/lang/ClassLoader;)V\n\n"
-        "    return-void\n"
-        ".end method"
+        "(Ljava/lang/String;Ljava/lang/ClassLoader;)V\n"
     )
-    replacement = (
+    if insert_at < 0:
+        raise SystemExit("HookEntry application bootstrap call not found")
+    insert_at += len(
         "    invoke-direct {p0, p1, v0}, "
         "Ldev/amenhancer/module/hook/HookEntry;->installApplicationBootstrap"
-        "(Ljava/lang/String;Ljava/lang/ClassLoader;)V\n\n"
+        "(Ljava/lang/String;Ljava/lang/ClassLoader;)V\n"
+    )
+    dispatch = (
+        "\n"
         "    invoke-interface {p1}, "
-        "Lio/github/libxposed/api/XposedModuleInterface$PackageReadyParam;->getPackageName()Ljava/lang/String;\n\n"
-        "    move-result-object v1\n\n"
-        "    invoke-static {v1, v0}, "
-        "Lcom/vivo/musicwidgetmix/lyrics/AtomicServiceDiscoveryHook;->install"
-        "(Ljava/lang/String;Ljava/lang/ClassLoader;)V\n\n"
-        "    return-void\n"
-        ".end method"
+        "Lio/github/libxposed/api/XposedModuleInterface$PackageReadyParam;->getPackageName()Ljava/lang/String;\n"
+        "    move-result-object p1\n"
+        "    invoke-static {p1, v0}, "
+        "Lcom/vivo/musicwidgetmix/lyrics/ModuleDispatch;->install"
+        "(Ljava/lang/String;Ljava/lang/ClassLoader;)V\n"
     )
-    if marker not in original:
-        raise SystemExit("HookEntry package dispatch insertion point not found")
-    patched = original.replace(marker, replacement)
+    patched = original[:insert_at] + dispatch + original[insert_at:]
     path.write_text(text[:method_start] + patched + text[method_end:], encoding="utf-8")
 
 

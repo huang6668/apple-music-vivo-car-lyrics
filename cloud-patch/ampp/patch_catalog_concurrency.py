@@ -6,9 +6,9 @@ from pathlib import Path
 
 FIELD = "lockedIsrcFallbackPending:Ljava/util/List;"
 PATTERN = re.compile(
-    r"new-instance p1, Ljava/util/ArrayList;\n\n"
-    r"invoke-direct \{p1\}, Ljava/util/ArrayList;-><init>\(\)V\n\n"
-    r"check-cast p1, Ljava/util/List;\n\n"
+    r"new-instance p1, Ljava/util/ArrayList;\n\s*"
+    r"invoke-direct \{p1\}, Ljava/util/ArrayList;-><init>\(\)V\n\s*"
+    r"check-cast p1, Ljava/util/List;\n\s*"
     r"iput-object p1, p0, Lio/github/proify/lyricon/amprovider/xposed/"
     r"AppleInternalCatalogResolver;->" + re.escape(FIELD)
 )
@@ -24,7 +24,7 @@ REPLACEMENT = (
 
 def patch_file(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    if text.count(PATTERN) != 1:
+    if len(PATTERN.findall(text)) != 1:
         raise SystemExit("Expected exactly one locked ISRC pending list initializer")
     path.write_text(PATTERN.sub(REPLACEMENT, text), encoding="utf-8")
 

@@ -10,19 +10,24 @@ input="${1:?AM++ module APK path is required}"
 output="${2:?output APK path is required}"
 workdir="${3:?output report directory is required}"
 
-mkdir -p "$work/classes" "$work/dex" "$workdir"
+mkdir -p "$work/classes" "$work/stub-classes" "$work/dex" "$workdir"
 java -Xmx2g -jar "$tools/apktool.jar" d -f -r "$input" -o "$work/module"
 python3 "$compat_root/patch_liquid_glass.py" "$work/module"
 python3 "$compat_root/patch_feature_trim.py" "$work/module"
 python3 "$compat_root/patch_catalog_concurrency.py" "$work/module"
 python3 "$compat_root/patch_title_correction_default.py" "$work/module"
-python3 "$compat_root/patch_native_directory.py" "$work/module"
 python3 "$compat_root/patch_catalog_query.py" "$work/module"
 python3 "$compat_root/patch_hook_entry.py" "$work/module"
+scope="$work/module/unknown/META-INF/xposed/scope.list"
+[[ -f "$scope" ]] || { echo "Module scope list not found" >&2; exit 1; }
+printf 'com.apple.android.music\ncom.vivo.musicwidgetmix\n' | tee "$scope" >/dev/null
 
-javac --release 8 -classpath "$platform" -d "$work/classes" \
+javac --release 8 -d "$work/stub-classes" \
+  "$compat_root"/stubs/dev/amenhancer/module/hook/ModernMethodHook.java
+javac --release 8 -classpath "$platform:$work/stub-classes" -d "$work/classes" \
   "$compat_root"/java/dev/amenhancer/compat/*.java \
-  "$compat_root"/java/com/vivo/musicwidgetmix/lyrics/*.java
+  "$compat_root"/java/com/vivo/musicwidgetmix/lyrics/*.java \
+  "$compat_root"/java/com/apple/android/music/player/*.java
 jar --create --file "$work/compat.jar" -C "$work/classes" .
 "$bt/d8" --min-api 30 --output "$work/dex" "$work/compat.jar"
 
@@ -38,12 +43,12 @@ with zipfile.ZipFile(sys.argv[1], "a") as apk:
         number += 1
     apk.writestr("classes%d.dex" % number, pathlib.Path(sys.argv[2]).read_bytes())
     for entry in ("META-INF/xposed/module.prop", "META-INF/xposed/java_init.list",
-                  "META-INF/xposed/scope.list", "lib/arm64-v8a/libdexkit.so"):
+                  "lib/arm64-v8a/libdexkit.so"):
         if entry not in apk.namelist():
             raise SystemExit("Rebuilt module lost " + entry)
     scope = apk.read("META-INF/xposed/scope.list").decode("utf-8").split()
-    if "com.vivo.musicwidgetmix" not in scope:
-        apk.writestr("META-INF/xposed/scope.list", "com.apple.android.music\ncom.vivo.musicwidgetmix\n")
+    if scope != ["com.apple.android.music", "com.vivo.musicwidgetmix"]:
+        raise SystemExit("Unexpected module scope: " + repr(scope))
 PY
 
 "$bt/zipalign" -f -p 4 "$work/module-unsigned.apk" "$work/module-aligned.apk"

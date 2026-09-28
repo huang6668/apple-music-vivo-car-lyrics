@@ -5,7 +5,8 @@ from pathlib import Path
 
 METHOD = (
     ".method public final getTitleCorrectionEnabled()Z\n"
-    "    .locals 1\n\n"
+    "    .locals 0\n\n"
+    "    .line 23\n"
     "    iget-boolean p0, p0, "
     "Ldev/amenhancer/module/model/ModuleSettings;->titleCorrectionEnabled:Z\n\n"
     "    return p0\n"

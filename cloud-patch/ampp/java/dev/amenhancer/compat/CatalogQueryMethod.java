@@ -10,9 +10,17 @@ public final class CatalogQueryMethod {
     public static Method resolve(Class<?> clazz, String preferredName)
             throws NoSuchMethodException {
         Method method = find(clazz, preferredName);
-        // The r38 host's R8 variant maps the author's s8.F.B catalog query to x.
-        if (method == null && clazz.getName().equals("s8.F") && preferredName.equals("B")) {
-            method = find(clazz, "x");
+        if (method == null && preferredName.equals("B")) {
+            String className = clazz.getName();
+            String renamed = null;
+            if ("s8.F".equals(className)) {
+                renamed = "x";
+            } else if ("u8.E".equals(className)) {
+                renamed = "v";
+            }
+            if (renamed != null) {
+                method = find(clazz, renamed);
+            }
         }
         if (method == null) {
             throw new NoSuchMethodException(

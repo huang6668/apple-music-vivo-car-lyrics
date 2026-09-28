@@ -88,12 +88,7 @@ def patch_file(path: Path) -> None:
     method_end += len(".end method")
 
     original_method = text[method_start:method_end]
-    expected_features = (
-        "DualPaneFeature",
-        "TitleCorrectionFeature",
-        "AppleMusicDpiOverrideFeature",
-    )
-    if not all(feature in original_method for feature in expected_features):
+    if "TitleCorrectionFeature" not in original_method:
         raise SystemExit("Unexpected productionFeatureInstallationModule layout")
 
     text = text[:method_start] + TRIMMED_METHOD + text[method_end:]

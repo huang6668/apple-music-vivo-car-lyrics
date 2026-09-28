@@ -4,15 +4,15 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
+import android.util.Log;
+import android.util.SparseArray;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
-import dev.amenhancer.module.hook.ModernMethodHook;
-import dev.amenhancer.module.hook.ModernXposedRuntime;
-
-public final class AtomicServiceDiscoveryHook extends ModernMethodHook {
+public final class AtomicServiceDiscoveryHook extends MethodHook {
+    private static final String TAG = "AppleMusicLyrics";
     private static final String ACTION = "com.vivo.musicwidgetmix.support.service";
     private static final ComponentName APPLE_MUSIC = new ComponentName(
             "com.apple.android.music", "com.apple.android.music.player.MediaPlaybackService");
@@ -22,24 +22,19 @@ public final class AtomicServiceDiscoveryHook extends ModernMethodHook {
 
     private static final AtomicServiceDiscoveryHook HOOK = new AtomicServiceDiscoveryHook();
 
-    public static void install(String packageName, ClassLoader classLoader) {
+    public static void install(String packageName) {
         if (!"com.vivo.musicwidgetmix".equals(packageName)) {
             return;
         }
         try {
             Class<?> type = Class.forName("android.app.ApplicationPackageManager");
-            for (Method method : type.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (!"queryIntentServices".equals(method.getName())
-                        || parameters.length != 2
-                        || !Intent.class.equals(parameters[0])
-                        || (!int.class.equals(parameters[1]) && !Integer.class.equals(parameters[1]))) {
-                    continue;
-                }
-                ModernXposedRuntime.INSTANCE.hookMethod(method, HOOK);
+            Method method = type.getDeclaredMethod("queryIntentServices", Intent.class, int.class);
+            method.setAccessible(true);
+            if (!ModernHookBridge.hook(method, HOOK)) {
+                Log.e(TAG, "Unable to hook PackageManager.queryIntentServices");
             }
         } catch (Throwable error) {
-            ModernXposedRuntime.INSTANCE.log("Atomic service discovery hook failed", error);
+            Log.e(TAG, "Atomic service discovery hook install failed", error);
         }
     }
 
