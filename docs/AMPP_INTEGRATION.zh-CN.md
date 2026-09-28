@@ -1,6 +1,20 @@
 # AM++ 嵌入版兼容调试
 
-更新：2026-09-17。分支：`embed-ampp-npatch`。
+更新：2026-09-28。分支：`embed-ampp-npatch`。
+
+## 当前标准流程
+
+Apple Music 新版本通常以 `.apkm` 发布。更新流程固定为：
+
+1. 本地只用 `unzip` 把 `.apkm` 解到 `payload.tar` 的 `input/splits/`
+   （保留 `base.apk` 和全部 `split_config.*.apk`），重新生成 `payload.tar.part.*` 和 `payload.sha256`。
+2. 先跑 `rebuild=false` 分析，按 `docs/APK_UPDATE_GUIDE.zh-CN.md` 重新定位歌词补丁的六个 Hook 和反射目标。
+3. 适配通过后触发 `rebuild=true`、`embed_ampp=true`、`standalone_module=false`。
+4. 只下载并覆盖安装 `apple-music-vivo-car-lyrics-ampp-npatched` artifact。
+5. 当前手机没有 root / LSPosed，不要安装 `combined-lsp-module`；该实验方案不是当前路径。
+
+内嵌 AM++ v1.6.2 只安装“修正歌曲名”功能，并默认关闭液态玻璃。设置界面没有裁剪，
+所以仍会显示 AM++ 的旧设置项；这不代表对应功能仍被安装。
 
 ## 上游 PR
 
@@ -94,7 +108,7 @@ Java 兼容测试。APK SHA-256：
 ```sh
 python3 -m unittest discover -s cloud-patch/tests -p 'test_*.py' -v
 gh workflow run 'APK analysis and rebuild' --ref embed-ampp-npatch \
-  -f rebuild=true -f embed_ampp=true
+  -f rebuild=true -f embed_ampp=true -f standalone_module=false
 ```
 
 嵌入步骤允许独立失败，因此必须检查该步骤自身成功且 APK/校验和均存在，

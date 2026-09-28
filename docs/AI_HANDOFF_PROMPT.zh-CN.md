@@ -4,9 +4,10 @@ Apple Music 出新版本时，把下面这段话、新版 APK 和本仓库一起
 
 ```text
 我要把新版 Apple Music Android APK 移植本仓库已有的 vivo 车机歌词 + 原子随身听歌词/进度条功能。
+最终安装目标是内嵌 AM++ 的“修正歌曲名”版本；我的手机没有 root / LSPosed。
 
 输入：
-- 新版 APK：<APK 路径或上传文件名>
+- 新版 APKM：<APKM 路径或上传文件名>
 - 仓库：huang6668/apple-music-vivo-car-lyrics（当前基线 r38，见 docs/APK_UPDATE_GUIDE.zh-CN.md 第 1 节）
 - 必读文档（按顺序）：
   1. docs/APK_UPDATE_GUIDE.zh-CN.md   —— 移植手册，第 0 节是路线图，第 3 节协议字段必须原样保留，第 4/5 节是定位配方
@@ -19,7 +20,7 @@ Apple Music 出新版本时，把下面这段话、新版 APK 和本仓库一起
 3. 在新分支上工作，构建成功并经我确认后再合并 main。workflow_dispatch 只能触发已存在于 main 的 workflow。
 
 要做的事（对应指南第 0 节路线图）：
-A. 记录新 APK 的 SHA-256、包名、versionName、versionCode；按指南 7.1 把 APK 切片装进 payload.tar.part.*，更新 payload.sha256 和 workflow 里的 APK_NAME。
+A. 解开 APKM，记录 base/split APK 的 SHA-256、包名、versionName、versionCode；按指南 7.1 把 base.apk 与 split_config.*.apk 装进 payload.tar/input/splits/，更新 payload.sha256 和 workflow 里的 APK_NAME。
 B. 先只分析：gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=false，下载 apk-results-<run>-report。
 C. 用指南第 4 节表格逐条重新定位辅助类的反射目标，用第 5 节重新定位六个 Hook：
    - onNativeMediaItem：原生 MediaItem 发布路径，守卫之后、hashCode 之前
@@ -28,8 +29,9 @@ C. 用指南第 4 节表格逐条重新定位辅助类的反射目标，用第 5
    - onAtomicControllerConnected：Media3 onPostConnect，从 ControllerInfo 取包名
    给我一张"6.5.2 旧名 → 新版名"对照表，说明每条是怎么确认的。
 D. 修改 VivoCarLyrics.java 反射目标、apple-vivo-car-lyrics.patch、apply.sh、rebuild.sh 的路径/签名/marker；更新 BUILD_MARKER；本地 python3 cloud-patch/tests/verify_source_contract.py 必须通过。
-E. 推送后 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true，等 Release v1.0.0-build-N 产出。
-F. 在指南第 13 节追加变更记录；如有新的未解决问题写入 KNOWN_ISSUES。
+E. 推送后先跑 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true -f embed_ampp=false -f standalone_module=false，确认普通歌词 APK 构建成功。
+F. 再跑 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true -f embed_ampp=true -f standalone_module=false，下载 apple-music-vivo-car-lyrics-ampp-npatched artifact；不要安装 combined-lsp-module。
+G. 在指南第 13 节追加变更记录；如有新的未解决问题写入 KNOWN_ISSUES。
 
 必须保持不变的协议（指南第 3 节）：
 - 车机 Session Extras：music.media.extras.LYRIC / LYRIC_IS_ALLOWED / NOTICE_CAR

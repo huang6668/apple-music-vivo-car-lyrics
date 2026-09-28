@@ -1,8 +1,8 @@
 # Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
-最后整理日期：2026-09-03（r38 基线）
+最后整理日期：2026-09-28（r38 歌词基线 + 6.5.3 内嵌 AM++ 流程）
 
-本文档是给"拿到新版 Apple Music APK 的下一个 AI"看的移植手册。目标：只依靠本仓库和本文档，把车机歌词、原子随身听歌词和进度条这三项功能重新做到新版 Apple Music 上，并在 GitHub Actions 里构建出可安装的测试 APK。
+本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：只依靠本仓库和本文档，把车机歌词、原子随身听歌词和进度条这三项功能重新做到新版 Apple Music 上，并在 GitHub Actions 里构建出可安装的测试 APK；最终交付给无 root 手机的版本是内嵌 AM++ 的“修正歌曲名”包。
 
 **读本文档时的三条铁律：**
 
@@ -16,12 +16,13 @@
 
 | 步骤 | 做什么 | 产物 / 验收 |
 |---|---|---|
-| A | 记录新 APK 的 SHA-256、包名、版本；把 APK 装进 payload（第 7.1 节） | `payload.sha256` 更新，`payload.tar.part.*` 每片 < 25 MB |
+| A | 把下载到的 APKM 解成 base/split APK；记录版本、包名与哈希；把 splits 装进 payload（第 7.1 节） | `payload.sha256` 更新，`payload.tar.part.*` 每片 < 25 MB |
 | B | 只分析不重建：`gh workflow run "APK analysis and rebuild" -f rebuild=false` | 下载 `apk-results-<run>-report`，拿到 `focused-sources.tar.gz`、`location-hits.txt` |
 | C | 用第 4 节的"定位配方"重新找出 6 个 Hook 点和全部反射目标 | 一张"旧名 → 新名"对照表 |
 | D | 改 `VivoCarLyrics.java` 的反射目标；改 `apple-vivo-car-lyrics.patch`、`apply.sh`、`rebuild.sh` 中的类路径 / 方法签名 / marker | 本地 `python3 cloud-patch/tests/verify_source_contract.py` 通过 |
-| E | 提交、推送（需代理），确认 `HEAD == origin/<branch>` 后 `gh workflow run ... -f rebuild=true` | Release `v1.0.0-build-N` 含 APK 与 sha256 |
-| F | 交给用户实车测试（第 9 节清单），未实测的项目标"待实车验证" | 更新第 13 节变更记录、`docs/KNOWN_ISSUES.zh-CN.md` |
+| E | 提交、推送（需代理），确认 `HEAD == origin/<branch>` 后先构建普通歌词 APK | Release `v1.0.0-build-N` 含 APK 与 sha256 |
+| F | 触发嵌入版构建：`embed_ampp=true`、`standalone_module=false` | artifact `apple-music-vivo-car-lyrics-ampp-npatched` 含 APK 与 sha256 |
+| G | 交给用户实车测试（第 9 节清单），未实测的项目标"待实车验证" | 更新第 13 节变更记录、`docs/KNOWN_ISSUES.zh-CN.md` |
 
 ---
 
@@ -205,17 +206,18 @@ VivoCarLyrics.onAtomicControllerConnected(String controllerPackageName)
 
 ## 7. 更新 APK 的标准流程
 
-### 7.1 把新 APK 装进 payload
+### 7.1 把新 APKM 解包并装进 payload
 
-原始 APK 不进 Git 历史，而是打进 `payload.tar` 再切成 `payload.tar.part.000…`（每片 20 MiB，最后一片 < 25 MB）。CI 第一步会 `cat payload.tar.part.* > payload.tar`，校验 `payload.sha256`，解到 `payload/` 后在其中运行后续脚本。
+新版本通常先下载为 `.apkm`。`.apkm` 本质是 zip 容器，里面是 base APK 和多个 `split_config.*.apk`。原始 APK 不进 Git 历史，而是把这些 split APK 放进 `payload.tar/input/splits/`，再把 `payload.tar` 切成 `payload.tar.part.000…`（每片 20 MiB，最后一片 < 25 MB）。CI 会重新合并 splits 并执行后续分析、歌词补丁和 AM++ 嵌入。
 
-payload.tar 内部结构（CI 脚本也在里面）：
+当前推荐 payload 内部结构（CI 脚本也在里面）：
 
 ```text
-input/SHA256SUMS                       # "<sha256>  apple-music-X-Y-Z.apk"
-input/parts/apple-music-X-Y-Z.apk.part.000 …   # 原 APK 切片，每片 < 25 MB
+input/SHA256SUMS                       # input/splits 模式下保留空文件
+input/splits/base.apk                  # APKM 解包得到的 base APK
+input/splits/split_config.*.apk        # ABI / density 等 split APK
 config/search-patterns.txt             # analyze.sh 的 grep 模式
-scripts/ci/reconstruct.sh              # 拼接 input/parts 并校验 SHA
+scripts/ci/reconstruct.sh              # 合并 input/splits，或拼接并校验 input/parts
 scripts/ci/analyze.sh                  # aapt2 badging / apktool d / jadx --deobf / grep
 scripts/ci/install-tools.sh, rebuild.sh, apply-patches.sh   # 旧版脚本，已被 cloud-patch/ 取代
 ```
@@ -223,20 +225,35 @@ scripts/ci/install-tools.sh, rebuild.sh, apply-patches.sh   # 旧版脚本，已
 新版本操作（全部用 macOS 自带命令，不装工具）：
 
 ```bash
-# 1. 解开旧 payload（在临时目录）
+# 1. 解开 APKM（只解包，不合并、不重签名）
 mkdir -p /tmp/payload && cat payload.tar.part.* | tar -xf - -C /tmp/payload
-# 2. 换 APK
-rm /tmp/payload/input/parts/*
-split -b 20m -d -a 3 "/path/新版.apk" /tmp/payload/input/parts/apple-music-X-Y-Z.apk.part.
-shasum -a 256 "/path/新版.apk" | sed 's#  .*#  apple-music-X-Y-Z.apk#' > /tmp/payload/input/SHA256SUMS
-# 3. 重新打包、切片、写校验
+unzip -q "/path/新版.apkm" -d /tmp/payload/input/splits
+
+# 2. 只保留 CI 需要的 split；如果 APKM 里带 icon.png / info.json，先移出 splits 目录
+# base.apk 与 split_config.*.apk 必须齐全，尤其是 arm64_v8a / xxxhdpi
+
+# 3. 记录 APKEditor 将在 CI 合并出的目标文件名；APK_NAME 与 workflow 保持一致
+APK_NAME=apple-music-6-5-4.apk
+
+# 4. input/splits 模式不使用 input/SHA256SUMS；保留空文件仅为兼容现有 payload 结构。
+#    payload.tar 的完整性由 payload.sha256 保证，split APK 由 APKEditor 在 CI 中合并。
+: > /tmp/payload/input/SHA256SUMS
+
+# 5. 重新打包、切片、写校验
 ( cd /tmp/payload && tar -cf /tmp/payload.tar . )
-rm payload.tar.part.* && split -b 20m -d -a 3 /tmp/payload.tar payload.tar.part.
+find payload.tar.part.* -delete
+split -b 20m -d -a 3 /tmp/payload.tar payload.tar.part.
 shasum -a 256 /tmp/payload.tar | sed 's#  .*#  payload.tar#' > payload.sha256
-rm -rf /tmp/payload /tmp/payload.tar
 ```
 
-然后把 `.github/workflows/apk-pipeline.yml` 里的 `APK_NAME` 改成新文件名，并在第 1 节记录新 SHA-256 / 版本。
+然后把 `.github/workflows/apk-pipeline.yml` 里的 `APK_NAME` 改成新文件名，并在第 1 节记录新 APKM / base APK / split 的 SHA-256 与版本。
+
+注意事项：
+
+- 不要把 APKM 当 APK 直接放进 payload；`reconstruct.sh` 需要的是 `input/splits/` 目录。
+- 不要只放 `base.apk`，否则 ABI / 资源 split 缺失。
+- 不要手工删除或改写 split 的签名；签名校验失败时先重新下载 APKM。
+- `input/parts/` 是旧的单 APK 切片路径；使用 APKM 更新时优先用 `input/splits/`。
 
 ### 7.2 只分析，不重建
 
@@ -287,13 +304,52 @@ legacy-bridge-*.txt / session-class-*.txt                Media3 legacy 桥接与
 ### 7.6 重建与验证
 
 ```bash
-gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true
+gh workflow run "APK analysis and rebuild" --ref <branch> \
+  -f rebuild=true -f embed_ampp=false -f standalone_module=false
 ```
 
 CI 会依次验证：契约测试 → apktool 重建 → javac/d8 → helper marker → zipalign → 固定签名 + 证书 pin → 包名/版本一致 → manifest 中合作 action 恰好一次且与 MediaBrowser 同一 filter → 六个 Hook 各恰好一次 → helper DEX 签名前后一致。成功后自动创建 Release `v1.0.0-build-<run_number>`，附 APK 与 `.sha256`。
 
 ```bash
 gh release download v1.0.0-build-<N> -p '*.apk' -p '*.sha256' -D downloads/
+```
+
+### 7.7 构建内嵌 AM++ 版（当前手机使用的安装包）
+
+歌词补丁确认能构建后，再触发内嵌版：
+
+```bash
+gh workflow run "APK analysis and rebuild" --ref <branch> \
+  -f rebuild=true -f embed_ampp=true -f standalone_module=false
+gh run watch <run-id> --exit-status
+```
+
+必须下载并安装 artifact：
+
+```text
+apple-music-vivo-car-lyrics-ampp-npatched
+├── apple-music-vivo-car-lyrics-ampp-npatched.apk
+└── apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
+```
+
+不要安装同一次运行的普通 `apple-music-vivo-car-lyrics-debug`，也不要安装
+`combined-lsp-module`。当前手机没有 root / LSPosed，只有 NPatch 内嵌版可用；
+`combined-lsp-module` 是实验性 LSPosed 方案，不用于日常安装。
+
+内嵌版包含：
+
+- r38 歌词补丁：车机歌词、原子随身听歌词、原子随身听进度条。
+- AM++ v1.6.2 的目录查询兼容修复，包括 6.5.3 的 `u8.E#B` → `u8.E#v`。
+- AM++ 功能层被裁剪为只安装“修正歌曲名”；液态玻璃默认关闭。
+- AM++ 设置界面未裁剪，所以旧设置项仍会显示。显示相同不代表包相同，应以
+  `dumpsys package com.apple.android.music` 的 `lastUpdateTime` 和 APK SHA-256 判断。
+
+安装命令只允许覆盖安装：
+
+```bash
+shasum -a 256 -c apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
+adb install -r apple-music-vivo-car-lyrics-ampp-npatched.apk
+adb shell dumpsys package com.apple.android.music | grep -E 'versionName|versionCode|lastUpdateTime'
 ```
 
 ## 8. 安装与签名限制
@@ -338,7 +394,7 @@ Key alias:     apple-music-vivo-car-lyrics
 .github/workflows/apk-pipeline.yml       分析 + 重建 + Release 入口（workflow_dispatch，输入 rebuild）
 .github/workflows/vivo-decompile.yml     jadx 反编译 vivo 侧 APK（原子随身听 / 车联），上传源码 artifact
 .github/workflows/kuwo-bridge.yml        独立的 KuWo 桥接原型构建
-payload.tar.part.* / payload.sha256      原 APK 切片 + CI 脚本 + search-patterns（见 7.1）
+payload.tar.part.* / payload.sha256      APKM 解出的 split APK + CI 脚本 + search-patterns（见 7.1）
 cloud-patch/apple-vivo-car-lyrics.patch  六个 Smali Hook 的 unified diff
 cloud-patch/apply.sh                     打补丁、插入 manifest action、校验 Hook 位置
 cloud-patch/rebuild.sh                   apktool b、编译辅助类、加 DEX、zipalign、固定签名、全部终检
@@ -346,6 +402,8 @@ cloud-patch/java/.../VivoCarLyrics.java  歌词加载、时间轴、逐句发布
 cloud-patch/java/.../ClusterLyricsPaginator.java  仪表分页（r37 起不再发布，保留编译与测试）
 cloud-patch/tests/verify_source_contract.py       源码契约：禁止重发 MediaItem、要求能力位 8 与 16
 cloud-patch/tests/.../ClusterLyricsPaginatorTest.java
+cloud-patch/embed-ampp.sh                把已打歌词补丁的 APK 包进 NPatch，并嵌入裁剪版 AM++
+cloud-patch/ampp/prepare-module.sh       AM++ 原生库 / 查询兼容修复与功能裁剪
 config/signing-cert-sha256.txt           固定签名证书 pin
 docs/KNOWN_ISSUES.zh-CN.md               未解决问题与已验证死路
 docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
@@ -363,6 +421,14 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 - 在第 13 节追加变更记录，并更新 `docs/KNOWN_ISSUES.zh-CN.md`。
 
 ## 13. 版本变更记录
+
+### 2026-09-28 - 标准化 APKM 更新与内嵌 AM++ 构建流程
+
+- 更新入口改为接收 `.apkm`，在本地只用 `unzip` 解出 `input/splits/base.apk` 与 `split_config.*.apk`；APKEditor 合并仍在 GitHub Actions 的 `reconstruct.sh` 中完成。
+- 新版本移植仍必须重新定位六个歌词 Hook 与全部反射目标，不允许盲套 6.5.2 / 6.5.3 混淆名。
+- 日常手机安装目标是 `embed_ampp=true`、`standalone_module=false` 生成的 `apple-music-vivo-car-lyrics-ampp-npatched` artifact。
+- 内嵌 AM++ 只安装“修正歌曲名”功能；设置界面未裁剪，旧选项仍会显示，不代表功能存在。
+- 明确当前手机没有 root / LSPosed，`combined-lsp-module` 不作为日常安装目标。
 
 ### 2026-09-03 - 车联 6.0.8.3 静态分析（无代码改动）
 

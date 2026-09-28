@@ -1,6 +1,6 @@
 # Apple Music vivo Car and Atomic Player Lyrics
 
-Private, manually triggered GitHub Actions workflow for analyzing and rebuilding the user-provided Apple Music 6.5.2 APK with shared lyrics support for vivo JoviInCar and Atomic Player.
+Private, manually triggered GitHub Actions workflow for analyzing and rebuilding the user-provided Apple Music APKM with shared lyrics support for vivo JoviInCar and Atomic Player, plus an embedded AM++ title-correction build.
 
 ## Scope
 
@@ -13,6 +13,7 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see `docs/KNOWN_ISSUES.zh-CN.md`).
 - Instrument-cluster (`ucar.media.metadata.*`) publishing was removed in r37; `ClusterLyricsPaginator` is kept compiled but unused.
 - Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Head-unit lyrics, Atomic Player lyrics and the Atomic progress bar are all confirmed working in the car (2026-09-04); r38 is the frozen baseline for future ports.
+- The current installable target for the unrooted phone is the NPatch-embedded artifact `apple-music-vivo-car-lyrics-ampp-npatched`: r38 lyrics plus a trimmed AM++ title-correction feature. AM++ settings still show legacy entries because only the feature-installation layer is trimmed.
 
 ## KuWo bridge prototype
 
@@ -45,10 +46,11 @@ third-party proxy session must be verified on the target vehicle.
 
 ## Workflow
 
-1. The original APK lives inside `payload.tar.part.*` (`input/parts/*` + `input/SHA256SUMS` + `scripts/ci/*`), verified by `payload.sha256`.
+1. The original APKM is unzipped locally into `payload.tar` (`input/splits/base.apk` and `split_config.*.apk`), then stored as `payload.tar.part.*`; GitHub Actions merges the splits with APKEditor.
 2. Run **Actions -> APK analysis and rebuild** with `rebuild=false` and review the `apk-results-<run>-report` artifact.
 3. Run again with `rebuild=true` once `cloud-patch/` is ready; a successful run publishes Release `v1.0.0-build-<run>`.
-4. **Actions -> Decompile vivo APK** decompiles a vivo-side APK stored as a GitHub Release (`atomic-apk-6.2.5.6` for Atomic Player, `carnetworking-apk-6.0.8.3` for the car app) when the vivo side needs to be inspected.
+4. For the phone build, run with `embed_ampp=true` and `standalone_module=false`, then install only `apple-music-vivo-car-lyrics-ampp-npatched`.
+5. **Actions -> Decompile vivo APK** decompiles a vivo-side APK stored as a GitHub Release (`atomic-apk-6.2.5.6` for Atomic Player, `carnetworking-apk-6.0.8.3` for the car app) when the vivo side needs to be inspected.
 
 All workflows are `workflow_dispatch` only and must exist on `main` to be triggered by name.
 Rebuilds require the repository secrets `ANDROID_SIGNING_KEY_BASE64` and
