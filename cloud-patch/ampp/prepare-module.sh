@@ -19,6 +19,7 @@ javac --release 8 -d "$work/test-classes" \
 java -cp "$work/test-classes" CatalogQueryMethodTest
 java -Xmx2g -jar "$tools/apktool.jar" d -f -r "$input" -o "$work/module"
 python3 "$compat_root/patch_liquid_glass.py" "$work/module"
+python3 "$compat_root/patch_feature_trim.py" "$work/module"
 python3 "$compat_root/patch_native_directory.py" "$work/module"
 python3 "$compat_root/patch_catalog_query.py" "$work/module"
 javac --release 8 -classpath "$platform" -d "$work/classes" \
