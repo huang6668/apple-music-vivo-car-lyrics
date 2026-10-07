@@ -63,6 +63,7 @@ jobs:
           [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
           printf '%s  %s\n' "$expected" "$RUNNER_TEMP/payload.tar" | sha256sum -c -
           tar -xf "$RUNNER_TEMP/payload.tar" -C payload
+          find payload -name '._*' -delete || true
 
       - uses: actions/setup-java@v5
         with:
@@ -171,7 +172,11 @@ jobs:
           echo "APKEDITOR_JAR=$tools/APKEditor-snapshot.jar" >> "$GITHUB_ENV"
 
       - name: Reconstruct and verify original APK
-        run: scripts/ci/reconstruct.sh "$APK_NAME"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          find input/splits -name '._*' -delete 2>/dev/null || true
+          scripts/ci/reconstruct.sh "$APK_NAME"
         working-directory: payload
 
       - name: Decode and locate MediaSession/lyrics paths
