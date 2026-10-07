@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r38-2026-09-03";
+    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r39-2026-10-07";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -141,7 +141,7 @@ public final class VivoCarLyrics {
             if (advertiseAtomicLyricSupport(mediaItem) && lastKnownDuration > 0L) {
                 Object metadata = getFieldValue(mediaItem, "d");
                 if (metadata != null) {
-                    Bundle extras = (Bundle) getFieldValue(metadata, "I");
+                    Bundle extras = getMetadataExtras(metadata);
                     if (extras != null && !extras.containsKey(PUBLIC_DURATION)) {
                         extras.putLong(PUBLIC_DURATION, lastKnownDuration);
                     }
@@ -1324,7 +1324,7 @@ public final class VivoCarLyrics {
         try {
             Object mediaItem = invokeRequired(manager, "a");
             Object metadata = getFieldValue(mediaItem, "d");
-            Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            Bundle extras = getMetadataExtras(metadata);
             if (extras != null) {
                 ourSupport = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), -1L);
                 ourDuration = longValue(extras.get(PUBLIC_DURATION), -1L);
@@ -1344,7 +1344,7 @@ public final class VivoCarLyrics {
         if (metadata == null) {
             return false;
         }
-        Bundle extras = (Bundle) getFieldValue(metadata, "I");
+        Bundle extras = getMetadataExtras(metadata);
         if (extras == null) {
             return false;
         }
@@ -1371,7 +1371,7 @@ public final class VivoCarLyrics {
                 return false;
             }
             Object metadata = getFieldValue(mediaItem, "d");
-            Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            Bundle extras = getMetadataExtras(metadata);
             // Only the capability bit lives in MediaMetadata. The ucar cluster keys travel through
             // session Extras, so requiring them here would never be satisfied and would retrigger
             // the reapply loop forever.
@@ -1492,11 +1492,16 @@ public final class VivoCarLyrics {
             return null;
         }
         Object metadata = getFieldValue(mediaItem, "d");
-        Class<?> converter;
-        try {
-            converter = Class.forName("com.apple.android.music.player.P");
-        } catch (ClassNotFoundException e) {
-            converter = Class.forName("com.apple.android.music.player.O");
+        Class<?> converter = null;
+        for (String name : new String[]{"com.apple.android.music.player.Q", "com.apple.android.music.player.P", "com.apple.android.music.player.O"}) {
+            try {
+                converter = Class.forName(name);
+                break;
+            } catch (ClassNotFoundException ignored) {
+            }
+        }
+        if (converter == null) {
+            return null;
         }
         Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
         return method.invoke(null, metadata);
@@ -1627,7 +1632,7 @@ public final class VivoCarLyrics {
         try {
             Object mediaItem = invokeRequired(manager, "a");
             Object metadata = getFieldValue(mediaItem, "d");
-            Bundle extras = (Bundle) getFieldValue(metadata, "I");
+            Bundle extras = getMetadataExtras(metadata);
             long queueId = extras == null ? 0L : extras.getLong(APPLE_QUEUE_ID, 0L);
             if (queueId == expectedQueueId) {
                 resolved = stringValue(extras.getString(PUBLIC_MEDIA_ID));
@@ -1865,6 +1870,22 @@ public final class VivoCarLyrics {
             }
         }
         throw new NoSuchFieldException(type.getName() + "." + name);
+    }
+
+    private static Bundle getMetadataExtras(Object metadata) {
+        if (metadata == null) {
+            return null;
+        }
+        for (String fieldName : new String[]{"J", "I"}) {
+            try {
+                Object extras = getFieldValue(metadata, fieldName);
+                if (extras instanceof Bundle) {
+                    return (Bundle) extras;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     private static boolean booleanValue(Object value) {

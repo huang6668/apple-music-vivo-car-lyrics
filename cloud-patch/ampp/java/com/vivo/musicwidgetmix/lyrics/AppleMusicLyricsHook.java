@@ -36,19 +36,42 @@ public final class AppleMusicLyricsHook extends MethodHook {
         if (!"com.apple.android.music".equals(packageName)) {
             return;
         }
-        hook(classLoader, "com.apple.android.music.player.Q", "F",
+        String managerClass = "com.apple.android.music.player.S";
+        try {
+            classLoader.loadClass(managerClass);
+        } catch (ClassNotFoundException e) {
+            managerClass = "com.apple.android.music.player.Q";
+        }
+        hook(classLoader, managerClass, "P",
                 POINT_NATIVE_MEDIA_ITEM, 2, HOOK_BEFORE);
-        hook(classLoader, "com.apple.android.music.player.Q", "onCurrentItemChanged",
+        if (!hasHookPoint(POINT_NATIVE_MEDIA_ITEM)) {
+            hook(classLoader, managerClass, "F",
+                    POINT_NATIVE_MEDIA_ITEM, 2, HOOK_BEFORE);
+        }
+        hook(classLoader, managerClass, "onCurrentItemChanged",
                 POINT_CURRENT_ITEM_CHANGED, 3, HOOK_BEFORE);
-        hook(classLoader, "com.apple.android.music.player.Q", "onMetadataUpdated",
+        hook(classLoader, managerClass, "onMetadataUpdated",
                 POINT_METADATA_UPDATED, 2, HOOK_BEFORE);
-        hook(classLoader, "com.apple.android.music.player.Q", "onPlaybackError",
+        hook(classLoader, managerClass, "onPlaybackError",
                 POINT_PLAYBACK_ERROR, 2, HOOK_BEFORE);
-        hook(classLoader, "com.apple.android.music.player.Q", "seekTo",
+        hook(classLoader, managerClass, "seekTo",
                 POINT_SEEK, 1, HOOK_AFTER);
-        hook(classLoader, "com.apple.android.music.player.e0", "p",
+        hook(classLoader, "com.apple.android.music.player.e0", "o",
                 POINT_ATOMIC_CONNECTED, 2, HOOK_BEFORE);
+        if (!hasHookPoint(POINT_ATOMIC_CONNECTED)) {
+            hook(classLoader, "com.apple.android.music.player.e0", "p",
+                    POINT_ATOMIC_CONNECTED, 2, HOOK_BEFORE);
+        }
         Log.i(TAG, "Apple Music lyrics hooks installed: " + HOOK_POINTS.size());
+    }
+
+    private static boolean hasHookPoint(int point) {
+        for (Integer p : HOOK_POINTS.values()) {
+            if (p != null && p.intValue() == point) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void hook(ClassLoader classLoader, String className, String methodName,
@@ -97,7 +120,10 @@ public final class AppleMusicLyricsHook extends MethodHook {
             Object[] args = param.getArgs();
             switch (point.intValue()) {
                 case POINT_NATIVE_MEDIA_ITEM:
-                    com.apple.android.music.player.VivoCarLyrics.onNativeMediaItem(args[1]);
+                    Object mediaArg = (args != null && args.length > 0 && !(args[0] instanceof Number))
+                            ? args[0]
+                            : (args != null && args.length > 1 ? args[1] : null);
+                    com.apple.android.music.player.VivoCarLyrics.onNativeMediaItem(mediaArg);
                     break;
                 case POINT_CURRENT_ITEM_CHANGED:
                     com.apple.android.music.player.VivoCarLyrics.onCurrentItemChanged(

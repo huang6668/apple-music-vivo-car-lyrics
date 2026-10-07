@@ -5,7 +5,7 @@ patch_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 patch_file="$patch_root/apple-vivo-car-lyrics.patch"
 helper_source="$patch_root/java/com/apple/android/music/player/VivoCarLyrics.java"
 paginator_source="$patch_root/java/com/apple/android/music/player/ClusterLyricsPaginator.java"
-manager_target=work/apktool/smali_classes2/com/apple/android/music/player/Q.smali
+manager_target=work/apktool/smali_classes2/com/apple/android/music/player/S.smali
 connection_target=work/apktool/smali_classes2/com/apple/android/music/player/e0.smali
 manifest=work/apktool/AndroidManifest.xml
 atomic_service_action='com.vivo.musicwidgetmix.support.service'
@@ -31,7 +31,7 @@ connection_text = open(connection_path, encoding="utf-8").read()
 
 checks = (
     (manager_text,
-     "public final F(Lv3/t;I)V",
+     "public final P(Lz3/v;I)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
     (manager_text,
      "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
@@ -46,7 +46,7 @@ checks = (
      "public final seekTo(J)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V"),
     (connection_text,
-     "public final p(LE3/t2;LE3/t2$e;)V",
+     "public final o(LJ4/f2;LJ4/f2$e;)V",
      "Lcom/apple/android/music/player/VivoCarLyrics;->onAtomicControllerConnected(Ljava/lang/String;)V"),
 )
 
@@ -69,7 +69,7 @@ for text, signature, call in checks:
         )
 
 native_blocks = re.findall(
-    r"(?ms)^\.method public final F\(Lv3/t;I\)V\n.*?^\.end method$",
+    r"(?ms)^\.method public final P\(Lz3/v;I\)V\n.*?^\.end method$",
     manager_text,
 )
 if len(native_blocks) != 1:
@@ -78,8 +78,8 @@ native_block = native_blocks[0]
 native_order = (
     native_block.find("if-nez p2, :cond_4"),
     native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
-    native_block.find("invoke-virtual {p1}, Lv3/t;->hashCode()I"),
-    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/Q;->j:Lv3/t;"),
+    native_block.find("invoke-virtual {p1}, Lz3/v;->hashCode()I"),
+    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/S;->j:Lz3/v;"),
 )
 if -1 in native_order or tuple(sorted(native_order)) != native_order:
     raise SystemExit("Native metadata hook must remain between the publish guard and stock hash/store")

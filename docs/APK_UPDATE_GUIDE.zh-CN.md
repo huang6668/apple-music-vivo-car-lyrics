@@ -430,6 +430,25 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 - 内嵌 AM++ 只安装“修正歌曲名”功能；设置界面未裁剪，旧选项仍会显示，不代表功能存在。
 - 明确当前手机没有 root / LSPosed，`combined-lsp-module` 不作为日常安装目标。
 
+### r39 (2026-10-07) - 适配 Apple Music 7.0.0-beta (versionCode 1607)
+
+- **混淆宿主类重映射**：
+  - 播放管理器由 `Q` 变为 `S`（`com.apple.android.music.player.S`）
+  - 原生 MediaItem 发布方法由 `Q.F(Lv3/t;I)V` 变为 `S.P(Lz3/v;I)V`
+  - 原生 MediaItem 类由 `v3.t` 变为 `z3.v`；其内部元数据类由 `v3.s` 变为 `z3.x`
+  - **关键变更**：元数据 Extras Bundle 字段名由 `I` 变为 `J`（`z3.x->J: Landroid/os/Bundle;`）
+  - MediaSession 回调连接方法由 `e0.p(LE3/t2;LE3/t2$e;)V` 变为 `e0.o(LJ4/f2;LJ4/f2$e;)V`
+  - PlaybackItem 转换器由 `com.apple.android.music.player.P.b` 变为 `com.apple.android.music.player.Q.b(Lz3/x;)`
+  - AM++ 歌名修正目录查询类由 `s8.F.x` / `u8.E.v` 变为 `w9.Q.F` / `w9.a.F`
+- **代码改动**：
+  - `VivoCarLyrics.java`:
+    - 新增 `getMetadataExtras` 优先读取字段 `J`，回退字段 `I`，兼容新旧版本
+    - `currentPlaybackItem` 依次尝试 `player.Q`、`P`、`O` 转换器
+    - 构建标识更新为 `vivo-car-atomic-seek-bit-r39-2026-10-07`
+  - `apple-vivo-car-lyrics.patch`: 重新针对 7.0.0-beta (1607) 的 `S.smali` 与 `e0.smali` 精准生成 6 处 Hook
+  - `apply.sh` / `rebuild.sh`: 更新混淆签名检验与 post-rebuild 契约断言至 `S.smali` 与 7.0.0 方法签名
+  - `AppleMusicLyricsHook.java` / `CatalogQueryMethod.java`: 动态兼容新旧类名与方法名
+
 ### 2026-09-03 - 车联 6.0.8.3 静态分析（无代码改动）
 
 反编译车联 APK（Release `carnetworking-apk-6.0.8.3`）确认：仪表长句截断（`HudManager` 写死 17 字 + `...`）和逐句封面重载（`CarMusicInfo.equals` 含 `lineLyrics`，每次重发都附带封面）都是车联侧固定逻辑，Apple Music 侧不修；同时发现车联 6.0.8.3 不读 `music.media.extras.*`，车机歌词实际来自原子随身听的 `lrc_change` 事件。详见 3.1 节与 `docs/KNOWN_ISSUES.zh-CN.md` 第 2 节。
