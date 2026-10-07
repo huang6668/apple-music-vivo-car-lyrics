@@ -37,8 +37,9 @@ jobs:
       BUILD_TOOLS_VERSION: '35.0.0'
       APKTOOL_SHA256: '56d59c524fc764263ba8d345754d8daf55b1887818b15cd3b594f555d249e2db'
       JADX_SHA256: '12fd966431903b8e15c36e5007f19343475be7d8f2a55f082e7a929eeabc937e'
-      APKEDITOR_URL: 'https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar'
-      APKEDITOR_SHA256: 'a9cd40df818845456be6d696de6110c89edf4b0a0580cb83438ed6b25a366e67'
+      # Android 16+ packages expose ZIP layouts not handled by the V1.4.9 release. Pin
+      # the upstream snapshot that includes the newer ARSCLib support until a release is cut.
+      APKEDITOR_COMMIT: '5621fe6750b828ce0bfd99ec7f42ee8b5fe75497'
       # Pinned by content hash, not by tag: both artifacts are third-party release assets and a
       # re-upload under an unchanged tag would otherwise silently change the opt-in build.
       # Use the author's framework family; this pin is not the same framework build as
@@ -94,6 +95,26 @@ jobs:
           "$sdkmanager_bin" "build-tools;${BUILD_TOOLS_VERSION}" "platforms;android-30" "platforms;android-35"
           echo "$ANDROID_SDK_ROOT/build-tools/${BUILD_TOOLS_VERSION}" >> "$GITHUB_PATH"
 
+      - name: Checkout pinned APKEditor snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: REAndroid/APKEditor
+          ref: ${{ env.APKEDITOR_COMMIT }}
+          path: apkeditor-snapshot
+
+      - name: Build pinned APKEditor snapshot
+        working-directory: apkeditor-snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/tools"
+          chmod +x ./gradlew
+          ./gradlew --no-daemon fatJar
+          jar_file="$(find build/libs -maxdepth 1 -type f -name 'APKEditor-*.jar' ! -name '*-sources.jar' | head -n 1)"
+          [[ -n "$jar_file" ]] || { echo "APKEditor fat jar was not built" >&2; exit 1; }
+          cp "$jar_file" "$RUNNER_TEMP/tools/APKEditor-snapshot.jar"
+          sha256sum "$RUNNER_TEMP/tools/APKEditor-snapshot.jar"
+
       - name: Install analysis tools
         shell: bash
         run: |
@@ -104,20 +125,18 @@ jobs:
           curl --fail --location --retry 3 \
             "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar" \
             -o "$tools/apktool.jar"
-                    curl --fail --location --retry 3 \
+          curl --fail --location --retry 3 \
             "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
             -o "$tools/jadx.zip"
-          curl --fail --location --retry 3 \
-            "$APKEDITOR_URL" \
-            -o "$tools/apkeditor.jar"
+
 
           apktool_actual="$(sha256sum "$tools/apktool.jar" | awk '{print $1}')"
           jadx_actual="$(sha256sum "$tools/jadx.zip" | awk '{print $1}')"
-          apkeditor_actual="$(sha256sum "$tools/apkeditor.jar" | awk '{print $1}')"
-          printf 'apktool_%s.jar  %s\njadx-%s.zip  %s\napkeditor.jar  %s\n' \
+          apkeditor_actual="$(sha256sum "$tools/APKEditor-snapshot.jar" | awk '{print $1}')"
+          printf 'apktool_%s.jar  %s\njadx-%s.zip  %s\nAPKEditor-snapshot-%s.jar  %s\n' \
             "$APKTOOL_VERSION" "$apktool_actual" \
             "$JADX_VERSION" "$jadx_actual" \
-            "$apkeditor_actual" \
+            "${APKEDITOR_COMMIT:0:12}" "$apkeditor_actual" \
             | tee payload/out/report/tool-sha256.txt
 
           if [[ -n "${APKTOOL_SHA256:-}" ]]; then
@@ -137,7 +156,7 @@ jobs:
           chmod +x "$tools/jadx/bin/jadx"
           echo "APKTOOL_JAR=$tools/apktool.jar" >> "$GITHUB_ENV"
           echo "JADX_BIN=$tools/jadx/bin/jadx" >> "$GITHUB_ENV"
-          echo "APKEDITOR_JAR=$tools/apkeditor.jar" >> "$GITHUB_ENV"
+          echo "APKEDITOR_JAR=$tools/APKEditor-snapshot.jar" >> "$GITHUB_ENV"
 
       - name: Reconstruct and verify original APK
         run: scripts/ci/reconstruct.sh "$APK_NAME"
