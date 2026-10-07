@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      APK_NAME: apple-music-6-5-3.apk
+      APK_NAME: apple-music-7-0-0-beta-1607.apk
       APKTOOL_VERSION: '2.11.1'
       JADX_VERSION: '1.5.1'
       BUILD_TOOLS_VERSION: '35.0.0'
@@ -245,14 +245,32 @@ jobs:
             cp "$source" "$focused/files/$source"
           done < "$report/focused-paths.txt"
 
-          # 6.5.3 renamed Media3's ControllerInfo from B2$e to t2$e. Keep the full
-          # class beside the callback source so a package-name hook is derived from
-          # its actual field layout rather than an obfuscation guess.
-          controller_info=work/apktool/smali/E3/t2\$e.smali
-          if [[ -f "$controller_info" ]]; then
-            mkdir -p "$focused/files/$(dirname "$controller_info")"
-            cp "$controller_info" "$focused/files/$controller_info"
-          fi
+          # 6.5.3 renamed Media3's ControllerInfo from B2$e to t2$e. New versions can
+          # rename it again, so derive candidates from Apple callback methods whose
+          # second argument ends in the Media3 inner-class suffix $e, then copy each
+          # complete class for field-layout analysis.
+          : > "$report/controller-info-candidates.txt"
+          while IFS= read -r descriptor; do
+            [[ -n "$descriptor" ]] || continue
+            relative_path="${descriptor#L}"
+            relative_path="${relative_path%;}"
+            candidate=""
+            for smali_root in work/apktool/smali work/apktool/smali_classes2 \
+                               work/apktool/smali_classes3 work/apktool/smali_classes4; do
+              possible="$smali_root/$relative_path.smali"
+              if [[ -f "$possible" ]]; then
+                candidate="$possible"
+                break
+              fi
+            done
+            if [[ -n "$candidate" ]]; then
+              printf '%s\n' "$candidate" >> "$report/controller-info-candidates.txt"
+              mkdir -p "$focused/files/$(dirname "$candidate")"
+              cp "$candidate" "$focused/files/$candidate"
+            fi
+          done < <(grep -RhoE '^\.method public final [^ (]+\(L[^ (;]+;L[^ (;]*\$e;' \
+                     work/apktool/smali*/com/apple/android/music/player 2>/dev/null || true) | \
+            sed -E 's/.*(L[^ (;]+\$e;).*/\1/' | LC_ALL=C sort -u)
 
           cp "$report"/*.txt "$focused/" 2>/dev/null || true
           cp "$report"/*.log "$focused/" 2>/dev/null || true
