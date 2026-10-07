@@ -102,6 +102,12 @@ jobs:
           ref: ${{ env.APKEDITOR_COMMIT }}
           path: apkeditor-snapshot
 
+      - name: Setup Java 11 for APKEditor snapshot build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
+
       - name: Build pinned APKEditor snapshot
         working-directory: apkeditor-snapshot
         shell: bash
@@ -114,6 +120,12 @@ jobs:
           [[ -n "$jar_file" ]] || { echo "APKEditor fat jar was not built" >&2; exit 1; }
           cp "$jar_file" "$RUNNER_TEMP/tools/APKEditor-snapshot.jar"
           sha256sum "$RUNNER_TEMP/tools/APKEditor-snapshot.jar"
+
+      - name: Restore Java 17 for pipeline
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Install analysis tools
         shell: bash
