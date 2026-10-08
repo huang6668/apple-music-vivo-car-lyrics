@@ -46,8 +46,8 @@ jobs:
       # the author's 902 embed. Runtime feature compatibility still needs device testing.
       NPATCH_URL: 'https://github.com/7723mod/NPatch/releases/download/v1.0.7/jar-v1.0.7-741-release.jar'
       NPATCH_SHA256: '855c6499ac871663ae6c02dcb3a32cbbdfa88d67a312094249cc54e7f3ec8252'
-      AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.6.2/AM-plus-plus-v1.6.2.apk'
-      AMPP_SHA256: 'e205b4ecb901284d6a6475e954fa6335f22510e85ec77d86b6a10d36e9ae3d4d'
+      AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.6.4/AM-plus-plus-v1.6.4.apk'
+      AMPP_SHA256: '982c42fbabf5028c57a5f7f5ba16b40c3e0b19657f3798b5bfb3eddd2437f42d'
 
     steps:
       - uses: actions/checkout@v4
@@ -372,10 +372,10 @@ jobs:
           mkdir -p "$tools"
 
           curl --fail --location --retry 3 "$NPATCH_URL" -o "$tools/npatch.jar"
-          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.2.apk"
+          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.4.apk"
 
           npatch_actual="$(sha256sum "$tools/npatch.jar" | awk '{print $1}')"
-          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.2.apk" | awk '{print $1}')"
+          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.4.apk" | awk '{print $1}')"
           [[ "${NPATCH_SHA256,,}" == "$npatch_actual" ]] || {
             echo "npatch.jar SHA-256 mismatch" >&2
             exit 1
@@ -386,7 +386,7 @@ jobs:
           }
 
           NPATCH_JAR="$tools/npatch.jar" \
-          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.2.apk" \
+          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.4.apk" \
             bash ../cloud-patch/embed-ampp.sh
 
       # continue-on-error above keeps a broken wrapper from costing the main build its Release,
@@ -421,16 +421,16 @@ jobs:
           set -Eeuo pipefail
           tools="$RUNNER_TEMP/tools"
           mkdir -p "$tools" out/standalone-module
-          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.2.apk"
-          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.2.apk" | awk '{print $1}')"
+          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.4.apk"
+          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.4.apk" | awk '{print $1}')"
           [[ "${AMPP_SHA256,,}" == "$ampp_actual" ]] || {
             echo "AM++ module SHA-256 mismatch" >&2
             exit 1
           }
           printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/apple-music-vivo-car-lyrics-signing.p12"
-          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.2.apk" \
+          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.4.apk" \
             bash ../cloud-patch/ampp/build-standalone.sh \
-              "$tools/AM-plus-plus-v1.6.2.apk" \
+              "$tools/AM-plus-plus-v1.6.4.apk" \
               out/standalone-module/combined-lsp-module.apk \
               out/standalone-module/report
 
