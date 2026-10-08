@@ -33,5 +33,13 @@ if __name__ == "__main__":
     ))
     if len(files) != 1:
         raise SystemExit("Expected exactly one AppleInternalCatalogResolver.smali")
-    files[0].write_text(patch(files[0].read_text()))
+    source = files[0].read_text()
+    native_access = list(root.glob(
+        "smali*/io/github/proify/lyricon/amprovider/xposed/NativeCatalogQueryAccessKt.smali"
+    ))
+    if "findDirectCatalogQueryMethod" not in source and len(native_access) == 1:
+        # AM++ 1.6.4+ resolves the Apple Music 7 catalog query itself; nothing to remap.
+        print("AM++ native catalog query access present, skipping lookup patch:", native_access[0])
+        sys.exit(0)
+    files[0].write_text(patch(source))
     print("Patched AM++ catalog query lookup:", files[0])
