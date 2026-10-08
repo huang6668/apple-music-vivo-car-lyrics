@@ -16,6 +16,16 @@ public final class CatalogQueryMethodTest {
         }
     }
 
+    public static class Ambiguous {
+        public Object x(String path, Map<?, ?> parameters, Continuation continuation) {
+            return null;
+        }
+
+        public Object y(String path, Map<?, ?> parameters, Continuation continuation) {
+            return null;
+        }
+    }
+
     public static class WrongParameters {
         public Object B(String path, Map<?, ?> parameters, Object continuation) {
             return null;
@@ -46,11 +56,16 @@ public final class CatalogQueryMethodTest {
                 || CatalogQueryMethod.resolve(Inherited.class, "B").getDeclaringClass() != Author.class) {
             throw new AssertionError("Preferred method or inherited lookup changed");
         }
+        // Apple Music 7 renames the catalog query again; a single method with the exact
+        // signature on the class AM++ already located is accepted as the query.
+        if (!CatalogQueryMethod.resolve(Unknown.class, "B").getName().equals("x")
+                || !CatalogQueryMethod.resolve(s8.F.class, "unrecognized").getName().equals("x")) {
+            throw new AssertionError("Unique signature fallback failed");
+        }
         for (Class<?> clazz : new Class<?>[] {
-                Unknown.class, WrongParameters.class, WrongReturn.class, WrongStatic.class}) {
+                Ambiguous.class, WrongParameters.class, WrongReturn.class, WrongStatic.class}) {
             expectMissing(clazz, "B");
         }
-        expectMissing(s8.F.class, "unrecognized");
         System.out.println("Catalog query compatibility tests passed");
     }
 
