@@ -20,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r39-2026-10-07";
+    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r40-2026-10-08";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -1322,7 +1322,7 @@ public final class VivoCarLyrics {
         long ourSupport = -1L;
         long ourDuration = -1L;
         try {
-            Object mediaItem = invokeRequired(manager, "a");
+            Object mediaItem = currentMediaItem(manager);
             Object metadata = getFieldValue(mediaItem, "d");
             Bundle extras = getMetadataExtras(metadata);
             if (extras != null) {
@@ -1366,7 +1366,7 @@ public final class VivoCarLyrics {
 
     private static boolean metadataHasAtomicSupport(Object manager, long generation) {
         try {
-            Object mediaItem = invokeRequired(manager, "a");
+            Object mediaItem = currentMediaItem(manager);
             if (mediaItem == null) {
                 return false;
             }
@@ -1487,7 +1487,7 @@ public final class VivoCarLyrics {
     }
 
     private static Object currentPlaybackItem(Object manager) throws Exception {
-        Object mediaItem = invokeRequired(manager, "a");
+        Object mediaItem = currentMediaItem(manager);
         if (mediaItem == null) {
             return null;
         }
@@ -1505,6 +1505,13 @@ public final class VivoCarLyrics {
         }
         Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
         return method.invoke(null, metadata);
+    }
+
+    private static Object currentMediaItem(Object manager) throws Exception {
+        // Apple Music 7 renamed the MediaItem getter from a() to c(). Keep the old
+        // target as a fallback so the same helper can still be loaded on 6.5.x.
+        Object item = invokeOptional(manager, "c");
+        return item != null ? item : invokeRequired(manager, "a");
     }
 
     private static Application appleApplication() throws Exception {
@@ -1630,7 +1637,7 @@ public final class VivoCarLyrics {
         }
 
         try {
-            Object mediaItem = invokeRequired(manager, "a");
+            Object mediaItem = currentMediaItem(manager);
             Object metadata = getFieldValue(mediaItem, "d");
             Bundle extras = getMetadataExtras(metadata);
             long queueId = extras == null ? 0L : extras.getLong(APPLE_QUEUE_ID, 0L);

@@ -1,8 +1,22 @@
 # 已知未解决问题
 
-最后更新：2026-09-04
+最后更新：2026-10-08
 
 本文档记录当前版本（r38 基准）中确认存在但尚未解决的问题，以及已经验证行不通的修复方向，避免后续重复踩坑。
+
+---
+
+## 0. Apple Music 7.0.0-beta (1607) 两端无歌词（已修复，r40，待实车验证）
+
+**现象（r39，Actions artifact `v1.0.0-build-128`）**：车机与原子随身听都没有歌词。产物本身包含 r39 helper、六处 Smali hook 和 Atomic service action，说明不是下载到旧包或打包失败。
+
+**根因**：7.0.0 的当前 MediaItem getter 已从 `S.a(): v3.t` 变为 `S.c(): z3.v`；r39 只适配了原生发布方法 `S.P`，helper 仍调用 `S.a()`。7.0 中 `S.a()` 返回 `z3.C`，实际为 `null`，导致：
+
+- `metadataHasAtomicSupport()` 永远 false，能力位补写/重放逻辑失效；
+- `currentPlaybackItem()` 返回 `null`，`LoadTask` 直接按无歌词处理；
+- 车机 Session Extras 与原子 `lrc_change` 都不会发布。
+
+**r40 修复**：`VivoCarLyrics.currentMediaItem()` 优先反射 `c()`，空值或旧版失败时回退 `a()`；两份 helper 同步更新，构建标记为 `vivo-car-atomic-seek-bit-r40-2026-10-08`。本地源码契约与 embed 构建单元测试已通过；歌词/进度条仍需实车验证。
 
 ---
 

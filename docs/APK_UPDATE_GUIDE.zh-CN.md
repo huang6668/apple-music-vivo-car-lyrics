@@ -444,10 +444,16 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
   - `VivoCarLyrics.java`:
     - 新增 `getMetadataExtras` 优先读取字段 `J`，回退字段 `I`，兼容新旧版本
     - `currentPlaybackItem` 依次尝试 `player.Q`、`P`、`O` 转换器
-    - 构建标识更新为 `vivo-car-atomic-seek-bit-r39-2026-10-07`
+    - 构建标识更新为 `vivo-car-atomic-seek-bit-r40-2026-10-08`
   - `apple-vivo-car-lyrics.patch`: 重新针对 7.0.0-beta (1607) 的 `S.smali` 与 `e0.smali` 精准生成 6 处 Hook
   - `apply.sh` / `rebuild.sh`: 更新混淆签名检验与 post-rebuild 契约断言至 `S.smali` 与 7.0.0 方法签名
   - `AppleMusicLyricsHook.java` / `CatalogQueryMethod.java`: 动态兼容新旧类名与方法名
+
+### r40 (2026-10-08) - 修复 7.0.0-beta 当前 MediaItem getter 漏配
+
+- **问题**：r39 只把原生发布方法适配为 `S.P(Lz3/v;I)V`，但 helper 仍通过 `S.a()` 获取当前 MediaItem。7.0.0 中 `S.a()` 返回 `z3.C`（常量 `null`），实际 MediaItem getter 已变为 `S.c(): Lz3/v;`。
+- **影响**：`metadataHasAtomicSupport()` 判断失败、`currentPlaybackItem()` 返回 `null`，歌词加载不会启动，车机与原子随身听都无歌词。
+- **修复**：新增 `currentMediaItem(manager)`，7.0 优先反射 `c()`，失败或为空时回退旧版 `a()`；两份 helper 同步修改，构建标识更新为 `vivo-car-atomic-seek-bit-r40-2026-10-08`。
 
 ### 2026-09-03 - 车联 6.0.8.3 静态分析（无代码改动）
 
