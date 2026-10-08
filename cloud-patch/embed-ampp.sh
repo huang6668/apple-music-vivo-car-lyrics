@@ -116,7 +116,8 @@ chmod 600 "$SIGNING_KEY"
 
 # NPatch 741 exposes a null module nativeLibraryDir on the tested Android 16 device.
 # Also adapt the catalog query lookup to the r38 host's R8 method mapping.
-bash "$(dirname "${BASH_SOURCE[0]}")/ampp/prepare-module.sh" \
+AMPP_SMALI_DUMP="$REPORT/module-smali" \
+  bash "$(dirname "${BASH_SOURCE[0]}")/ampp/prepare-module.sh" \
   "$AMPP_MODULE_APK" "$PATCH_WORK/in/AM-plus-plus.apk" \
   2>&1 | tee "$REPORT/module-native-compat.log"
 sha256sum "$PATCH_WORK/in/AM-plus-plus.apk" > "$REPORT/patched-module.sha256"
