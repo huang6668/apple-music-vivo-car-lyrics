@@ -21,6 +21,7 @@ java -Xmx2g -jar "$tools/apktool.jar" d -f -r "$input" -o "$work/module"
 if [[ -n "${AMPP_SMALI_DUMP:-}" ]]; then
   # Keep the unpatched smali our patches target so signature drift can be read from the report.
   mkdir -p "$AMPP_SMALI_DUMP"
+  AMPP_SMALI_DUMP="$(cd "$AMPP_SMALI_DUMP" && pwd)"
   (cd "$work/module" && find smali* \( -path '*/hook/FeatureInstallation*' \
       -o -name 'AppleInternalCatalogResolver*.smali' -o -name 'ModuleSettings.smali' \
       -o -name 'HleMetadataRuntime.smali' \) -print0 | xargs -0 tar -czf "$AMPP_SMALI_DUMP/smali.tar.gz")
