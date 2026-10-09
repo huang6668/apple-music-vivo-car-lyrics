@@ -79,8 +79,11 @@ jobs:
           mkdir -p "$test_classes"
           javac --release 8 -d "$test_classes" \
             cloud-patch/java/com/apple/android/music/player/ClusterLyricsPaginator.java \
-            cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java
+            cloud-patch/java/com/apple/android/music/player/TitleCorrectionState.java \
+            cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java \
+            cloud-patch/tests/com/apple/android/music/player/TitleCorrectionStateTest.java
           java -cp "$test_classes" com.apple.android.music.player.ClusterLyricsPaginatorTest
+          java -cp "$test_classes" com.apple.android.music.player.TitleCorrectionStateTest
           python3 cloud-patch/tests/verify_source_contract.py
           python3 -m unittest discover -s cloud-patch/tests -p 'test_embed_build.py'
 
@@ -272,6 +275,53 @@ jobs:
             fi
           fi
           cat "$report/session-class-paths.txt" >> "$report/focused-paths.txt"
+
+          # Keep complete title/catalog seams, independent of the capped lyrics report.
+          title_roots=(
+            work/jadx/sources/com/apple/android/music/player
+            work/jadx/sources/com/apple/android/music/databinding
+            work/jadx/sources/com/apple/android/music/mediaapi
+            work/apktool/smali_classes2/com/apple/android/music/player
+            work/apktool/smali_classes2/com/apple/android/music/databinding
+            work/apktool/smali_classes2/com/apple/android/music/mediaapi
+          )
+          : > "$report/title-correction-paths.txt"
+          for root in "${title_roots[@]}"; do
+            if [[ -d "$root" ]]; then
+              grep -RIlE 'getTitle|getName|MediaApiRepositoryHolder|MediaApiResponse|MediaEntity|Notification' \
+                "$root" >> "$report/title-correction-paths.txt" || true
+            fi
+          done
+          for root in work/apktool/smali*; do
+            for relative in w9/Q.smali w9/a.smali z3/x.smali z3/v.smali; do
+              [[ ! -f "$root/$relative" ]] || printf '%s\n' "$root/$relative" \
+                >> "$report/title-correction-paths.txt"
+            done
+          done
+          for root in work/jadx/sources/w9 work/jadx/sources/z3; do
+            if [[ -d "$root" ]]; then
+              find "$root" -type f >> "$report/title-correction-paths.txt"
+            fi
+          done
+          cat "$report/title-correction-paths.txt" >> "$report/focused-paths.txt"
+
+          # The title binder and notification paths are outside the normal focused roots.
+          ui_roots=(
+            work/jadx/sources/q8
+            work/jadx/sources/z3
+            work/jadx/sources/J4
+            work/apktool/smali/q8
+            work/apktool/smali_classes2/q8
+            work/apktool/smali_classes3/q8
+            work/apktool/smali_classes4/q8
+          )
+          : > "$report/title-ui-notification-paths.txt"
+          for root in "${ui_roots[@]}"; do
+            [[ -d "$root" ]] || continue
+            grep -RIlE 'executeBindings|TextViewBindingAdapter|setText|setContentTitle|NotificationCompat|NotificationManager' \
+              "$root" >> "$report/title-ui-notification-paths.txt" || true
+          done
+          cat "$report/title-ui-notification-paths.txt" >> "$report/focused-paths.txt"
 
           LC_ALL=C sort -u "$report/focused-paths.txt" -o "$report/focused-paths.txt"
 
