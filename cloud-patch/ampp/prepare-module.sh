@@ -29,6 +29,7 @@ fi
 python3 "$compat_root/patch_liquid_glass.py" "$work/module"
 python3 "$compat_root/patch_feature_trim.py" "$work/module"
 python3 "$compat_root/patch_force_title_correction.py" "$work/module"
+python3 "$compat_root/patch_force_embedded_profile.py" "$work/module"
 python3 "$compat_root/patch_catalog_concurrency.py" "$work/module"
 python3 "$compat_root/patch_native_directory.py" "$work/module"
 python3 "$compat_root/patch_catalog_query.py" "$work/module"
