@@ -480,17 +480,22 @@ public final class VivoCarLyrics {
             }, TITLE_TIMEOUT_MS);
             CatalogTitleResolver.query(api, request.catalogId, TITLE_LANGUAGE, "F",
                     new CatalogTitleResolver.Callback() {
-                        @Override public void onTitle(final String title) {
+                        @Override public void onTitle(final String rawTitle) {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
+                                    final String title = rawTitle == null ? null : ChineseConverter.toSimplified(rawTitle);
                                     synchronized (TITLE_LOCK) {
-                                        boolean accepted = TITLE_STATE.acceptsResult(request);
-                                        if (TITLE_STATE.complete(request, title)) {
-                                            Log.w(TITLE_LOG_TAG, "catalog title=" + title);
-                                            applyTitleCorrectionFromState(TITLE_STATE.snapshot());
-                                        }
-                                        if (accepted && title != null && !title.trim().isEmpty()) {
-                                            persistTitle(request.catalogId, title);
+                                        if (title != null && !title.trim().isEmpty()) {
+                                            boolean accepted = TITLE_STATE.acceptsResult(request);
+                                            if (TITLE_STATE.complete(request, title)) {
+                                                Log.w(TITLE_LOG_TAG, "catalog title=" + title);
+                                                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+                                            }
+                                            if (accepted) {
+                                                persistTitle(request.catalogId, title);
+                                            }
+                                        } else {
+                                            fallbackRegionalTitle(request);
                                         }
                                     }
                                 }
@@ -500,6 +505,10 @@ public final class VivoCarLyrics {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
                                     synchronized (TITLE_LOCK) {
+                                        if (TITLE_STATE.acceptsResult(request)) {
+                                            fallbackRegionalTitle(request);
+                                            return;
+                                        }
                                         if (TITLE_STATE.fail(request)) {
                                             Log.d(TITLE_LOG_TAG, "catalog query failed");
                                             Log.w(TITLE_LOG_TAG,
@@ -515,6 +524,56 @@ public final class VivoCarLyrics {
                         }
                     });
         }
+    }
+
+    private static void fallbackRegionalTitle(final TitleCorrectionState.Request request) {
+        final Object api = findCatalogApi();
+        if (api == null || request == null) {
+            synchronized (TITLE_LOCK) {
+                final String title = null;
+                TITLE_STATE.complete(request, title);
+            }
+            return;
+        }
+        CatalogTitleResolver.batchQuery(api, Collections.singletonList(request.catalogId),
+                TITLE_LANGUAGE, "F", new CatalogTitleResolver.BatchCallback() {
+                    @Override public void onTitles(final Map<String, String> titles) {
+                        MAIN.post(new Runnable() {
+                            @Override public void run() {
+                                final String raw = (titles != null && titles.containsKey(request.catalogId))
+                                        ? titles.get(request.catalogId) : null;
+                                final String title = raw == null ? null : ChineseConverter.toSimplified(raw);
+                                synchronized (TITLE_LOCK) {
+                                    boolean accepted = TITLE_STATE.acceptsResult(request);
+                                    if (TITLE_STATE.complete(request, title)) {
+                                        if (title != null) {
+                                            Log.w(TITLE_LOG_TAG, "catalog fallback title=" + title);
+                                        }
+                                        applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+                                    }
+                                    if (accepted && title != null && !title.trim().isEmpty()) {
+                                        persistTitle(request.catalogId, title);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    @Override public void onError(Throwable error) {
+                        MAIN.post(new Runnable() {
+                            @Override public void run() {
+                                synchronized (TITLE_LOCK) {
+                                    if (TITLE_STATE.fail(request)) {
+                                        Log.d(TITLE_LOG_TAG, "catalog fallback failed");
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }, new Executor() {
+                    @Override public void execute(Runnable task) {
+                        MAIN.post(task);
+                    }
+                });
     }
 
     private static File titleCacheDirectory() {
@@ -590,7 +649,7 @@ public final class VivoCarLyrics {
                 cached = TITLE_STATE.getCachedTitle(catalogId);
             }
             if (cached != null && !cached.isEmpty()) {
-                return cached;
+                return ChineseConverter.toSimplified(cached);
             }
             enqueuePrefetch(catalogId);
             return stockTitle;
@@ -647,7 +706,7 @@ public final class VivoCarLyrics {
                 if (cached != null && !cached.isEmpty()) {
                     Object attrs = invokeOptional(entity, "getAttributes");
                     if (attrs != null) {
-                        invokeOptional(attrs, "setName", cached);
+                        invokeOptional(attrs, "setName", ChineseConverter.toSimplified(cached));
                     }
                 } else {
                     enqueuePrefetch(id);
@@ -753,8 +812,14 @@ public final class VivoCarLyrics {
         if (api == null || catalogIds.isEmpty()) return;
         CatalogTitleResolver.batchQuery(api, catalogIds, TITLE_LANGUAGE, "F",
                 new CatalogTitleResolver.BatchCallback() {
-                    @Override public void onTitles(final Map<String, String> titles) {
-                        if (titles == null || titles.isEmpty()) return;
+                    @Override public void onTitles(final Map<String, String> rawTitles) {
+                        if (rawTitles == null || rawTitles.isEmpty()) return;
+                        final Map<String, String> titles = new LinkedHashMap<String, String>();
+                        for (Map.Entry<String, String> entry : rawTitles.entrySet()) {
+                            if (entry.getValue() != null) {
+                                titles.put(entry.getKey(), ChineseConverter.toSimplified(entry.getValue()));
+                            }
+                        }
                         MAIN.post(new Runnable() {
                             @Override public void run() {
                                 synchronized (TITLE_LOCK) {

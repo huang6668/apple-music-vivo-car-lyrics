@@ -12,11 +12,13 @@ javac --release 8 -d "$classes/unit" \
   cloud-patch/java/com/apple/android/music/player/TitleCorrectionState.java \
   cloud-patch/java/com/apple/android/music/player/TitleCacheStore.java \
   cloud-patch/java/com/apple/android/music/player/CatalogQueryMethod.java \
+  cloud-patch/java/com/apple/android/music/player/ChineseConverter.java \
   cloud-patch/java/com/apple/android/music/player/CatalogTitleResolver.java \
   cloud-patch/ampp/java/dev/amenhancer/compat/CatalogQueryMethod.java \
   cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java \
   cloud-patch/tests/com/apple/android/music/player/TitleCorrectionStateTest.java \
   cloud-patch/tests/com/apple/android/music/player/TitleCacheStoreTest.java \
+  cloud-patch/tests/com/apple/android/music/player/ChineseConverterTest.java \
   cloud-patch/tests/com/apple/android/music/player/CatalogTitleResolverTest.java \
   cloud-patch/tests/com/apple/android/music/player/StandaloneCatalogQueryMethodTest.java \
   "${catalog_fixtures[@]}"
@@ -24,6 +26,7 @@ for test in \
   com.apple.android.music.player.ClusterLyricsPaginatorTest \
   com.apple.android.music.player.TitleCorrectionStateTest \
   com.apple.android.music.player.TitleCacheStoreTest \
+  com.apple.android.music.player.ChineseConverterTest \
   com.apple.android.music.player.CatalogTitleResolverTest \
   com.apple.android.music.player.StandaloneCatalogQueryMethodTest \
   CatalogQueryMethodTest; do

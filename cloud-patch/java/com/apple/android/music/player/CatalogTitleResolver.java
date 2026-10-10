@@ -67,12 +67,17 @@ public final class CatalogTitleResolver {
     }
 
     public static Request batchSongRequest(Collection<String> catalogIds, String language) {
+        return batchSongRequest(catalogIds, language, "cn");
+    }
+
+    public static Request batchSongRequest(Collection<String> catalogIds, String language, String storefront) {
         if (catalogIds == null || catalogIds.isEmpty()) {
             throw new IllegalArgumentException("Invalid catalog IDs");
         }
         String lang = language == null ? "" : language.trim();
-        if (!CATALOG_LANGUAGE.equals(lang) && !"zh-Hans-CN".equals(lang)) {
-            throw new IllegalArgumentException("Only mainland China title requests are supported");
+        if (!CATALOG_LANGUAGE.equals(lang) && !"zh-Hans-CN".equals(lang)
+                && !"zh-TW".equals(lang) && !"zh-HK".equals(lang)) {
+            throw new IllegalArgumentException("Only Chinese title requests are supported");
         }
         StringBuilder builder = new StringBuilder();
         int count = 0;
@@ -87,7 +92,8 @@ public final class CatalogTitleResolver {
         if (count == 0) throw new IllegalArgumentException("No valid catalog IDs");
         Map<String, String> params = new LinkedHashMap<String, String>();
         params.put("ids", builder.toString());
-        params.put("l", CATALOG_LANGUAGE);
+        String sf = storefront == null || storefront.isEmpty() ? "cn" : storefront.toLowerCase();
+        params.put("l", "tw".equals(sf) ? "zh-TW" : ("hk".equals(sf) ? "zh-HK" : CATALOG_LANGUAGE));
         params.put("platform", "android");
         params.put("include[songs]", "artists");
         return new Request("songs", params);
@@ -146,30 +152,86 @@ public final class CatalogTitleResolver {
         final BatchOnce once = new BatchOnce(callback);
         try {
             if (catalog == null) throw new IllegalArgumentException("Missing catalog instance");
-            final Request request = batchSongRequest(catalogIds, language);
             final Method method = CatalogQueryMethod.resolve(catalog.getClass(),
                     preferredName == null ? "F" : preferredName);
-            return dispatch(catalog, method, request.parameters, true, hostExecutor, once, new ResponseCallback() {
-                public void onResponse(Object response) {
-                    if (!once.active()) return;
-                    try {
-                        if (hasResponseErrors(response) && !isNotFound(response)) {
-                            throw new IllegalStateException("Catalog response contains errors");
-                        }
-                        Map<String, String> titles = hasResponseErrors(response)
-                                ? Collections.<String, String>emptyMap()
-                                : extractTitles(response);
-                        once.success(titles);
-                    } catch (Throwable error) {
-                        once.failure(unwrap(error));
-                    }
+            final List<String> targetIds = new ArrayList<String>();
+            for (String id : catalogIds) {
+                String nid = normalizeId(id);
+                if (!nid.isEmpty() && !targetIds.contains(nid)) {
+                    targetIds.add(nid);
+                    if (targetIds.size() >= 100) break;
                 }
-                public void onError(Throwable error) { once.failure(error); }
-            });
+            }
+            if (targetIds.isEmpty()) throw new IllegalArgumentException("No valid catalog IDs");
+
+            final Map<String, String> accumulated = new LinkedHashMap<String, String>();
+            executeBatchStage(catalog, method, targetIds, "cn", accumulated, hostExecutor, once);
+            return true;
         } catch (Throwable error) {
             once.failure(unwrap(error));
             return false;
         }
+    }
+
+    private static void executeBatchStage(final Object catalog, final Method method,
+                                          final List<String> pendingIds, final String storefront,
+                                          final Map<String, String> accumulated,
+                                          final Executor hostExecutor, final BatchOnce once) {
+        if (!once.active()) return;
+        if (pendingIds.isEmpty()) {
+            once.success(accumulated);
+            return;
+        }
+        final Request request;
+        try {
+            request = batchSongRequest(pendingIds, "tw".equalsIgnoreCase(storefront) ? "zh-TW" : ("hk".equalsIgnoreCase(storefront) ? "zh-HK" : CATALOG_LANGUAGE), storefront);
+        } catch (Throwable error) {
+            once.failure(unwrap(error));
+            return;
+        }
+        dispatch(catalog, method, request.parameters, storefront, hostExecutor, once, new ResponseCallback() {
+            public void onResponse(Object response) {
+                if (!once.active()) return;
+                try {
+                    if (hasResponseErrors(response) && !isNotFound(response)) {
+                        if ("cn".equalsIgnoreCase(storefront)) {
+                            throw new IllegalStateException("Catalog response contains errors");
+                        } else {
+                            once.success(accumulated);
+                            return;
+                        }
+                    }
+                    Map<String, String> stageHits = hasResponseErrors(response)
+                            ? Collections.<String, String>emptyMap()
+                            : extractTitles(response);
+                    accumulated.putAll(stageHits);
+                    final List<String> remaining = new ArrayList<String>();
+                    for (String id : pendingIds) {
+                        if (!accumulated.containsKey(id)) {
+                            remaining.add(id);
+                        }
+                    }
+                    if (remaining.isEmpty()) {
+                        once.success(accumulated);
+                    } else if ("cn".equalsIgnoreCase(storefront)) {
+                        executeBatchStage(catalog, method, remaining, "tw", accumulated, hostExecutor, once);
+                    } else if ("tw".equalsIgnoreCase(storefront)) {
+                        executeBatchStage(catalog, method, remaining, "hk", accumulated, hostExecutor, once);
+                    } else {
+                        once.success(accumulated);
+                    }
+                } catch (Throwable error) {
+                    once.failure(unwrap(error));
+                }
+            }
+            public void onError(Throwable error) {
+                if ("cn".equalsIgnoreCase(storefront)) {
+                    once.failure(error);
+                } else {
+                    once.success(accumulated);
+                }
+            }
+        });
     }
 
     private static void resolveByIsrc(final Object catalog, final Method method,
@@ -229,13 +291,19 @@ public final class CatalogTitleResolver {
     private static boolean dispatch(final Object catalog, final Method method,
                                     Map<String, String> parameters, boolean mainland,
                                     Executor executor, final Chain chain, ResponseCallback callback) {
+        return dispatch(catalog, method, parameters, mainland ? "cn" : null, executor, chain, callback);
+    }
+
+    private static boolean dispatch(final Object catalog, final Method method,
+                                    Map<String, String> parameters, String storefront,
+                                    Executor executor, final Chain chain, ResponseCallback callback) {
         if (!chain.active()) return false;
         final RawOnce once = new RawOnce(callback, chain);
         try {
             final Map<String, String> owned = new LinkedHashMap<String, String>(parameters);
-            if (mainland) {
+            if (storefront != null && !storefront.isEmpty()) {
                 String key = owned.containsKey("ids") ? "ids" : "filter[isrc]";
-                once.request = new PendingRequest(key, owned.get(key), chain);
+                once.request = new PendingRequest(key, owned.get(key), chain, storefront);
                 once.token = registerRequest(once.request);
                 owned.put(REQUEST_TOKEN_PARAMETER, once.token);
             }
@@ -291,18 +359,20 @@ public final class CatalogTitleResolver {
             finishRequest(rawToken instanceof String ? (String) rawToken : null);
             throw error;
         }
-        parameters.put("l", CATALOG_LANGUAGE);
+        String sf = request.storefront;
+        if (sf == null || sf.isEmpty()) sf = "cn";
+        parameters.put("l", "tw".equalsIgnoreCase(sf) ? "zh-TW" : ("hk".equalsIgnoreCase(sf) ? "zh-HK" : CATALOG_LANGUAGE));
         parameters.remove(REQUEST_TOKEN_PARAMETER);
-        replaceHeader(headers, "Accept-Language", "zh-Hans");
+        replaceHeader(headers, "Accept-Language", "tw".equalsIgnoreCase(sf) ? "zh-Hant-TW" : ("hk".equalsIgnoreCase(sf) ? "zh-Hant-HK" : "zh-Hans"));
         replaceHeader(headers, "X-Apple-Store-Front",
-                mainlandStorefrontHeader(header(headers, "X-Apple-Store-Front")));
+                regionalStorefrontHeader(sf, header(headers, "X-Apple-Store-Front")));
         replaceHeader(headers, "X-Apple-Request-Store-Front",
-                mainlandStorefrontHeader(header(headers, "X-Apple-Request-Store-Front")));
+                regionalStorefrontHeader(sf, header(headers, "X-Apple-Request-Store-Front")));
         if (!request.chain.active()) {
             throw new IllegalStateException("Mainland catalog request expired during localization");
         }
         request.localized = true;
-        return MAINLAND_PATH;
+        return "/v1/catalog/" + sf.toLowerCase() + "/songs";
     }
 
     private static String registerRequest(PendingRequest request) {
@@ -352,12 +422,19 @@ public final class CatalogTitleResolver {
         return null;
     }
 
-    private static String mainlandStorefrontHeader(String original) {
+    private static String regionalStorefrontHeader(String storefront, String original) {
+        String prefix = "143465";
+        if ("tw".equalsIgnoreCase(storefront)) prefix = "143470";
+        else if ("hk".equalsIgnoreCase(storefront)) prefix = "143463";
         String value = original == null ? "" : original;
         int offset = 0;
         while (offset < value.length() && value.charAt(offset) >= '0'
                 && value.charAt(offset) <= '9') offset++;
-        return "143465" + value.substring(offset);
+        return prefix + value.substring(offset);
+    }
+
+    private static String mainlandStorefrontHeader(String original) {
+        return regionalStorefrontHeader("cn", original);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -374,11 +451,16 @@ public final class CatalogTitleResolver {
         final String selectorKey;
         final String selector;
         final Chain chain;
+        final String storefront;
         volatile boolean localized;
         PendingRequest(String selectorKey, String selector, Chain chain) {
+            this(selectorKey, selector, chain, "cn");
+        }
+        PendingRequest(String selectorKey, String selector, Chain chain, String storefront) {
             this.selectorKey = selectorKey;
             this.selector = selector;
             this.chain = chain;
+            this.storefront = storefront == null || storefront.isEmpty() ? "cn" : storefront;
         }
     }
 
@@ -493,7 +575,7 @@ public final class CatalogTitleResolver {
                 if (!text.isEmpty()) title = text;
             }
         }
-        return title;
+        return ChineseConverter.toSimplified(title);
     }
 
     public static Map<String, String> extractTitles(Object response) {
@@ -510,7 +592,7 @@ public final class CatalogTitleResolver {
             if (value instanceof String) {
                 String text = ((String) value).trim();
                 if (!text.isEmpty()) {
-                    result.put(id, text);
+                    result.put(id, ChineseConverter.toSimplified(text));
                 }
             }
         }
@@ -548,7 +630,7 @@ public final class CatalogTitleResolver {
                 title = ((String) name).trim();
             }
         }
-        return title;
+        return ChineseConverter.toSimplified(title);
     }
 
     private static String normalizeIsrc(Object candidate) {

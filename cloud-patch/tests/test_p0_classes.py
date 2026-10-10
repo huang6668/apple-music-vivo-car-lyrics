@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class P0ClassesTest(unittest.TestCase):
     def test_syntax_balance(self):
-        for filename in ['CatalogTitleResolver.java', 'TitleCacheStore.java', 'TitleCorrectionState.java', 'TitleCacheStoreTest.java', 'TitleCorrectionStateTest.java']:
+        for filename in ['CatalogTitleResolver.java', 'TitleCacheStore.java', 'TitleCorrectionState.java', 'ChineseConverter.java', 'TitleCacheStoreTest.java', 'TitleCorrectionStateTest.java', 'ChineseConverterTest.java']:
             if filename.endswith('Test.java'):
                 p = ROOT / 'cloud-patch/tests/com/apple/android/music/player' / filename
             else:
@@ -36,6 +36,21 @@ class P0ClassesTest(unittest.TestCase):
         self.assertIn('getCachedTitle(', tstate)
         self.assertIn('putCachedTitle(', tstate)
         self.assertIn('putCachedTitles(', tstate)
+
+    def test_chinese_converter_methods(self):
+        cc = (ROOT / 'cloud-patch/java/com/apple/android/music/player/ChineseConverter.java').read_text(encoding='utf-8')
+        self.assertIn('public static String toSimplified(', cc)
+        self.assertIn('Arrays.binarySearch(', cc)
+        self.assertIn('TRAD =', cc)
+        self.assertIn('SIMP =', cc)
+
+    def test_multi_region_fallback_methods(self):
+        ctr = (ROOT / 'cloud-patch/java/com/apple/android/music/player/CatalogTitleResolver.java').read_text(encoding='utf-8')
+        self.assertIn('regionalStorefrontHeader(', ctr)
+        self.assertIn('executeBatchStage(', ctr)
+        vcl = (ROOT / 'cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java').read_text(encoding='utf-8')
+        self.assertIn('fallbackRegionalTitle(', vcl)
+        self.assertIn('ChineseConverter.toSimplified(', vcl)
 
 
 if __name__ == '__main__':
