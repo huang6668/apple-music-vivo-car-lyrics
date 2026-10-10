@@ -167,7 +167,7 @@ public final class VivoCarLyrics {
 
     public static void onCurrentItemChanged(Object playbackManager, Object newQueueItem) {
         try {
-            Log.i(TITLE_LOG_TAG, "current-item callback");
+            Log.d(TITLE_LOG_TAG, "current-item callback");
             long generation = GENERATION.incrementAndGet();
             currentManager = playbackManager;
             currentQueueItem = newQueueItem;
@@ -291,7 +291,7 @@ public final class VivoCarLyrics {
                         stringValue(invokeOptional(item, "getPersistentId")),
                         stringValue(invokeOptional(item, "getTitle")));
                 TitleCorrectionState.Snapshot snapshot = TITLE_STATE.snapshot();
-                Log.i(TITLE_LOG_TAG, "begin q=" + snapshot.queueId
+                Log.d(TITLE_LOG_TAG, "begin q=" + snapshot.queueId
                         + " catalog=" + snapshot.catalogId
                         + " lang=" + snapshot.cacheNamespace);
             }
@@ -364,7 +364,7 @@ public final class VivoCarLyrics {
         synchronized (TITLE_LOCK) {
             TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
             state = TITLE_STATE.snapshot();
-            Log.i(TITLE_LOG_TAG, "request q=" + state.queueId
+            Log.d(TITLE_LOG_TAG, "request q=" + state.queueId
                     + " catalog=" + state.catalogId
                     + " lang=" + state.cacheNamespace);
         }
@@ -382,12 +382,12 @@ public final class VivoCarLyrics {
                 return;
             }
             if (!isCurrentTitle(state)) {
-                Log.i(TITLE_LOG_TAG, "skip stale title state");
+                Log.d(TITLE_LOG_TAG, "skip stale title state");
                 return;
             }
             final Object api = findCatalogApi();
             if (api == null) {
-                Log.i(TITLE_LOG_TAG, "catalog api unavailable");
+                Log.d(TITLE_LOG_TAG, "catalog api unavailable");
                 if (attempt < 3) {
                     MAIN.postDelayed(new Runnable() {
                         @Override public void run() {
@@ -401,11 +401,11 @@ public final class VivoCarLyrics {
             }
             final TitleCorrectionState.Request request = TITLE_STATE.request();
             if (request == null) {
-                Log.i(TITLE_LOG_TAG, "no catalog request (cache or incomplete identity)");
+                Log.d(TITLE_LOG_TAG, "no catalog request (cache or incomplete identity)");
                 applyTitleCorrectionFromState(TITLE_STATE.snapshot());
                 return;
             }
-            Log.i(TITLE_LOG_TAG, "catalog query id=" + request.catalogId);
+            Log.d(TITLE_LOG_TAG, "catalog query id=" + request.catalogId);
             MAIN.postDelayed(new Runnable() {
                 @Override public void run() {
                     synchronized (TITLE_LOCK) {
@@ -427,7 +427,7 @@ public final class VivoCarLyrics {
                                             return;
                                         }
                                         if (TITLE_STATE.complete(request, title)) {
-                                            Log.i(TITLE_LOG_TAG, "catalog title=" + title);
+                                            Log.d(TITLE_LOG_TAG, "catalog title=" + title);
                                             applyTitleCorrectionFromState(TITLE_STATE.snapshot());
                                         }
                                     }
@@ -439,7 +439,7 @@ public final class VivoCarLyrics {
                                 @Override public void run() {
                                     synchronized (TITLE_LOCK) {
                                         if (TITLE_STATE.fail(request)) {
-                                            Log.i(TITLE_LOG_TAG, "catalog query failed");
+                                            Log.d(TITLE_LOG_TAG, "catalog query failed");
                                             Log.w(TITLE_LOG_TAG,
                                                     "catalog failed id=" + request.catalogId, error);
                                         }
