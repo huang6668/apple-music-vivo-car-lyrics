@@ -131,7 +131,7 @@ public final class TitleCacheStoreTest {
             write(directory, properties);
             equal(null, store(directory, 4, 100, clock).get("123"));
             properties.setProperty("schema", "1");
-            properties.setProperty("count", "257");
+            properties.setProperty("count", String.valueOf(TitleCacheStore.MAX_ENTRIES + 1));
             write(directory, properties);
             equal(null, store(directory, 4, 100, clock).get("123"));
             properties.setProperty("count", "2");

@@ -20,7 +20,7 @@ public final class TitleCacheStore {
     public static final String NAMESPACE = "cn_v1";
     private static final String SCHEMA = "1";
     private static final String FILE_NAME = "vivo-car-title-cn-v1.properties";
-    private static final int MAX_ENTRIES = 4096;
+    static final int MAX_ENTRIES = 4096;
     private static final long TTL_MILLIS = 30L * 24 * 60 * 60 * 1000;
     private static final int MAX_TITLE_LENGTH = 2048;
     private static final long MAX_FILE_BYTES = 4L * 1024 * 1024;
