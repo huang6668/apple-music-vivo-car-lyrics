@@ -117,6 +117,20 @@ class TitleHookTest(unittest.TestCase):
                      "onPlaybackError", "onSeek", "onAtomicControllerConnected"):
             self.assertEqual(patch.count("->" + name + "("), 1)
 
+    def test_title_hunk_has_full_context_on_both_sides(self):
+        patch = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
+        title_hunk = patch.split("--- a/smali_classes2/" + hook.TARGET, 1)[1]
+        lines = title_hunk.splitlines()
+        start = next(index for index, line in enumerate(lines) if line.startswith("@@"))
+        changes = lines[start + 1:]
+        leading = next(index for index, line in enumerate(changes) if not line.startswith(" "))
+        trailing = next(index for index, line in enumerate(reversed(changes))
+                        if not line.startswith(" "))
+        self.assertGreaterEqual(leading, 3, "GNU patch --fuzz=0 needs full leading context")
+        self.assertGreaterEqual(trailing, 3, "GNU patch --fuzz=0 needs full trailing context")
+        self.assertEqual(sum(not line.startswith("+") for line in changes), 10)
+        self.assertEqual(sum(not line.startswith("-") for line in changes), 19)
+
 
 if __name__ == "__main__":
     unittest.main()

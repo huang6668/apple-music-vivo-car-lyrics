@@ -73,7 +73,7 @@
      .line 10
 --- a/smali_classes2/q8/na.smali
 +++ b/smali_classes2/q8/na.smali
-@@ -2642,6 +2642,15 @@
+@@ -2642,10 +2642,19 @@
      .line 403
      .line 404
      move-result-object v39
@@ -90,3 +90,8 @@
 +
      .line 405
      move/from16 v41, v38
+-
++
+     .line 406
+     .line 407
+     move-object/from16 v42, v39
