@@ -506,10 +506,6 @@ public final class VivoCarLyrics {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
                                     synchronized (TITLE_LOCK) {
-                                        if (TITLE_STATE.acceptsResult(request)) {
-                                            fallbackRegionalTitle(request);
-                                            return;
-                                        }
                                         if (TITLE_STATE.fail(request)) {
                                             Log.d(TITLE_LOG_TAG, "catalog query failed");
                                             Log.w(TITLE_LOG_TAG,
