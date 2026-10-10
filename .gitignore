@@ -13,3 +13,5 @@ input/*.apk
 !input/parts/
 *.apk.*
 .DS_Store
+__pycache__/
+*.pyc

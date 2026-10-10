@@ -78,6 +78,7 @@ HELPER_MARKERS=(
   'correctCatalogRequest' \
   'vivo-car-cn-title-r42-2026-10-10' \
   'correctPlayerTitle' \
+  'resolveItemTitle' \
   'VivoCarTitle' \
   'onNativeMediaItem' \
   'music.media.extras.LYRIC' \
@@ -268,6 +269,8 @@ python3 "$PATCH_ROOT/verify_title_hook.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-title-hook.txt
 python3 "$PATCH_ROOT/patch_catalog_region.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-catalog-region-hook.txt
+python3 "$PATCH_ROOT/patch_item_title.py" "$FINAL_MANIFEST_DIR" \
+  > out/report/verified-item-title-hook.txt
 python3 - "$FINAL_MANIFEST_DIR" <<'PY'
 import glob
 import re

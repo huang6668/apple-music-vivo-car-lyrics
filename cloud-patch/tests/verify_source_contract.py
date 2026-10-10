@@ -83,11 +83,14 @@ assert "getPersistentId" not in method_body("private static String titleCatalogI
 assert '"getId"' not in method_body("private static String titleCatalogId(")
 assert "TITLE_STATE.complete(request, title)" in text
 assert "TITLE_STATE.fail(request)" in text
+assert "public static String resolveItemTitle(Object item, String stockTitle)" in text
+assert "TITLE_STATE.getCachedTitle(catalogId)" in text
 assert "WeakReference<Object>" in text
 assert 'private static final String TITLE_PROFILE = "cn_v1";' in text
 assert 'private static final String TITLE_LANGUAGE = "zh-CN";' in text
 for body in (
     title_binding,
+    method_body("public static String resolveItemTitle("),
     method_body("private static void beginTitleCorrection("),
     method_body("private static boolean isCurrentTitle("),
     method_body("private static void requestTitleCorrection("),

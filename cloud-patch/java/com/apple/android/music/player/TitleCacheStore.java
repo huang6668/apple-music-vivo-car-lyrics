@@ -8,6 +8,8 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -18,7 +20,7 @@ public final class TitleCacheStore {
     public static final String NAMESPACE = "cn_v1";
     private static final String SCHEMA = "1";
     private static final String FILE_NAME = "vivo-car-title-cn-v1.properties";
-    private static final int MAX_ENTRIES = 256;
+    private static final int MAX_ENTRIES = 4096;
     private static final long TTL_MILLIS = 30L * 24 * 60 * 60 * 1000;
     private static final int MAX_TITLE_LENGTH = 2048;
     private static final long MAX_FILE_BYTES = 4L * 1024 * 1024;
@@ -78,6 +80,24 @@ public final class TitleCacheStore {
         return entry.title;
     }
 
+    public synchronized Map<String, String> getAll(Collection<String> catalogIds) {
+        if (catalogIds == null || catalogIds.isEmpty()) return Collections.emptyMap();
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        long now = clock.now();
+        for (String candidate : catalogIds) {
+            String id = catalogId(candidate);
+            if (id.isEmpty()) continue;
+            Entry entry = entries.get(id);
+            if (entry == null) continue;
+            if (!fresh(entry, now)) {
+                entries.remove(id);
+                continue;
+            }
+            result.put(id, entry.title);
+        }
+        return Collections.unmodifiableMap(result);
+    }
+
     /** Rejects invalid results; valid titles remain in memory even if the disk write fails. */
     public synchronized boolean put(String catalogId, String title) {
         String id = catalogId(catalogId);
@@ -89,6 +109,25 @@ public final class TitleCacheStore {
         long now = clock.now();
         prune(now);
         entries.put(id, new Entry(normalizedTitle, now));
+        trim();
+        return persist();
+    }
+
+    public synchronized boolean putAll(Map<String, String> titles) {
+        if (titles == null || titles.isEmpty()) return false;
+        long now = clock.now();
+        prune(now);
+        boolean any = false;
+        for (Map.Entry<String, String> item : titles.entrySet()) {
+            String id = catalogId(item.getKey());
+            String title = item.getValue() == null ? "" : item.getValue().trim();
+            if (id.isEmpty() || title.isEmpty() || title.length() > MAX_TITLE_LENGTH) {
+                continue;
+            }
+            entries.put(id, new Entry(title, now));
+            any = true;
+        }
+        if (!any) return false;
         trim();
         return persist();
     }

@@ -25,6 +25,7 @@ public final class TitleCorrectionStateTest {
         testSnapshotsAndStockPreservation();
         testInvalidCacheSize();
         testPersistentRestoreGuards();
+        testDirectCacheAccess();
         System.out.println("TitleCorrectionState tests passed");
     }
 
@@ -499,6 +500,25 @@ public final class TitleCorrectionStateTest {
         check(state.request() == null, "recent locale retained");
         state.setCacheNamespace("zh-CN");
         check(state.request() != null, "bounded cache evicts old locale entry");
+    }
+
+    private static void testDirectCacheAccess() {
+        TitleCorrectionState state = new TitleCorrectionState();
+        equal(null, state.getCachedTitle("101"));
+        state.putCachedTitle(" 00101 ", "Direct Hit");
+        equal("Direct Hit", state.getCachedTitle("101"));
+        equal("Direct Hit", state.getCachedTitle("00101"));
+
+        java.util.Map<String, String> batch = new java.util.HashMap<String, String>();
+        batch.put("102", "Batch 102");
+        batch.put("103", "Batch 103");
+        state.putCachedTitles(batch);
+        equal("Batch 102", state.getCachedTitle("102"));
+        equal("Batch 103", state.getCachedTitle("103"));
+
+        state.putCachedTitle("", "Ignore");
+        equal(null, state.getCachedTitle(""));
+        equal(null, state.getCachedTitle("invalid"));
     }
 
     private static TitleCorrectionState started(Object manager, String queueId,

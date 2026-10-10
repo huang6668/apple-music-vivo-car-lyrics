@@ -5,7 +5,7 @@ import java.util.Map;
 
 /** Independent title identity and request state; no playback or metadata publishing. */
 public final class TitleCorrectionState {
-    private static final int DEFAULT_CACHE_SIZE = 64;
+    private static final int DEFAULT_CACHE_SIZE = 4096;
 
     public static final class Request {
         public final Object manager;
@@ -266,6 +266,27 @@ public final class TitleCorrectionState {
         resolvedTitle = cached.title;
         completed = true;
         return true;
+    }
+
+    public synchronized String getCachedTitle(String candidateCatalogId) {
+        String id = normalizeCatalogId(candidateCatalogId);
+        if (id.isEmpty()) return null;
+        CachedTitle cached = cache.get(new CacheKey(cacheNamespace, id));
+        return cached == null ? null : cached.title;
+    }
+
+    public synchronized void putCachedTitle(String candidateCatalogId, String title) {
+        String id = normalizeCatalogId(candidateCatalogId);
+        String normalizedTitle = text(title);
+        if (id.isEmpty() || normalizedTitle.isEmpty()) return;
+        cache.put(new CacheKey(cacheNamespace, id), new CachedTitle(generation, normalizedTitle));
+    }
+
+    public synchronized void putCachedTitles(Map<String, String> titles) {
+        if (titles == null || titles.isEmpty()) return;
+        for (Map.Entry<String, String> entry : titles.entrySet()) {
+            putCachedTitle(entry.getKey(), entry.getValue());
+        }
     }
 
     /** Revalidate a captured identity immediately before applying an asynchronous UI update. */

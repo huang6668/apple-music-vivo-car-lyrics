@@ -7,6 +7,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Iterator;
@@ -33,6 +34,11 @@ public final class CatalogTitleResolver {
         void onError(Throwable error);
     }
 
+    public interface BatchCallback {
+        void onTitles(Map<String, String> titles);
+        void onError(Throwable error);
+    }
+
     public static final class Request {
         public final String path;
         public final Map<String, String> parameters;
@@ -54,6 +60,33 @@ public final class CatalogTitleResolver {
         }
         Map<String, String> params = new LinkedHashMap<String, String>();
         params.put("ids", id);
+        params.put("l", CATALOG_LANGUAGE);
+        params.put("platform", "android");
+        params.put("include[songs]", "artists");
+        return new Request("songs", params);
+    }
+
+    public static Request batchSongRequest(Collection<String> catalogIds, String language) {
+        if (catalogIds == null || catalogIds.isEmpty()) {
+            throw new IllegalArgumentException("Invalid catalog IDs");
+        }
+        String lang = language == null ? "" : language.trim();
+        if (!CATALOG_LANGUAGE.equals(lang) && !"zh-Hans-CN".equals(lang)) {
+            throw new IllegalArgumentException("Only mainland China title requests are supported");
+        }
+        StringBuilder builder = new StringBuilder();
+        int count = 0;
+        for (String candidate : catalogIds) {
+            String id = normalizeId(candidate);
+            if (id.isEmpty()) continue;
+            if (count >= 100) break;
+            if (count > 0) builder.append(',');
+            builder.append(id);
+            count++;
+        }
+        if (count == 0) throw new IllegalArgumentException("No valid catalog IDs");
+        Map<String, String> params = new LinkedHashMap<String, String>();
+        params.put("ids", builder.toString());
         params.put("l", CATALOG_LANGUAGE);
         params.put("platform", "android");
         params.put("include[songs]", "artists");
@@ -88,6 +121,45 @@ public final class CatalogTitleResolver {
                         String title = hasResponseErrors(response) ? null : extractTitle(response, id);
                         if (title != null) once.success(title);
                         else resolveByIsrc(catalog, method, id, once, hostExecutor);
+                    } catch (Throwable error) {
+                        once.failure(unwrap(error));
+                    }
+                }
+                public void onError(Throwable error) { once.failure(error); }
+            });
+        } catch (Throwable error) {
+            once.failure(unwrap(error));
+            return false;
+        }
+    }
+
+    public static boolean batchQuery(Object catalog, Collection<String> catalogIds, String language,
+                                      String preferredName, BatchCallback callback) {
+        return batchQuery(catalog, catalogIds, language, preferredName, callback, new Executor() {
+            public void execute(Runnable task) { task.run(); }
+        });
+    }
+
+    public static boolean batchQuery(final Object catalog, Collection<String> catalogIds, String language,
+                                      String preferredName, final BatchCallback callback, final Executor hostExecutor) {
+        if (callback == null) return false;
+        final BatchOnce once = new BatchOnce(callback);
+        try {
+            if (catalog == null) throw new IllegalArgumentException("Missing catalog instance");
+            final Request request = batchSongRequest(catalogIds, language);
+            final Method method = CatalogQueryMethod.resolve(catalog.getClass(),
+                    preferredName == null ? "F" : preferredName);
+            return dispatch(catalog, method, request.parameters, true, hostExecutor, once, new ResponseCallback() {
+                public void onResponse(Object response) {
+                    if (!once.active()) return;
+                    try {
+                        if (hasResponseErrors(response) && !isNotFound(response)) {
+                            throw new IllegalStateException("Catalog response contains errors");
+                        }
+                        Map<String, String> titles = hasResponseErrors(response)
+                                ? Collections.<String, String>emptyMap()
+                                : extractTitles(response);
+                        once.success(titles);
                     } catch (Throwable error) {
                         once.failure(unwrap(error));
                     }
@@ -156,7 +228,7 @@ public final class CatalogTitleResolver {
 
     private static boolean dispatch(final Object catalog, final Method method,
                                     Map<String, String> parameters, boolean mainland,
-                                    Executor executor, final Once chain, ResponseCallback callback) {
+                                    Executor executor, final Chain chain, ResponseCallback callback) {
         if (!chain.active()) return false;
         final RawOnce once = new RawOnce(callback, chain);
         try {
@@ -249,7 +321,7 @@ public final class CatalogTitleResolver {
     private static void purgeExpiredRequests(long now) {
         Iterator<PendingRequest> requests = PENDING.values().iterator();
         while (requests.hasNext()) {
-            if (now - requests.next().chain.deadlineNanos >= 0L) requests.remove();
+            if (now - requests.next().chain.deadlineNanos() >= 0L) requests.remove();
         }
     }
 
@@ -260,7 +332,7 @@ public final class CatalogTitleResolver {
         }
     }
 
-    private static void finishChain(Once chain) {
+    private static void finishChain(Chain chain) {
         synchronized (PENDING) {
             Iterator<PendingRequest> requests = PENDING.values().iterator();
             while (requests.hasNext()) {
@@ -301,9 +373,9 @@ public final class CatalogTitleResolver {
     private static final class PendingRequest {
         final String selectorKey;
         final String selector;
-        final Once chain;
+        final Chain chain;
         volatile boolean localized;
-        PendingRequest(String selectorKey, String selector, Once chain) {
+        PendingRequest(String selectorKey, String selector, Chain chain) {
             this.selectorKey = selectorKey;
             this.selector = selector;
             this.chain = chain;
@@ -424,6 +496,27 @@ public final class CatalogTitleResolver {
         return title;
     }
 
+    public static Map<String, String> extractTitles(Object response) {
+        if (response == null) return Collections.emptyMap();
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        for (Object entity : values(member(response, "getData", "data"))) {
+            if (!isSong(entity)) continue;
+            Object entityId = member(entity, "getId", "id");
+            if (!(entityId instanceof String)) continue;
+            String id = normalizeId((String) entityId);
+            if (id.isEmpty()) continue;
+            Object attributes = member(entity, "getAttributes", "attributes");
+            Object value = member(attributes, "getName", "name");
+            if (value instanceof String) {
+                String text = ((String) value).trim();
+                if (!text.isEmpty()) {
+                    result.put(id, text);
+                }
+            }
+        }
+        return Collections.unmodifiableMap(result);
+    }
+
     private static String extractIsrc(Object response, String id) {
         String result = null;
         boolean matched = false;
@@ -514,17 +607,24 @@ public final class CatalogTitleResolver {
                 ? error.getCause() : error;
     }
 
-    private static final class Once {
+    private interface Chain {
+        boolean active();
+        void failure(Throwable error);
+        long deadlineNanos();
+    }
+
+    private static final class Once implements Chain {
         private final Callback callback;
         private final AtomicBoolean done = new AtomicBoolean();
         private final long deadlineNanos = System.nanoTime() + QUERY_LIFETIME_NANOS;
         Once(Callback callback) { this.callback = callback; }
-        boolean active() {
+        public boolean active() {
             if (done.get()) return false;
             if (System.nanoTime() - deadlineNanos < 0L) return true;
             failure(new IllegalStateException("Mainland title query timed out"));
             return false;
         }
+        public long deadlineNanos() { return deadlineNanos; }
         void success(String title) {
             if (!active()) return;
             if (done.compareAndSet(false, true)) {
@@ -532,7 +632,34 @@ public final class CatalogTitleResolver {
                 callback.onTitle(title);
             }
         }
-        void failure(Throwable error) {
+        public void failure(Throwable error) {
+            if (done.compareAndSet(false, true)) {
+                finishChain(this);
+                callback.onError(error);
+            }
+        }
+    }
+
+    private static final class BatchOnce implements Chain {
+        private final BatchCallback callback;
+        private final AtomicBoolean done = new AtomicBoolean();
+        private final long deadlineNanos = System.nanoTime() + QUERY_LIFETIME_NANOS;
+        BatchOnce(BatchCallback callback) { this.callback = callback; }
+        public boolean active() {
+            if (done.get()) return false;
+            if (System.nanoTime() - deadlineNanos < 0L) return true;
+            failure(new IllegalStateException("Mainland title batch query timed out"));
+            return false;
+        }
+        public long deadlineNanos() { return deadlineNanos; }
+        void success(Map<String, String> titles) {
+            if (!active()) return;
+            if (done.compareAndSet(false, true)) {
+                finishChain(this);
+                callback.onTitles(titles);
+            }
+        }
+        public void failure(Throwable error) {
             if (done.compareAndSet(false, true)) {
                 finishChain(this);
                 callback.onError(error);
@@ -542,11 +669,11 @@ public final class CatalogTitleResolver {
 
     private static final class RawOnce {
         private final ResponseCallback callback;
-        private final Once chain;
+        private final Chain chain;
         private final AtomicBoolean done = new AtomicBoolean();
         private String token;
         private PendingRequest request;
-        RawOnce(ResponseCallback callback, Once chain) {
+        RawOnce(ResponseCallback callback, Chain chain) {
             this.callback = callback;
             this.chain = chain;
         }

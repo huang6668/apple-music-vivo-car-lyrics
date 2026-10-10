@@ -16,8 +16,12 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -113,6 +117,9 @@ public final class VivoCarLyrics {
                 }
             });
     private static TitleCacheStore titleCacheStore;
+    private static final Set<String> PREFETCH_PENDING = new LinkedHashSet<String>();
+    private static final Object PREFETCH_LOCK = new Object();
+    private static boolean prefetchScheduled;
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
@@ -534,6 +541,143 @@ public final class VivoCarLyrics {
                     }
                 } catch (Throwable error) {
                     Log.w(TITLE_LOG_TAG, "title cache write failed", error);
+                }
+            }
+        });
+    }
+
+    public static String resolveItemTitle(Object item, String stockTitle) {
+        if (item == null) return stockTitle;
+        try {
+            String catalogId = titleCatalogId(item);
+            if (catalogId.isEmpty()) return stockTitle;
+            final String cached;
+            synchronized (TITLE_LOCK) {
+                cached = TITLE_STATE.getCachedTitle(catalogId);
+            }
+            if (cached != null && !cached.isEmpty()) {
+                return cached;
+            }
+            enqueuePrefetch(catalogId);
+            return stockTitle;
+        } catch (Throwable ignored) {
+            return stockTitle;
+        }
+    }
+
+    public static void enqueuePrefetch(String catalogId) {
+        if (catalogId == null || catalogId.isEmpty()) return;
+        synchronized (PREFETCH_LOCK) {
+            if (PREFETCH_PENDING.size() >= 1000) return;
+            PREFETCH_PENDING.add(catalogId);
+            if (!prefetchScheduled) {
+                prefetchScheduled = true;
+                MAIN.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        drainPrefetchQueue();
+                    }
+                }, 150L);
+            }
+        }
+    }
+
+    private static void drainPrefetchQueue() {
+        final List<String> batch = new ArrayList<String>();
+        synchronized (PREFETCH_LOCK) {
+            prefetchScheduled = false;
+            Iterator<String> it = PREFETCH_PENDING.iterator();
+            while (it.hasNext() && batch.size() < 100) {
+                batch.add(it.next());
+                it.remove();
+            }
+            if (!PREFETCH_PENDING.isEmpty()) {
+                prefetchScheduled = true;
+                MAIN.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        drainPrefetchQueue();
+                    }
+                }, 300L);
+            }
+        }
+        if (batch.isEmpty()) return;
+
+        final File directory = titleCacheDirectory();
+        if (directory != null) {
+            TITLE_IO.execute(new Runnable() {
+                @Override public void run() {
+                    try {
+                        if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
+                        final Map<String, String> diskHits = titleCacheStore.getAll(batch);
+                        if (!diskHits.isEmpty()) {
+                            MAIN.post(new Runnable() {
+                                @Override public void run() {
+                                    synchronized (TITLE_LOCK) {
+                                        TITLE_STATE.putCachedTitles(diskHits);
+                                    }
+                                }
+                            });
+                        }
+                        final List<String> missing = new ArrayList<String>();
+                        for (String id : batch) {
+                            if (!diskHits.containsKey(id)) missing.add(id);
+                        }
+                        if (!missing.isEmpty()) {
+                            MAIN.post(new Runnable() {
+                                @Override public void run() {
+                                    queryCatalogBatch(missing);
+                                }
+                            });
+                        }
+                    } catch (Throwable error) {
+                        MAIN.post(new Runnable() {
+                            @Override public void run() {
+                                queryCatalogBatch(batch);
+                            }
+                        });
+                    }
+                }
+            });
+        } else {
+            queryCatalogBatch(batch);
+        }
+    }
+
+    private static void queryCatalogBatch(final List<String> catalogIds) {
+        final Object api = findCatalogApi();
+        if (api == null || catalogIds.isEmpty()) return;
+        CatalogTitleResolver.batchQuery(api, catalogIds, TITLE_LANGUAGE, "F",
+                new CatalogTitleResolver.BatchCallback() {
+                    @Override public void onTitles(final Map<String, String> titles) {
+                        if (titles == null || titles.isEmpty()) return;
+                        MAIN.post(new Runnable() {
+                            @Override public void run() {
+                                synchronized (TITLE_LOCK) {
+                                    TITLE_STATE.putCachedTitles(titles);
+                                }
+                                persistBatchTitles(titles);
+                            }
+                        });
+                    }
+                    @Override public void onError(Throwable error) {
+                        Log.w(TITLE_LOG_TAG, "batch query failed for " + catalogIds.size() + " items", error);
+                    }
+                }, new Executor() {
+                    @Override public void execute(Runnable task) {
+                        MAIN.post(task);
+                    }
+                });
+    }
+
+    private static void persistBatchTitles(final Map<String, String> titles) {
+        final File directory = titleCacheDirectory();
+        if (directory == null || titles.isEmpty()) return;
+        TITLE_IO.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
+                    titleCacheStore.putAll(titles);
+                } catch (Throwable error) {
+                    Log.w(TITLE_LOG_TAG, "batch title cache write failed", error);
                 }
             }
         });

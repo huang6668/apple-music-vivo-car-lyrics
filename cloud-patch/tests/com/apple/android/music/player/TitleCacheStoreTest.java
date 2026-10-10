@@ -27,6 +27,7 @@ public final class TitleCacheStoreTest {
         testCorruptionAndNamespace();
         testWriteFailureKeepsPreviousFile();
         testUnavailableDirectory();
+        testBatchPutAndGet();
         System.out.println("TitleCacheStore tests passed");
     }
 
@@ -182,6 +183,40 @@ public final class TitleCacheStoreTest {
             store = store(regularFile, 4, 100, clock);
             check(!store.put("123", "Memory only"), "invalid directory fails safely");
             equal("Memory only", store.get("123"));
+        } finally {
+            delete(directory);
+        }
+    }
+
+    private static void testBatchPutAndGet() throws Exception {
+        File directory = directory();
+        try {
+            FakeClock clock = new FakeClock();
+            TitleCacheStore store = store(directory, 4, 100, clock);
+            java.util.Map<String, String> batch = new java.util.HashMap<String, String>();
+            batch.put("101", "Song 101");
+            batch.put("102", "Song 102");
+            batch.put("invalid", "Invalid ID");
+            batch.put("103", "");
+            check(store.putAll(batch), "batch put should succeed for valid items");
+
+            java.util.Map<String, String> retrieved = store.getAll(java.util.Arrays.asList("101", "102", "103", "999"));
+            equal(2, retrieved.size());
+            equal("Song 101", retrieved.get("101"));
+            equal("Song 102", retrieved.get("102"));
+            equal(null, retrieved.get("103"));
+            equal(null, retrieved.get("999"));
+
+            TitleCacheStore reopened = store(directory, 4, 100, clock);
+            java.util.Map<String, String> fromDisk = reopened.getAll(java.util.Arrays.asList("101", "102"));
+            equal(2, fromDisk.size());
+            equal("Song 101", fromDisk.get("101"));
+            equal("Song 102", fromDisk.get("102"));
+
+            check(!store.putAll(null), "null map rejected");
+            check(!store.putAll(java.util.Collections.<String, String>emptyMap()), "empty map rejected");
+            check(store.getAll(null).isEmpty(), "null ids return empty map");
+            check(store.getAll(java.util.Collections.<String>emptyList()).isEmpty(), "empty ids return empty map");
         } finally {
             delete(directory);
         }

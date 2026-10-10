@@ -19,12 +19,17 @@ atomic_service_action='com.vivo.musicwidgetmix.support.service'
 [[ -f "$helper_source" ]] || { echo "Java helper missing: $helper_source" >&2; exit 1; }
 [[ -f "$paginator_source" ]] || { echo "Cluster paginator missing: $paginator_source" >&2; exit 1; }
 [[ -f "$title_verifier" ]] || { echo "Title hook verifier missing: $title_verifier" >&2; exit 1; }
+item_title_patcher="$patch_root/patch_item_title.py"
+[[ -f "$item_title_patcher" ]] || { echo "Item title patcher missing: $item_title_patcher" >&2; exit 1; }
 
 python3 "$title_verifier" work/apktool --unpatched
+python3 "$item_title_patcher" work/apktool --unpatched
 echo "Applying vivo car and Atomic Player lyrics hooks"
 patch --batch --forward --fuzz=0 --strip=1 --directory=work/apktool < "$patch_file"
 python3 "$title_verifier" work/apktool
 python3 "$patch_root/patch_catalog_region.py" work/apktool --apply
+python3 "$item_title_patcher" work/apktool --apply
+python3 "$item_title_patcher" work/apktool
 
 python3 - "$manager_target" "$connection_target" <<'PY'
 import re
