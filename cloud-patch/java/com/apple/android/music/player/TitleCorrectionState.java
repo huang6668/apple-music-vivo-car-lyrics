@@ -14,9 +14,11 @@ public final class TitleCorrectionState {
         public final String catalogId;
         public final String persistentId;
         public final String originalTitle;
+        private final TitleCorrectionState owner;
         private boolean completed;
 
         private Request(Snapshot snapshot) {
+            owner = snapshot.owner;
             manager = snapshot.manager;
             generation = snapshot.generation;
             queueId = snapshot.queueId;
@@ -36,8 +38,10 @@ public final class TitleCorrectionState {
         public final boolean pending;
         public final boolean completed;
         public final String correctedTitle;
+        private final TitleCorrectionState owner;
 
         private Snapshot(TitleCorrectionState state) {
+            owner = state;
             manager = state.manager;
             generation = state.generation;
             queueId = state.queueId;
@@ -146,7 +150,7 @@ public final class TitleCorrectionState {
 
     /** Late results populate the bounded cache but cannot settle or change another track. */
     public synchronized boolean complete(Request request, String title) {
-        if (request == null || request.completed) {
+        if (request == null || request.owner != this || request.completed) {
             return false;
         }
         request.completed = true;
@@ -159,14 +163,28 @@ public final class TitleCorrectionState {
             // Same-name responses retain their value: another play may have a different stock title.
             cache.put(request.catalogId, new CachedTitle(request.generation, normalizedTitle));
         }
-        if (activeRequest != request || manager != request.manager
-                || generation != request.generation || !queueId.equals(request.queueId)
-                || !catalogId.equals(request.catalogId)) {
+        if (!matchesRequest(request)) {
             return false;
         }
         pending = false;
         completed = true;
         resolvedTitle = normalizedTitle;
+        activeRequest = null;
+        return true;
+    }
+
+    /** Transient failures settle this generation without poisoning the catalog cache. */
+    public synchronized boolean fail(Request request) {
+        if (request == null || request.owner != this || request.completed) {
+            return false;
+        }
+        request.completed = true;
+        if (!matchesRequest(request)) {
+            return false;
+        }
+        pending = false;
+        completed = true;
+        resolvedTitle = null;
         activeRequest = null;
         return true;
     }
@@ -190,6 +208,13 @@ public final class TitleCorrectionState {
 
     public synchronized Snapshot snapshot() {
         return new Snapshot(this);
+    }
+
+    /** Revalidate a captured identity immediately before applying an asynchronous UI update. */
+    public synchronized boolean matchesSnapshot(Snapshot candidate) {
+        return candidate != null && candidate.owner == this
+                && generation == candidate.generation
+                && matchesIdentity(candidate.manager, candidate.queueId, candidate.catalogId);
     }
 
     /** An error from a retired manager must not invalidate the active playback manager. */
@@ -238,6 +263,11 @@ public final class TitleCorrectionState {
                                     String candidateCatalogId) {
         return matchesQueue(candidateManager, candidateQueueId) && !catalogId.isEmpty()
                 && catalogId.equals(normalizeCatalogId(candidateCatalogId));
+    }
+
+    private boolean matchesRequest(Request request) {
+        return activeRequest == request && generation == request.generation
+                && matchesIdentity(request.manager, request.queueId, request.catalogId);
     }
 
     private String correction() {

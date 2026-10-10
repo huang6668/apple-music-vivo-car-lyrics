@@ -323,6 +323,24 @@ jobs:
           done
           cat "$report/title-ui-notification-paths.txt" >> "$report/focused-paths.txt"
 
+          # Export full generated binders and coroutine/notification implementations:
+          # obfuscated calls often no longer contain the searchable source method name.
+          for root in work/apktool/smali*; do
+            for package in q8 J4 w9 fi gi bi kotlin/coroutines; do
+              [[ ! -d "$root/$package" ]] || find "$root/$package" -type f \
+                >> "$report/focused-paths.txt"
+            done
+            for relative in \
+              com/apple/android/music/model/BaseContentItem.smali \
+              com/apple/android/music/model/BasePlaybackItem.smali \
+              com/apple/android/music/model/CollectionItemView.smali \
+              com/apple/android/music/playback/model/PlayerQueueItem.smali \
+              com/apple/android/music/playback/model/PlayerMediaItem.smali; do
+              [[ ! -f "$root/$relative" ]] || printf '%s\n' "$root/$relative" \
+                >> "$report/focused-paths.txt"
+            done
+          done
+
           LC_ALL=C sort -u "$report/focused-paths.txt" -o "$report/focused-paths.txt"
 
           while IFS= read -r source; do

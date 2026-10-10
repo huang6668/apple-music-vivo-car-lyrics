@@ -12,6 +12,12 @@ public final class TitleCorrectionStateTest {
         testLru();
         testLatestResponseWinsCache();
         testPlaybackErrorReset();
+        testTransientFailure();
+        testStaleAndForeignFailure();
+        testForeignTokens();
+        testSnapshotIdentity();
+        testInvalidQueueKeys();
+        testResetCompletedState();
         testSnapshotsAndStockPreservation();
         testInvalidCacheSize();
         System.out.println("TitleCorrectionState tests passed");
@@ -238,6 +244,116 @@ public final class TitleCorrectionStateTest {
         check(state.currentTitle(manager, "1", "10", corrected) == corrected,
                 "identical title keeps stock CharSequence");
         equal("Corrected", state.currentTitle(manager, "1", "10", null));
+    }
+
+    private static void testTransientFailure() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Original");
+        TitleCorrectionState.Request request = state.request();
+        check(state.fail(request), "active transient failure settles");
+        check(!state.snapshot().pending && state.snapshot().completed, "failed request settled");
+        equal(null, state.correctedTitle(manager, "1", "10"));
+        check(state.request() == null, "failed generation does not loop on metadata");
+        check(!state.fail(request), "duplicate failure ignored");
+        check(!state.complete(request, "Too late"), "success after timeout ignored");
+        state.begin(manager, "2", "10", "", "Original");
+        check(state.request() != null, "transient failure not cached across plays");
+    }
+
+    private static void testStaleAndForeignFailure() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "One");
+        TitleCorrectionState.Request old = state.request();
+        state.begin(manager, "2", "20", "", "Two");
+        TitleCorrectionState.Request current = state.request();
+        check(!state.fail(old), "stale failure cannot settle current");
+        check(state.snapshot().pending && !state.snapshot().completed, "current remains pending");
+        check(!state.complete(old, "Ignored after failure"), "stale failed token consumed");
+        check(state.complete(current, "Corrected two"), "current completion after stale failure");
+        state.begin(manager, "3", "10", "", "One");
+        check(state.request() != null, "stale failure did not cache");
+
+        state = started(manager, "1", "10", "One");
+        old = state.request();
+        state.reset(manager);
+        check(!state.fail(old), "failure after reset is stale");
+        state.begin(manager, "2", "10", "", "One");
+        check(state.request() != null, "failure after reset not cached");
+        check(!state.fail(null), "null failure ignored");
+    }
+
+    private static void testForeignTokens() {
+        Object manager = new Object();
+        TitleCorrectionState first = started(manager, "1", "10", "Original");
+        TitleCorrectionState second = started(manager, "1", "10", "Original");
+        TitleCorrectionState.Request foreign = first.request();
+        check(!second.complete(foreign, "Foreign cache poison"), "foreign result rejected");
+        check(!second.fail(foreign), "foreign failure rejected");
+        check(second.request() != null, "foreign completion did not populate cache");
+        check(first.complete(foreign, "Corrected"), "foreign state did not consume token");
+        equal("Corrected", first.correctedTitle(manager, "1", "10"));
+    }
+
+    private static void testSnapshotIdentity() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Original");
+        TitleCorrectionState.Snapshot snapshot = state.snapshot();
+        check(state.matchesSnapshot(snapshot), "current snapshot accepted");
+        state.complete(state.request(), "Corrected");
+        check(state.matchesSnapshot(snapshot), "completion does not change identity");
+        check(!state.matchesSnapshot(null), "null snapshot rejected");
+        TitleCorrectionState other = started(manager, "1", "10", "Original");
+        check(!state.matchesSnapshot(other.snapshot()), "foreign state snapshot rejected");
+        state.begin(manager, "1", "10", "", "Original");
+        check(!state.matchesSnapshot(snapshot), "same IDs in new generation reject old snapshot");
+        snapshot = state.snapshot();
+        state.begin(new Object(), "1", "10", "", "Original");
+        check(!state.matchesSnapshot(snapshot), "new manager rejects old snapshot");
+        snapshot = state.snapshot();
+        state.reset(state.snapshot().manager);
+        check(!state.matchesSnapshot(snapshot), "reset rejects old snapshot");
+        check(!state.matchesSnapshot(state.snapshot()), "reset identity cannot be applied");
+
+        state.begin(manager, "1", "", "", "Original");
+        snapshot = state.snapshot();
+        check(!state.matchesSnapshot(snapshot), "incomplete catalog identity fails closed");
+        state.enrich(manager, "1", "10", "", "Original");
+        check(!state.matchesSnapshot(snapshot), "catalog enrichment invalidates incomplete snapshot");
+        check(state.matchesSnapshot(state.snapshot()), "enriched snapshot accepted");
+    }
+
+    private static void testInvalidQueueKeys() {
+        Object manager = new Object();
+        for (String queue : new String[]{"queue:1", "item:1", "title:Original", "-1", "0", ""}) {
+            TitleCorrectionState state = started(manager, queue, "10", "Original");
+            check(state.request() == null, "non-queue identity must not request: " + queue);
+            check(!state.enrich(manager, "1", "10", "", "Original"),
+                    "invalid queue must not adopt metadata: " + queue);
+            equal(null, state.correctedTitle(manager, queue, "10"));
+            check(!state.matchesSnapshot(state.snapshot()), "invalid queue snapshot rejected");
+        }
+    }
+
+    private static void testResetCompletedState() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Original");
+        state.complete(state.request(), "Corrected");
+        TitleCorrectionState.Snapshot completed = state.snapshot();
+        check(!state.reset(new Object()), "foreign reset cannot clear completed title");
+        equal("Corrected", state.correctedTitle(manager, "1", "10"));
+        check(state.reset(manager), "completed title reset");
+        check(!state.matchesSnapshot(completed), "completed snapshot invalidated");
+        equal(null, state.correctedTitle(manager, "1", "10"));
+        state.begin(manager, "2", "10", "", "Original");
+        check(state.request() == null, "reset preserves confirmed positive cache");
+        equal("Corrected", state.correctedTitle(manager, "2", "10"));
+
+        state.begin(manager, "3", "20", "", "No match");
+        state.complete(state.request(), null);
+        state.reset(manager);
+        state.begin(manager, "4", "20", "", "No match");
+        check(state.request() == null && state.snapshot().completed,
+                "reset preserves confirmed negative cache");
     }
 
     private static void testInvalidCacheSize() {
