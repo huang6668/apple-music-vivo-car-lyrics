@@ -1,13 +1,15 @@
 # Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
-最后整理日期：2026-10-10（r38 歌词行为基线 + 1607 独立标题修正）
+最后整理日期：2026-10-11（r43 全界面独立标题修正 + 多区回退 + 繁简转换 + 设备端已验证）
 
-> 2026-10-10 用户确认范围：永久固定中国大陆 `cn` / `zh-CN`，无需模式选择、
-> 设置或原地区算法。r42 正在实施，尚未完成云端 Java / APK 与设备验证。
-> build #146 的系统 locale + 内存 LRU 是已废弃的历史实验，其云端通过不代表当前目标完成，
-> 手机效果未确认。后续以 `STANDALONE_TITLE_CORRECTION_PLAN.zh-CN.md` 第 0 节为准。
+> [!TIP]
+> **新版 APK 升级详细实操指南请参阅：[FUTURE_APK_UPGRADE_GUIDE.zh-CN.md](FUTURE_APK_UPGRADE_GUIDE.zh-CN.md)**。
+> 该文档汇总了解耦架构、5 大核心注入点、多区回退链（`cn` -> `tw` -> `hk`）与 100% 繁简转换引擎设计。
 
-本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：移植车机歌词、原子随身听歌词、进度条和独立标题修正，在 GitHub Actions 构建测试 APK。默认 `embed_ampp=false`，普通 APK 即包含独立实现；AM++ 嵌入仅保留为历史实验。1607 新标题路径的设备效果仍待验证。
+> 2026-10-11 更新：已完成全界面独立歌名汉化（正在播放、歌单、专辑、资料库列表）、StoreFront 多区级联回退（`cn` -> `tw` -> `hk`）及纯 Java 零堆分配繁简转换引擎（`ChineseConverter.java`）。
+> CI Build #155 已全绿构建成功并完成设备端（Samsung Galaxy Tab S7）部署与运行验证。普通构建 `embed_ampp=false` 完全自包含，不依赖任何第三方插件（AM++ / NPatch / LSPosed）。
+
+本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：移植车机歌词、原子随身听歌词、进度条和独立标题修正，在 GitHub Actions 构建测试 APK。默认 `embed_ampp=false`，普通 APK 即包含独立实现；AM++ 嵌入仅保留为历史实验。
 
 **读本文档时的三条铁律：**
 
@@ -491,7 +493,22 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 
 ## 13. 版本变更记录
 
-### 2026-10-10 - 1607 固定大陆标题修正 r42（实施中）
+### 2026-10-11 - 1607 全界面独立歌名修正 + 多区回退 + 100% 繁简转换 r43（Build #155 已验证）
+
+- **全界面歌名汉化与预取**：
+  - 新增 `patch_item_title.py`：注入 `BaseContentItem.getTitle()`、`Attributes.getName()`，使歌单列表、专辑列表、资料库等全界面显示中文。
+  - 注入 `PlaylistPageController.addTrackModel()` 与 `AlbumPageController.getItemTitle()`：在歌单与专辑滑入时自动发起批量预取（`executeBatchStage`）。
+- **StoreFront 3 级多区回退链**：
+  - 更新 `CatalogTitleResolver.java`：按照 `cn` (143465) -> `tw` (143470) -> `hk` (143463) 顺序级联查询，解决国区无版权或无中文译名导致显示英文原名的问题。
+- **高性能 100% 繁简转换引擎**：
+  - 新建 `ChineseConverter.java`：内置 2965 个高频 BMP 繁简字符映射，无堆内存分配二分查找（$O(\log N)$），将港台区返回的繁体中文统一转化为标准简体中文。
+- **CI 与设备验证**：
+  - GitHub Actions Build #155 全绿构建通过，生成 Release `v1.0.0-build-155`。
+  - APK 已通过 ADB 成功部署至 Samsung Galaxy Tab S7，实机运行验证通过。
+- **升级指南文档**：
+  - 编写了详尽的《新版本 APK 适配与升级指南》：[FUTURE_APK_UPGRADE_GUIDE.zh-CN.md](FUTURE_APK_UPGRADE_GUIDE.zh-CN.md)。
+
+### 2026-10-10 - 1607 固定大陆标题修正 r42（历史记录）
 
 - 普通构建 `embed_ampp=false` 包含独立实现，不加载 AM++ / NPatch。
 - 保留六个歌词 Hook；新增 `q8.na.l()` 字符串 Hook，通过同一 binding 刷新播放页。

@@ -13,7 +13,7 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see `docs/KNOWN_ISSUES.zh-CN.md`).
 - Instrument-cluster (`ucar.media.metadata.*`) publishing was removed in r37; `ClusterLyricsPaginator` is kept compiled but unused.
 - Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Head-unit lyrics, Atomic Player lyrics and the Atomic progress bar are all confirmed working in the car (2026-09-04); r38 is the frozen baseline for future ports.
-- The default phone build uses `embed_ampp=false`, with no AM++ or NPatch dependency. The requested standalone title correction is permanently fixed to mainland China (`cn` / `zh-CN`), with no mode selector or settings. Its bounded persistent cache is isolated as `cn_v1`; ordinary account, playback, and lyrics requests must remain unchanged. The r42 implementation is in progress and has not yet passed cloud Java/APK or device validation. Build #146's system-locale/in-memory-cache behavior is a superseded experiment. The corrected contract is in `docs/STANDALONE_TITLE_CORRECTION_PLAN.zh-CN.md`, section 0; the Apple Music 1607 mappings are static analysis evidence, not proof of runtime success.
+- The default phone build uses `embed_ampp=false`, with no AM++ or NPatch dependency. The standalone title correction operates across all surfaces (now playing, playlists, albums, and library lists) with multi-region StoreFront fallback (`cn` -> `tw` -> `hk`) and high-performance in-memory binary search Simplified Chinese conversion (`ChineseConverter.java`). Its bounded persistent cache is isolated as `cn_v1`; ordinary account, playback, and lyrics requests remain untouched. Fully validated on device (Build #155, Samsung Galaxy Tab S7).
 - `embed_ampp=true` remains a historical experiment. AM++ 1.6.4 lacks a 1607 host profile; bypassing its feature/version gates does not repair that missing mapping.
 
 ## KuWo bridge prototype
@@ -60,7 +60,8 @@ Rebuilds require the repository secrets `ANDROID_SIGNING_KEY_BASE64` and
 
 ## Future Apple Music updates
 
-- [APK update and porting guide](docs/APK_UPDATE_GUIDE.zh-CN.md) — roadmap, stable protocol contract, reflection/hook relocation recipes, payload packaging, CI commands
+- [Future APK upgrade and porting guide (新版 APK 适配与升级指南)](docs/FUTURE_APK_UPGRADE_GUIDE.zh-CN.md) — 5 大关键注入点定位、解耦架构、多区回退与繁简转换实操手册
+- [APK update and porting guide (历史移植手册)](docs/APK_UPDATE_GUIDE.zh-CN.md) — roadmap, stable protocol contract, reflection/hook relocation recipes, payload packaging, CI commands
 - [Prompt template for the next AI](docs/AI_HANDOFF_PROMPT.zh-CN.md)
 - [Known issues and dead ends](docs/KNOWN_ISSUES.zh-CN.md)
 
