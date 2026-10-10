@@ -106,6 +106,7 @@ public final class CatalogTitleResolverTest {
         testFinalRequestIsolation();
         testMissingLocalizationFailsClosed();
         testIsrcFallback();
+        testSharedDeadline();
         check(CatalogTitleResolver.emptyContext(fi.e.class) == fi.f.a,
                 "obfuscated empty context singleton");
         try {
@@ -252,6 +253,82 @@ public final class CatalogTitleResolverTest {
         equal("Mainland result", result.title);
     }
 
+    @SuppressWarnings("rawtypes")
+    private static void testSharedDeadline() throws Exception {
+        String isrc = "TWABC1200001";
+        Object identity = map("data", Arrays.asList(map("id", "123", "type", "songs",
+                "attributes", map("name", "Account title", "isrc", isrc))));
+        Object regional = map("data", Arrays.asList(map("id", "987", "type", "songs",
+                "attributes", map("name", "Mainland title", "isrc", isrc))));
+        for (int stage = 0; stage < 6; stage++) {
+            final java.util.List<Runnable> tasks = new java.util.ArrayList<Runnable>();
+            java.util.concurrent.Executor executor = new java.util.concurrent.Executor() {
+                public void execute(Runnable task) { tasks.add(task); }
+            };
+            ScriptedCatalog catalog = new ScriptedCatalog();
+            catalog.suspended = true;
+            Recorder result = new Recorder();
+            check(CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result, executor),
+                    "queued chain accepted");
+            Object latest = null;
+            for (Object request : pendingRequests().values()) latest = request;
+            check(latest != null, "queued request registered");
+            java.lang.reflect.Field chainField = latest.getClass().getDeclaredField("chain");
+            chainField.setAccessible(true);
+            Object chain = chainField.get(latest);
+            if (stage == 0) {
+                expire(chain);
+                tasks.remove(0).run();
+            } else {
+                tasks.remove(0).run();
+                if (stage == 1) {
+                    expire(chain);
+                    catalog.pending.resumeWith(new Response());
+                } else {
+                    catalog.pending.resumeWith(new Response());
+                    if (stage == 2) {
+                        expire(chain);
+                        tasks.remove(0).run();
+                    } else {
+                        tasks.remove(0).run();
+                        if (stage == 3) {
+                            expire(chain);
+                            catalog.pending.resumeWith(identity);
+                        } else {
+                            catalog.pending.resumeWith(identity);
+                            Object regionalPending = null;
+                            for (Object request : pendingRequests().values()) regionalPending = request;
+                            check(chainField.get(regionalPending) == chain,
+                                    "regional fallback keeps the initial deadline");
+                            if (stage == 4) {
+                                expire(chain);
+                                tasks.remove(0).run();
+                            } else {
+                                tasks.remove(0).run();
+                                expire(chain);
+                                catalog.pending.resumeWith(regional);
+                            }
+                        }
+                    }
+                }
+            }
+            equal(stage == 0 ? 0 : stage < 3 ? 1 : stage < 5 ? 2 : 3, catalog.calls.size());
+            equal(0, tasks.size());
+            equal(1, result.calls);
+            equal(null, result.title);
+            check(result.error instanceof IllegalStateException, "shared deadline settles as failure");
+            for (Object request : pendingRequests().values()) {
+                check(chainField.get(request) != chain, "expired chain tokens promptly removed");
+            }
+            if (catalog.pending != null) {
+                catalog.pending.resumeWith(identity);
+                catalog.pending.resumeWith(regional);
+            }
+            equal(1, result.calls);
+            equal(0, tasks.size());
+        }
+    }
+
     private static void testErrorEnvelopes() {
         for (boolean suspended : new boolean[]{false, true}) {
             Catalog catalog = new Catalog();
@@ -350,26 +427,37 @@ public final class CatalogTitleResolverTest {
         for (String unsafePath : new String[]{null, "songs", "/v1/catalog/us/albums",
                 "/v1/catalog/us/songs/123", "/v1/me/songs", "/v1/catalog/usa/songs",
                 "https://example.com/v1/catalog/us/songs"}) {
-            LinkedHashMap protectedParameters = new LinkedHashMap(catalog.parameters);
+            Catalog protectedCatalog = suspendedCatalog();
+            LinkedHashMap protectedParameters = new LinkedHashMap(protectedCatalog.parameters);
             LinkedHashMap protectedHeaders = new LinkedHashMap(originalHeaders);
-            equal(unsafePath, CatalogTitleResolver.correctCatalogRequest(
-                    unsafePath, protectedHeaders, protectedParameters));
-            equal(catalog.parameters, protectedParameters);
+            rejectRequest(unsafePath, protectedHeaders, protectedParameters);
+            LinkedHashMap withoutToken = new LinkedHashMap(protectedCatalog.parameters);
+            withoutToken.remove(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER);
+            equal(withoutToken, protectedParameters);
             equal(originalHeaders, protectedHeaders);
+            protectedCatalog.pending.resumeWith(new Response());
         }
 
         LinkedHashMap spoof = new LinkedHashMap(catalog.parameters);
         spoof.put(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER, "unknown-token");
         LinkedHashMap spoofOriginal = new LinkedHashMap(spoof);
-        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
-                "/v1/catalog/us/songs", originalHeaders, spoof));
+        rejectRequest("/v1/catalog/us/songs", originalHeaders, spoof);
+        spoofOriginal.remove(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER);
         equal(spoofOriginal, spoof);
-        spoof = new LinkedHashMap(catalog.parameters);
+        Catalog wrongIdentity = suspendedCatalog();
+        spoof = new LinkedHashMap(wrongIdentity.parameters);
         spoof.put("ids", "456");
         spoofOriginal = new LinkedHashMap(spoof);
-        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
-                "/v1/catalog/us/songs", originalHeaders, spoof));
+        rejectRequest("/v1/catalog/us/songs", originalHeaders, spoof);
+        spoofOriginal.remove(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER);
         equal(spoofOriginal, spoof);
+        wrongIdentity.pending.resumeWith(new Response());
+        for (Object invalidToken : new Object[]{null, Integer.valueOf(3)}) {
+            spoof = new LinkedHashMap(map("ids", "123", "l", "en-US",
+                    CatalogTitleResolver.REQUEST_TOKEN_PARAMETER, invalidToken));
+            rejectRequest("/v1/catalog/us/songs", originalHeaders, spoof);
+            equal(map("ids", "123", "l", "en-US"), spoof);
+        }
 
         LinkedHashMap withoutHeaders = new LinkedHashMap();
         parameters = new LinkedHashMap(catalog.parameters);
@@ -380,26 +468,57 @@ public final class CatalogTitleResolverTest {
 
         catalog.pending.resumeWith(new Response(new Entity("123", "songs", "Done")));
         parameters = new LinkedHashMap(catalog.parameters);
-        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
-                "/v1/catalog/us/songs", originalHeaders, parameters));
-        equal(catalog.parameters, parameters);
+        rejectRequest("/v1/catalog/us/songs", originalHeaders, parameters);
+        check(!parameters.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                "completed token removed before network");
 
-        Catalog expired = new Catalog();
-        expired.result = Suspended.COROUTINE_SUSPENDED;
-        query(expired, new Recorder());
-        java.lang.reflect.Field pendingField = CatalogTitleResolver.class.getDeclaredField("PENDING");
-        pendingField.setAccessible(true);
-        Map pending = (Map) pendingField.get(null);
-        Object ownedRequest = pending.get(
-                expired.parameters.get(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER));
-        java.lang.reflect.Field deadline = ownedRequest.getClass().getDeclaredField("deadlineNanos");
-        deadline.setAccessible(true);
-        deadline.setLong(ownedRequest, System.nanoTime() - 1L);
+        Catalog expired = suspendedCatalog();
+        expire(chainFor(expired.parameters));
         parameters = new LinkedHashMap(expired.parameters);
-        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
-                "/v1/catalog/us/songs", originalHeaders, parameters));
-        equal(expired.parameters, parameters);
+        rejectRequest("/v1/catalog/us/songs", originalHeaders, parameters);
+        check(!parameters.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                "expired token removed before network");
         expired.pending.resumeWith(new Response());
+    }
+
+    private static Catalog suspendedCatalog() {
+        Catalog catalog = new Catalog();
+        catalog.result = Suspended.COROUTINE_SUSPENDED;
+        check(query(catalog, new Recorder()), "suspended fixture");
+        return catalog;
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static void rejectRequest(String path, LinkedHashMap headers, Map parameters) {
+        try {
+            CatalogTitleResolver.correctCatalogRequest(path, headers, parameters);
+            throw new AssertionError("unverified internal request permitted on network");
+        } catch (IllegalStateException expected) {
+            check(!parameters.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                    "rejected internal token removed");
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static Map pendingRequests() throws Exception {
+        java.lang.reflect.Field field = CatalogTitleResolver.class.getDeclaredField("PENDING");
+        field.setAccessible(true);
+        return (Map) field.get(null);
+    }
+
+    private static Object chainFor(Map<?, ?> parameters) throws Exception {
+        Object request = pendingRequests().get(
+                parameters.get(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER));
+        check(request != null, "pending request exists");
+        java.lang.reflect.Field field = request.getClass().getDeclaredField("chain");
+        field.setAccessible(true);
+        return field.get(request);
+    }
+
+    private static void expire(Object chain) throws Exception {
+        java.lang.reflect.Field field = chain.getClass().getDeclaredField("deadlineNanos");
+        field.setAccessible(true);
+        field.setLong(chain, System.nanoTime() - 1L);
     }
 
     private static void testSchema() {

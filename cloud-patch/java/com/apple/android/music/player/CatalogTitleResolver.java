@@ -22,7 +22,7 @@ public final class CatalogTitleResolver {
     public static final String CATALOG_LANGUAGE = "zh-CN";
     public static final String REQUEST_TOKEN_PARAMETER = "vivo_title_catalog_request";
     private static final String MAINLAND_PATH = "/v1/catalog/cn/songs";
-    private static final long REQUEST_LIFETIME_NANOS = 30_000_000_000L;
+    private static final long QUERY_LIFETIME_NANOS = 15_000_000_000L;
     private static final int MAX_PENDING_REQUESTS = 64;
     private static final AtomicLong REQUEST_SEQUENCE = new AtomicLong();
     private static final Map<String, PendingRequest> PENDING =
@@ -60,7 +60,7 @@ public final class CatalogTitleResolver {
         return new Request("songs", params);
     }
 
-    /** Timeout/cancellation is owned by the caller; duplicate host callbacks settle once. */
+    /** Every ID/ISRC stage shares one 15-second deadline; duplicate callbacks settle once. */
     public static boolean query(Object catalog, String catalogId, String language,
                                 String preferredName, Callback callback) {
         return query(catalog, catalogId, language, preferredName, callback, new Executor() {
@@ -78,8 +78,9 @@ public final class CatalogTitleResolver {
             final String id = request.parameters.get("ids");
             final Method method = CatalogQueryMethod.resolve(catalog.getClass(),
                     preferredName == null ? "F" : preferredName);
-            return dispatch(catalog, method, request.parameters, true, hostExecutor, new ResponseCallback() {
+            return dispatch(catalog, method, request.parameters, true, hostExecutor, once, new ResponseCallback() {
                 public void onResponse(Object response) {
+                    if (!once.active()) return;
                     try {
                         if (hasResponseErrors(response) && !isNotFound(response)) {
                             throw new IllegalStateException("Catalog response contains errors");
@@ -101,11 +102,13 @@ public final class CatalogTitleResolver {
 
     private static void resolveByIsrc(final Object catalog, final Method method,
                                       final String id, final Once once, final Executor hostExecutor) {
+        if (!once.active()) return;
         Map<String, String> identity = new LinkedHashMap<String, String>();
         identity.put("ids", id);
         identity.put("platform", "android");
-        dispatch(catalog, method, identity, false, hostExecutor, new ResponseCallback() {
+        dispatch(catalog, method, identity, false, hostExecutor, once, new ResponseCallback() {
             public void onResponse(Object response) {
+                if (!once.active()) return;
                 try {
                     if (hasResponseErrors(response)) {
                         if (isNotFound(response)) once.success(null);
@@ -122,8 +125,9 @@ public final class CatalogTitleResolver {
                     parameters.put("l", CATALOG_LANGUAGE);
                     parameters.put("platform", "android");
                     parameters.put("include[songs]", "artists");
-                    dispatch(catalog, method, parameters, true, hostExecutor, new ResponseCallback() {
+                    dispatch(catalog, method, parameters, true, hostExecutor, once, new ResponseCallback() {
                         public void onResponse(Object regionalResponse) {
+                            if (!once.active()) return;
                             try {
                                 if (hasResponseErrors(regionalResponse)
                                         && !isNotFound(regionalResponse)) {
@@ -152,14 +156,14 @@ public final class CatalogTitleResolver {
 
     private static boolean dispatch(final Object catalog, final Method method,
                                     Map<String, String> parameters, boolean mainland,
-                                    Executor executor, ResponseCallback callback) {
-        final RawOnce once = new RawOnce(callback);
+                                    Executor executor, final Once chain, ResponseCallback callback) {
+        if (!chain.active()) return false;
+        final RawOnce once = new RawOnce(callback, chain);
         try {
             final Map<String, String> owned = new LinkedHashMap<String, String>(parameters);
             if (mainland) {
                 String key = owned.containsKey("ids") ? "ids" : "filter[isrc]";
-                once.request = new PendingRequest(key, owned.get(key),
-                        System.nanoTime() + REQUEST_LIFETIME_NANOS);
+                once.request = new PendingRequest(key, owned.get(key), chain);
                 once.token = registerRequest(once.request);
                 owned.put(REQUEST_TOKEN_PARAMETER, once.token);
             }
@@ -168,6 +172,10 @@ public final class CatalogTitleResolver {
             executor.execute(new Runnable() {
                 public void run() {
                     try {
+                        if (!chain.active()) {
+                            finishRequest(once.token);
+                            return;
+                        }
                         Object result = method.invoke(catalog, "songs",
                                 Collections.unmodifiableMap(owned), continuation);
                         if (!isSuspended(result)) once.complete(result);
@@ -190,18 +198,26 @@ public final class CatalogTitleResolver {
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     public static String correctCatalogRequest(String path, LinkedHashMap headers, Map parameters) {
-        if (path == null || headers == null || parameters == null
-                || !path.matches("/v1/catalog/[a-zA-Z]{2}/songs")) return path;
+        if (parameters == null || !parameters.containsKey(REQUEST_TOKEN_PARAMETER)) return path;
         Object rawToken = parameters.get(REQUEST_TOKEN_PARAMETER);
-        if (!(rawToken instanceof String)) return path;
         final PendingRequest request;
         synchronized (PENDING) {
             purgeExpiredRequests(System.nanoTime());
             request = PENDING.get(rawToken);
-            if (request == null || !request.selector.equals(parameters.get(request.selectorKey))
-                    || parameters.containsKey("ids") != "ids".equals(request.selectorKey)
-                    || parameters.containsKey("filter[isrc]")
-                    != "filter[isrc]".equals(request.selectorKey)) return path;
+        }
+        if (path == null || headers == null
+                || !path.matches("/v1/catalog/[a-zA-Z]{2}/songs")
+                || !(rawToken instanceof String) || request == null
+                || !request.chain.active()
+                || !request.selector.equals(parameters.get(request.selectorKey))
+                || parameters.containsKey("ids") != "ids".equals(request.selectorKey)
+                || parameters.containsKey("filter[isrc]")
+                != "filter[isrc]".equals(request.selectorKey)) {
+            parameters.remove(REQUEST_TOKEN_PARAMETER);
+            IllegalStateException error = new IllegalStateException("Unverified mainland catalog request");
+            if (request != null) request.chain.failure(error);
+            finishRequest(rawToken instanceof String ? (String) rawToken : null);
+            throw error;
         }
         parameters.put("l", CATALOG_LANGUAGE);
         parameters.remove(REQUEST_TOKEN_PARAMETER);
@@ -210,6 +226,9 @@ public final class CatalogTitleResolver {
                 mainlandStorefrontHeader(header(headers, "X-Apple-Store-Front")));
         replaceHeader(headers, "X-Apple-Request-Store-Front",
                 mainlandStorefrontHeader(header(headers, "X-Apple-Request-Store-Front")));
+        if (!request.chain.active()) {
+            throw new IllegalStateException("Mainland catalog request expired during localization");
+        }
         request.localized = true;
         return MAINLAND_PATH;
     }
@@ -230,7 +249,7 @@ public final class CatalogTitleResolver {
     private static void purgeExpiredRequests(long now) {
         Iterator<PendingRequest> requests = PENDING.values().iterator();
         while (requests.hasNext()) {
-            if (now - requests.next().deadlineNanos >= 0L) requests.remove();
+            if (now - requests.next().chain.deadlineNanos >= 0L) requests.remove();
         }
     }
 
@@ -238,6 +257,15 @@ public final class CatalogTitleResolver {
         if (token == null) return;
         synchronized (PENDING) {
             PENDING.remove(token);
+        }
+    }
+
+    private static void finishChain(Once chain) {
+        synchronized (PENDING) {
+            Iterator<PendingRequest> requests = PENDING.values().iterator();
+            while (requests.hasNext()) {
+                if (requests.next().chain == chain) requests.remove();
+            }
         }
     }
 
@@ -273,12 +301,12 @@ public final class CatalogTitleResolver {
     private static final class PendingRequest {
         final String selectorKey;
         final String selector;
-        final long deadlineNanos;
+        final Once chain;
         volatile boolean localized;
-        PendingRequest(String selectorKey, String selector, long deadlineNanos) {
+        PendingRequest(String selectorKey, String selector, Once chain) {
             this.selectorKey = selectorKey;
             this.selector = selector;
-            this.deadlineNanos = deadlineNanos;
+            this.chain = chain;
         }
     }
 
@@ -489,14 +517,24 @@ public final class CatalogTitleResolver {
     private static final class Once {
         private final Callback callback;
         private final AtomicBoolean done = new AtomicBoolean();
+        private final long deadlineNanos = System.nanoTime() + QUERY_LIFETIME_NANOS;
         Once(Callback callback) { this.callback = callback; }
+        boolean active() {
+            if (done.get()) return false;
+            if (System.nanoTime() - deadlineNanos < 0L) return true;
+            failure(new IllegalStateException("Mainland title query timed out"));
+            return false;
+        }
         void success(String title) {
+            if (!active()) return;
             if (done.compareAndSet(false, true)) {
+                finishChain(this);
                 callback.onTitle(title);
             }
         }
         void failure(Throwable error) {
             if (done.compareAndSet(false, true)) {
+                finishChain(this);
                 callback.onError(error);
             }
         }
@@ -504,18 +542,22 @@ public final class CatalogTitleResolver {
 
     private static final class RawOnce {
         private final ResponseCallback callback;
+        private final Once chain;
         private final AtomicBoolean done = new AtomicBoolean();
         private String token;
         private PendingRequest request;
-        RawOnce(ResponseCallback callback) { this.callback = callback; }
+        RawOnce(ResponseCallback callback, Once chain) {
+            this.callback = callback;
+            this.chain = chain;
+        }
         void complete(Object response) {
             if (!done.compareAndSet(false, true)) return;
             finishRequest(token);
+            if (!chain.active()) return;
             try {
                 Throwable failure = failureOf(response);
                 if (failure != null) callback.onError(failure);
-                else if (request != null && (!request.localized
-                        || System.nanoTime() - request.deadlineNanos >= 0L)) {
+                else if (request != null && !request.localized) {
                     callback.onError(new IllegalStateException("Mainland request was not localized"));
                 } else callback.onResponse(response);
             } catch (Throwable error) {

@@ -372,6 +372,7 @@ public final class VivoTitleIntegrationTest {
         fixture.request();
         fixture.catalog.succeed(0, "China title");
         Handler.drain();
+        Handler.advanceBy(15000L);
         equal("China title", fixture.item.getTitle());
         fixture.activate();
         MediaApiRepositoryHolder.Companion.setMediaApi(null);
