@@ -71,3 +71,22 @@
  
      .line 9
      .line 10
+--- a/smali_classes2/q8/na.smali
++++ b/smali_classes2/q8/na.smali
+@@ -2642,6 +2642,15 @@
+     .line 403
+     .line 404
+     move-result-object v39
+-
++
++    # 1607 l()V: binding v1, item v8, stock title v39; v40/v41 are dead here.
++    move-object/16 v41, v39
++    move-object/from16 v39, v1
++    move-object/from16 v40, v8
++
++    invoke-static/range {v39 .. v41}, Lcom/apple/android/music/player/VivoCarLyrics;->correctPlayerTitle(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/CharSequence;)Ljava/lang/CharSequence;
++
++    move-result-object v39
++
+     .line 405
+     move/from16 v41, v38

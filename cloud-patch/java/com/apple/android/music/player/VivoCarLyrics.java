@@ -5,7 +5,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Html;
+import android.util.Log;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -20,7 +22,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-atomic-seek-bit-r40-2026-10-08";
+    private static final String BUILD_MARKER = "vivo-car-standalone-title-r41-2026-10-10";
+    private static final String TITLE_LOG_TAG = "VivoCarTitle";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -85,6 +88,14 @@ public final class VivoCarLyrics {
     private static final Pattern LRC_TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
     private static final LyricsState EMPTY_LYRICS = new LyricsState(
             new long[0], new String[0], "", new long[0], new String[0], "");
+    private static final TitleCorrectionState TITLE_STATE = new TitleCorrectionState();
+    private static final Object TITLE_LOCK = new Object();
+    private static final long TITLE_TIMEOUT_MS = 15000L;
+    private static long titleBindingGeneration = -1L;
+    private static long titleRebindGeneration = -1L;
+    private static WeakReference<Object> reboundTitleItem = new WeakReference<Object>(null);
+    private static WeakReference<Object> reboundTitleBinding = new WeakReference<Object>(null);
+    private static Object titleSourceQueue;
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
@@ -99,6 +110,8 @@ public final class VivoCarLyrics {
     private static String metadataWhole;
     private static int metadataStatus = Integer.MIN_VALUE;
     private static volatile Object currentQueueItem;
+    private static volatile WeakReference<Object> currentTitleBinding = new WeakReference<Object>(null);
+    private static volatile WeakReference<Object> currentTitleItem = new WeakReference<Object>(null);
     private static volatile long lastKnownDuration = 0L;
     private static boolean publishQueued;
     private static long pendingGeneration = -1L;
@@ -147,6 +160,7 @@ public final class VivoCarLyrics {
                     }
                 }
             }
+            applyTitleCorrection(mediaItem);
         } catch (Throwable ignored) {
         }
     }
@@ -165,6 +179,7 @@ public final class VivoCarLyrics {
             // injecting the previous track's duration is better than injecting 0 or nothing.
             currentExpectedQueueId = longValue(invokeOptional(newQueueItem, "getPlaybackQueueId"), -1L);
             currentPlaybackItem = null;
+            beginTitleCorrection(playbackManager, newQueueItem);
             resetPublishCache();
             String mediaId = queueMediaId(newQueueItem);
             synchronized (STATE_LOCK) {
@@ -181,6 +196,7 @@ public final class VivoCarLyrics {
                 return;
             }
 
+            requestTitleCorrection();
             scheduleLoad(playbackManager, generation, currentExpectedQueueId, LOAD_RETRY_MS);
         } catch (Throwable ignored) {
         }
@@ -198,6 +214,8 @@ public final class VivoCarLyrics {
             if (queueId > 0L) {
                 currentExpectedQueueId = queueId;
             }
+            enrichTitleCorrection(playbackManager, queueItem);
+            requestTitleCorrection();
             if (!metadataHasAtomicSupport(playbackManager, generation)) {
                 scheduleMetadataReapply(playbackManager, generation);
             }
@@ -218,6 +236,7 @@ public final class VivoCarLyrics {
             }
             currentExpectedQueueId = -1L;
             currentPlaybackItem = null;
+            resetTitleCorrection(playbackManager);
             resetPublishCache();
             synchronized (STATE_LOCK) {
                 if (!isCurrent(playbackManager, generation)) {
@@ -230,6 +249,297 @@ public final class VivoCarLyrics {
             scheduleMetadataReapply(playbackManager, generation);
         } catch (Throwable ignored) {
         }
+    }
+
+    /** Substitutes only this view's title; q0(item) re-evaluates the same binding after a result. */
+    public static CharSequence correctPlayerTitle(Object binding, Object item, CharSequence stock) {
+        try {
+            synchronized (TITLE_LOCK) {
+                boolean localeChanged = TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
+                TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
+                if (!isCurrentTitle(state) || !titleItemMatches(state, item)) {
+                    if (currentTitleBinding.get() == binding) {
+                        currentTitleBinding.clear();
+                        currentTitleItem.clear();
+                        titleBindingGeneration = -1L;
+                    }
+                    return stock;
+                }
+                currentTitleBinding = new WeakReference<Object>(binding);
+                currentTitleItem = new WeakReference<Object>(item);
+                titleBindingGeneration = state.generation;
+                if (localeChanged) requestTitleCorrection();
+                return TITLE_STATE.currentTitle(state.manager, state.queueId, state.catalogId, stock);
+            }
+        } catch (Throwable ignored) {
+            return stock;
+        }
+    }
+
+    private static void beginTitleCorrection(Object manager, Object queueItem) {
+        try {
+            synchronized (TITLE_LOCK) {
+                titleSourceQueue = queueItem;
+                currentTitleBinding.clear();
+                currentTitleItem.clear();
+                titleBindingGeneration = -1L;
+                titleRebindGeneration = -1L;
+                Object item = invokeOptional(queueItem, "getItem");
+                TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
+                TITLE_STATE.begin(manager, titleQueueId(queueItem), titleCatalogId(item),
+                        stringValue(invokeOptional(item, "getPersistentId")),
+                        stringValue(invokeOptional(item, "getTitle")));
+            }
+        } catch (Throwable error) {
+            Log.w(TITLE_LOG_TAG, "title identity unavailable", error);
+        }
+    }
+
+    private static void resetTitleCorrection(Object manager) {
+        synchronized (TITLE_LOCK) {
+            if (!TITLE_STATE.reset(manager)) return;
+            titleSourceQueue = null;
+            currentTitleBinding.clear();
+            currentTitleItem.clear();
+            titleBindingGeneration = -1L;
+            titleRebindGeneration = -1L;
+        }
+    }
+
+    private static void enrichTitleCorrection(Object manager, Object queueItem) {
+        try {
+            synchronized (TITLE_LOCK) {
+                TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
+                if (state.manager != manager || manager != currentManager || queueItem == null) return;
+                // Only the identical current source object may complete an initially unknown queue.
+                if (state.queueId.isEmpty() && queueItem == titleSourceQueue
+                        && queueItem == currentQueueItem && !titleQueueId(queueItem).isEmpty()) {
+                    beginTitleCorrection(manager, queueItem);
+                    return;
+                }
+                Object item = invokeOptional(queueItem, "getItem");
+                if (TITLE_STATE.enrich(manager, titleQueueId(queueItem), titleCatalogId(item),
+                        stringValue(invokeOptional(item, "getPersistentId")),
+                        stringValue(invokeOptional(item, "getTitle")))) {
+                    titleSourceQueue = queueItem;
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TITLE_LOG_TAG, "title identity enrichment failed", error);
+        }
+    }
+
+    private static String titleQueueId(Object queueItem) {
+        return TitleCorrectionState.normalizeCatalogId(
+                stringValue(invokeOptional(queueItem, "getPlaybackQueueId")));
+    }
+
+    private static String titleCatalogId(Object item) {
+        // getId() / public mediaId can be a numeric library persistentId, not a catalog song ID.
+        return TitleCorrectionState.normalizeCatalogId(
+                stringValue(invokeOptional(item, "getSubscriptionStoreId")));
+    }
+
+    private static boolean isCurrentTitle(TitleCorrectionState.Snapshot state) {
+        return TITLE_STATE.matchesSnapshot(state) && currentManager == state.manager
+                && state.cacheNamespace.equals(Locale.getDefault().toLanguageTag())
+                && state.queueId.equals(titleQueueId(titleSourceQueue))
+                && state.catalogId.equals(titleCatalogId(invokeOptional(titleSourceQueue, "getItem")))
+                && state.queueId.equals(titleQueueId(currentQueueItem));
+    }
+
+    private static boolean titleItemMatches(TitleCorrectionState.Snapshot state, Object item) {
+        return item != null && state.queueId.equals(TitleCorrectionState.normalizeCatalogId(
+                stringValue(invokeOptional(item, "getQueueId"))))
+                && state.catalogId.equals(titleCatalogId(item));
+    }
+
+    private static void requestTitleCorrection() {
+        final TitleCorrectionState.Snapshot state;
+        synchronized (TITLE_LOCK) {
+            TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
+            state = TITLE_STATE.snapshot();
+        }
+        MAIN.post(new Runnable() {
+            @Override public void run() {
+                startTitleQuery(state, 0);
+            }
+        });
+    }
+
+    private static void startTitleQuery(final TitleCorrectionState.Snapshot state, final int attempt) {
+        synchronized (TITLE_LOCK) {
+            if (!state.cacheNamespace.equals(Locale.getDefault().toLanguageTag())) {
+                if (TITLE_STATE.matchesSnapshot(state)) requestTitleCorrection();
+                return;
+            }
+            if (!isCurrentTitle(state)) return;
+            final Object api = findCatalogApi();
+            if (api == null) {
+                if (attempt < 3) {
+                    MAIN.postDelayed(new Runnable() {
+                        @Override public void run() {
+                            startTitleQuery(state, attempt + 1);
+                        }
+                    }, 300L);
+                } else {
+                    Log.w(TITLE_LOG_TAG, "host catalog unavailable; keep stock title");
+                }
+                return;
+            }
+            final TitleCorrectionState.Request request = TITLE_STATE.request();
+            if (request == null) {
+                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+                return;
+            }
+            MAIN.postDelayed(new Runnable() {
+                @Override public void run() {
+                    synchronized (TITLE_LOCK) {
+                        if (TITLE_STATE.fail(request)) {
+                            Log.w(TITLE_LOG_TAG, "catalog timeout id=" + request.catalogId);
+                        }
+                    }
+                }
+            }, TITLE_TIMEOUT_MS);
+            CatalogTitleResolver.query(api, request.catalogId, request.cacheNamespace, "F",
+                    new CatalogTitleResolver.Callback() {
+                        @Override public void onTitle(final String title) {
+                            MAIN.post(new Runnable() {
+                                @Override public void run() {
+                                    synchronized (TITLE_LOCK) {
+                                        if (!request.cacheNamespace.equals(Locale.getDefault().toLanguageTag())) {
+                                            TITLE_STATE.fail(request);
+                                            requestTitleCorrection();
+                                            return;
+                                        }
+                                        if (TITLE_STATE.complete(request, title)) {
+                                            applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        @Override public void onError(final Throwable error) {
+                            MAIN.post(new Runnable() {
+                                @Override public void run() {
+                                    synchronized (TITLE_LOCK) {
+                                        if (TITLE_STATE.fail(request)) {
+                                            Log.w(TITLE_LOG_TAG,
+                                                    "catalog failed id=" + request.catalogId, error);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
+        }
+    }
+
+    private static Object findCatalogApi() {
+        try {
+            Class<?> holder = Class.forName(
+                    "com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder");
+            Object companion = findField(holder, "Companion").get(null);
+            Object api = invokeOptional(companion, "getMediaApi");
+            if (api == null) return null;
+            CatalogQueryMethod.resolve(api.getClass(), "F");
+            return api;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static void applyTitleCorrectionFromState(TitleCorrectionState.Snapshot state) {
+        if (!isCurrentTitle(state) || state.correctedTitle == null) return;
+        writeCorrectedTitle(invokeOptional(titleSourceQueue, "getItem"), state.correctedTitle);
+        try {
+            if (applyTitleCorrection(currentMediaItem(state.manager))) {
+                refreshTitleNotification(state);
+            }
+        } catch (Throwable ignored) {
+        }
+        Object binding = currentTitleBinding.get();
+        Object item = currentTitleItem.get();
+        if (binding != null && titleBindingGeneration == state.generation
+                && titleItemMatches(state, item)
+                && (titleRebindGeneration != state.generation || reboundTitleItem.get() != item
+                    || reboundTitleBinding.get() != binding)) {
+            titleRebindGeneration = state.generation;
+            reboundTitleItem = new WeakReference<Object>(item);
+            reboundTitleBinding = new WeakReference<Object>(binding);
+            invokeOptional(binding, "q0", item);
+        }
+        Log.d(TITLE_LOG_TAG, "catalog title ready id=" + state.catalogId
+                + " generation=" + state.generation);
+    }
+
+    private static boolean applyTitleCorrection(Object mediaItem) {
+        try {
+            synchronized (TITLE_LOCK) {
+                TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
+                if (mediaItem == null || !isCurrentTitle(state) || state.correctedTitle == null) return false;
+                Object metadata = getFieldValue(mediaItem, "d");
+                Bundle extras = getMetadataExtras(metadata);
+                if (extras == null || !state.queueId.equals(TitleCorrectionState.normalizeCatalogId(
+                        String.valueOf(extras.getLong(APPLE_QUEUE_ID, -1L))))
+                        || !state.catalogId.equals(TitleCorrectionState.normalizeCatalogId(
+                        extras.getString(APPLE_MEDIA_ID)))) return false;
+                boolean changed = writeCorrectedTitle(metadata, state.correctedTitle);
+                writeCorrectedTitle(invokeOptional(titleSourceQueue, "getItem"), state.correctedTitle);
+                return changed;
+            }
+        } catch (Throwable error) {
+            Log.w(TITLE_LOG_TAG, "native title update skipped", error);
+        }
+        return false;
+    }
+
+    /** Rebuilds only the stock notification, never the player item, metadata or PlaybackState. */
+    private static void refreshTitleNotification(TitleCorrectionState.Snapshot state) {
+        try {
+            if (!isCurrentTitle(state)) return;
+            Object session = getFieldValue(getFieldValue(state.manager, "a"), "b");
+            Object service = getFieldValue(getFieldValue(session, "a"), "f");
+            if (service == null || !"com.apple.android.music.player.MediaPlaybackService"
+                    .equals(service.getClass().getName()) || getFieldValue(service, "y") != session
+                    || invokeOptional(session, "c") != state.manager) return;
+            Method refresh = findCompatibleMethod(service.getClass(), "g",
+                    new Object[]{session, Boolean.FALSE}, false);
+            Class<?>[] parameters = refresh.getParameterTypes();
+            if (!"J4.Y2".equals(refresh.getDeclaringClass().getName())
+                    || !"J4.f2".equals(parameters[0].getName())
+                    || parameters[1] != Boolean.TYPE || Modifier.isStatic(refresh.getModifiers())) return;
+            refresh.invoke(service, session, Boolean.FALSE);
+        } catch (Throwable error) {
+            Log.w(TITLE_LOG_TAG, "notification refresh unavailable; keep stock notification", error);
+        }
+    }
+
+    /** The only reflective writes: verified 1607 metadata title or StoreMediaItem.title. */
+    private static boolean writeCorrectedTitle(Object target, String title) {
+        if (target == null || title == null || title.isEmpty()) return false;
+        try {
+            String type = target.getClass().getName();
+            String name;
+            Class<?> expected;
+            if ("z3.x".equals(type)) {
+                name = "a";
+                expected = CharSequence.class;
+            } else if ("com.apple.android.music.playback.model.StoreMediaItem".equals(type)) {
+                name = "title";
+                expected = String.class;
+            } else {
+                return false;
+            }
+            Field field = findField(target.getClass(), name);
+            if (Modifier.isStatic(field.getModifiers()) || field.getType() != expected) return false;
+            if (title.equals(field.get(target))) return false;
+            field.set(target, title);
+            return true;
+        } catch (Throwable error) {
+            Log.w(TITLE_LOG_TAG, "title field unavailable; keep stock title", error);
+        }
+        return false;
     }
 
     /** Called from the media-session seek path so a drag jumps to the requested lyric immediately. */

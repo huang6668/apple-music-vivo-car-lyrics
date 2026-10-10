@@ -9,6 +9,8 @@ PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/VivoCarLyrics.java"
 PAGINATOR_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/ClusterLyricsPaginator.java"
 TITLE_STATE_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/TitleCorrectionState.java"
+CATALOG_METHOD_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/CatalogQueryMethod.java"
+CATALOG_RESOLVER_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/CatalogTitleResolver.java"
 HELPER_WORK="$RUNNER_TEMP/vivo-car-lyrics-helper"
 SIGNING_KEY="$RUNNER_TEMP/apple-music-vivo-car-lyrics-signing.p12"
 SIGNING_CERT_SHA256_FILE="$PATCH_ROOT/../config/signing-cert-sha256.txt"
@@ -23,6 +25,8 @@ FINAL_HELPER_DEX="$HELPER_WORK/final-helper.dex"
 [[ -f "$HELPER_SOURCE" ]] || { echo "VivoCarLyrics.java is missing" >&2; exit 1; }
 [[ -f "$PAGINATOR_SOURCE" ]] || { echo "ClusterLyricsPaginator.java is missing" >&2; exit 1; }
 [[ -f "$TITLE_STATE_SOURCE" ]] || { echo "TitleCorrectionState.java is missing" >&2; exit 1; }
+[[ -f "$CATALOG_METHOD_SOURCE" ]] || { echo "CatalogQueryMethod.java is missing" >&2; exit 1; }
+[[ -f "$CATALOG_RESOLVER_SOURCE" ]] || { echo "CatalogTitleResolver.java is missing" >&2; exit 1; }
 [[ -f "$SIGNING_CERT_SHA256_FILE" ]] || { echo "Signing certificate pin is missing" >&2; exit 1; }
 [[ -n "${SIGNING_KEY_BASE64:-}" ]] || { echo "ANDROID_SIGNING_KEY_BASE64 secret is missing" >&2; exit 1; }
 [[ -n "${SIGNING_PASSWORD:-}" ]] || { echo "ANDROID_SIGNING_PASSWORD secret is missing" >&2; exit 1; }
@@ -36,7 +40,8 @@ find work/apktool -path '*/META-INF/*' -type f \
 java -Xmx4g -jar "$APKTOOL_JAR" b work/apktool -o out/app-unsigned.apk
 
 javac --release 8 -classpath "$PLATFORM" -d "$HELPER_WORK/classes" \
-  "$HELPER_SOURCE" "$PAGINATOR_SOURCE" "$TITLE_STATE_SOURCE"
+  "$HELPER_SOURCE" "$PAGINATOR_SOURCE" "$TITLE_STATE_SOURCE" \
+  "$CATALOG_METHOD_SOURCE" "$CATALOG_RESOLVER_SOURCE"
 jar --create --file "$HELPER_WORK/vivo-car-lyrics.jar" -C "$HELPER_WORK/classes" .
 "$BT/d8" --min-api 30 --output "$HELPER_WORK/dex" "$HELPER_WORK/vivo-car-lyrics.jar"
 unzip -Z1 out/app-unsigned.apk > "$APK_ENTRY_LIST"
@@ -64,7 +69,12 @@ strings "out/report/$HELPER_DEX_NAME" > out/report/vivo-car-lyrics-helper-string
 HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
   'com/apple/android/music/player/ClusterLyricsPaginator' \
-  'vivo-car-atomic-seek-bit-r40-2026-10-08' \
+  'com/apple/android/music/player/TitleCorrectionState' \
+  'com/apple/android/music/player/CatalogQueryMethod' \
+  'com/apple/android/music/player/CatalogTitleResolver' \
+  'vivo-car-standalone-title-r41-2026-10-10' \
+  'correctPlayerTitle' \
+  'VivoCarTitle' \
   'onNativeMediaItem' \
   'music.media.extras.LYRIC' \
   'music.media.extras.LYRIC_IS_ALLOWED' \
@@ -250,6 +260,8 @@ for marker in "${HELPER_MARKERS[@]}"; do
   }
 done
 sha256sum "$FINAL_HELPER_DEX" > out/report/final-helper-dex.sha256
+python3 "$PATCH_ROOT/verify_title_hook.py" "$FINAL_MANIFEST_DIR" \
+  > out/report/verified-title-hook.txt
 python3 - "$FINAL_MANIFEST_DIR" <<'PY'
 import glob
 import re

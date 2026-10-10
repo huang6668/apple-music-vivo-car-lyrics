@@ -14,6 +14,8 @@ public final class TitleCorrectionState {
         public final String catalogId;
         public final String persistentId;
         public final String originalTitle;
+        public final String cacheNamespace;
+        private final CacheKey cacheKey;
         private final TitleCorrectionState owner;
         private boolean completed;
 
@@ -25,6 +27,8 @@ public final class TitleCorrectionState {
             catalogId = snapshot.catalogId;
             persistentId = snapshot.persistentId;
             originalTitle = snapshot.originalTitle;
+            cacheNamespace = snapshot.cacheNamespace;
+            cacheKey = new CacheKey(cacheNamespace, catalogId);
         }
     }
 
@@ -35,6 +39,7 @@ public final class TitleCorrectionState {
         public final String catalogId;
         public final String persistentId;
         public final String originalTitle;
+        public final String cacheNamespace;
         public final boolean pending;
         public final boolean completed;
         public final String correctedTitle;
@@ -48,9 +53,32 @@ public final class TitleCorrectionState {
             catalogId = state.catalogId;
             persistentId = state.persistentId;
             originalTitle = state.originalTitle;
+            cacheNamespace = state.cacheNamespace;
             pending = state.pending;
             completed = state.completed;
             correctedTitle = state.correction();
+        }
+    }
+
+    private static final class CacheKey {
+        final String namespace;
+        final String catalogId;
+
+        CacheKey(String namespace, String catalogId) {
+            this.namespace = namespace;
+            this.catalogId = catalogId;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof CacheKey)) return false;
+            CacheKey key = (CacheKey) other;
+            return namespace.equals(key.namespace) && catalogId.equals(key.catalogId);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * namespace.hashCode() + catalogId.hashCode();
         }
     }
 
@@ -64,13 +92,14 @@ public final class TitleCorrectionState {
         }
     }
 
-    private final Map<String, CachedTitle> cache;
+    private final Map<CacheKey, CachedTitle> cache;
     private Object manager;
     private long generation;
     private String queueId = "";
     private String catalogId = "";
     private String persistentId = "";
     private String originalTitle = "";
+    private String cacheNamespace = "";
     private boolean pending;
     private boolean completed;
     private String resolvedTitle;
@@ -84,12 +113,21 @@ public final class TitleCorrectionState {
         if (cacheSize <= 0) {
             throw new IllegalArgumentException("cacheSize must be positive");
         }
-        cache = new LinkedHashMap<String, CachedTitle>(cacheSize, 0.75f, true) {
+        cache = new LinkedHashMap<CacheKey, CachedTitle>(cacheSize, 0.75f, true) {
             @Override
-            protected boolean removeEldestEntry(Map.Entry<String, CachedTitle> eldest) {
+            protected boolean removeEldestEntry(Map.Entry<CacheKey, CachedTitle> eldest) {
                 return size() > cacheSize;
             }
         };
+    }
+
+    /** Language changes invalidate active work but retain independently bounded cache entries. */
+    public synchronized boolean setCacheNamespace(String namespace) {
+        String normalized = text(namespace);
+        if (cacheNamespace.equals(normalized)) return false;
+        cacheNamespace = normalized;
+        begin(manager, queueId, catalogId, persistentId, originalTitle);
+        return true;
     }
 
     public synchronized long begin(Object newManager, String newQueueId, String newCatalogId,
@@ -137,7 +175,7 @@ public final class TitleCorrectionState {
                 || pending || completed) {
             return null;
         }
-        CachedTitle cached = cache.get(catalogId);
+        CachedTitle cached = cache.get(new CacheKey(cacheNamespace, catalogId));
         if (cached != null) {
             resolvedTitle = cached.title;
             completed = true;
@@ -158,10 +196,10 @@ public final class TitleCorrectionState {
         if (normalizedTitle.isEmpty()) {
             normalizedTitle = null;
         }
-        CachedTitle cached = cache.get(request.catalogId);
+        CachedTitle cached = cache.get(request.cacheKey);
         if (cached == null || cached.generation <= request.generation) {
             // Same-name responses retain their value: another play may have a different stock title.
-            cache.put(request.catalogId, new CachedTitle(request.generation, normalizedTitle));
+            cache.put(request.cacheKey, new CachedTitle(request.generation, normalizedTitle));
         }
         if (!matchesRequest(request)) {
             return false;
@@ -214,6 +252,7 @@ public final class TitleCorrectionState {
     public synchronized boolean matchesSnapshot(Snapshot candidate) {
         return candidate != null && candidate.owner == this
                 && generation == candidate.generation
+                && cacheNamespace.equals(candidate.cacheNamespace)
                 && matchesIdentity(candidate.manager, candidate.queueId, candidate.catalogId);
     }
 
@@ -267,6 +306,7 @@ public final class TitleCorrectionState {
 
     private boolean matchesRequest(Request request) {
         return activeRequest == request && generation == request.generation
+                && cacheNamespace.equals(request.cacheNamespace)
                 && matchesIdentity(request.manager, request.queueId, request.catalogId);
     }
 

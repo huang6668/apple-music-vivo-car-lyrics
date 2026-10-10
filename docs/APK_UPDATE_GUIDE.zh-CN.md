@@ -1,8 +1,8 @@
 # Apple Music 车联与原子随身听歌词 APK 更新与交接指南
 
-最后整理日期：2026-09-28（r38 歌词基线 + 6.5.3 内嵌 AM++ 流程）
+最后整理日期：2026-10-10（r38 歌词行为基线 + 1607 独立标题修正）
 
-本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：只依靠本仓库和本文档，把车机歌词、原子随身听歌词和进度条这三项功能重新做到新版 Apple Music 上，并在 GitHub Actions 里构建出可安装的测试 APK；最终交付给无 root 手机的版本是内嵌 AM++ 的“修正歌曲名”包。
+本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：移植车机歌词、原子随身听歌词、进度条和独立标题修正，在 GitHub Actions 构建测试 APK。默认 `embed_ampp=false`，普通 APK 即包含独立实现；AM++ 嵌入仅保留为历史实验。1607 新标题路径的设备效果仍待验证。
 
 **读本文档时的三条铁律：**
 
@@ -18,10 +18,10 @@
 |---|---|---|
 | A | 把下载到的 APKM 解成 base/split APK；记录版本、包名与哈希；把 splits 装进 payload（第 7.1 节） | `payload.sha256` 更新，`payload.tar.part.*` 每片 < 25 MB |
 | B | 只分析不重建：`gh workflow run "APK analysis and rebuild" -f rebuild=false` | 下载 `apk-results-<run>-report`，拿到 `focused-sources.tar.gz`、`location-hits.txt` |
-| C | 用第 4 节的"定位配方"重新找出 6 个 Hook 点和全部反射目标 | 一张"旧名 → 新名"对照表 |
+| C | 重新找出 6 个歌词 Hook、1 个标题 UI Hook 和全部反射目标 | 一张"旧名 → 新名"对照表 |
 | D | 改 `VivoCarLyrics.java` 的反射目标；改 `apple-vivo-car-lyrics.patch`、`apply.sh`、`rebuild.sh` 中的类路径 / 方法签名 / marker | 本地 `python3 cloud-patch/tests/verify_source_contract.py` 通过 |
 | E | 提交、推送（需代理），确认 `HEAD == origin/<branch>` 后先构建普通歌词 APK | Release `v1.0.0-build-N` 含 APK 与 sha256 |
-| F | 触发嵌入版构建：`embed_ampp=true`、`standalone_module=false` | artifact `apple-music-vivo-car-lyrics-ampp-npatched` 含 APK 与 sha256 |
+| F | 检查普通构建的独立标题测试、UI Hook 与通知刷新路径 | `embed_ampp=false`，不依赖 AM++ / NPatch |
 | G | 交给用户实车测试（第 9 节清单），未实测的项目标"待实车验证" | 更新第 13 节变更记录、`docs/KNOWN_ISSUES.zh-CN.md` |
 
 ---
@@ -32,7 +32,7 @@
 - 原始 APK SHA-256：`a05a36a5678015fd49d8c73aed2087e7a2f8f3232376733a2cf2f82623895736`
 - 目标车联包：`com.vivo.car.networking` 6.0.8.3（JoviInCar 车机）
 - 目标原子随身听：`com.vivo.musicwidgetmix` 6.2.5.6（APK 存放在本仓库 Release `atomic-apk-6.2.5.6`）
-- 最新构建：r38 = GitHub Release `v1.0.0-build-83`，构建标识 `vivo-car-atomic-seek-bit-r38-2026-09-03`
+- 冻结实车行为基线：r38 = GitHub Release `v1.0.0-build-83`，构建标识 `vivo-car-atomic-seek-bit-r38-2026-09-03`，不是最新构建声明
 - 签名：GitHub Secrets 里的固定 PKCS12 测试密钥，证书 SHA-256 pin 在 `config/signing-cert-sha256.txt`
 - 辅助类在 6.5.2 中被加入为 `classes5.dex`（`rebuild.sh` 会自动选下一个未占用编号）
 
@@ -172,9 +172,33 @@ com/vivo/ucar/databus/ControlChannel.java    ucar 路径 sendMusicInfo()
 
 定位的一般方法：先在 `location-hits.txt` 里 grep 未混淆的字符串（`seekToPosition`、`onMediaMetadataChanged`、`setSessionExtras`、`METADATA_KEY_MEDIA_ID`、`PlayerLyricsViewModel`），找到宿主类后再用 jadx 伪代码看字段类型和方法签名。不要只按方法名长度或字母顺序猜。
 
+### 4.1 1607 已确认映射
+
+| 用途 | Apple Music 7.0.0-beta（1607） |
+|---|---|
+| 播放管理器 / 原生发布 | `player.S` / `S.P(Lz3/v;I)V` |
+| 当前项 / metadata / extras | `S.c()`，回退 `a()`；`z3.v.d`；`z3.x.J` |
+| metadata 标题 / 转换器 | `z3.x.a:CharSequence`；`player.Q.b(z3.x)` |
+| 队列模型标题 | 兼容 `StoreMediaItem.title` 字段 |
+| Atomic 连接 | `e0.o(LJ4/f2;LJ4/f2$e;)V` |
+| Catalog | holder companion 获取实例；`w9.Q.F` / `w9.a.F`；旧版 `s8.F.x` / `u8.E.v` |
+| UI 标题 | `q8.na.l()V`，`.locals 58`，`ma.t0` item 在 `v8`，stock `getTitle()` 结果在 `v39` |
+| UI 刷新 | 同一 `ma.q0(PlaybackItem)` 重新绑定，不修改 UI 模型 |
+| 通知刷新 | `J4.Y2.g(session,boolean)` → `X1` → `a2` → `p.a` → `d2.f`；读取当前 `player.i0().a` |
+
+目录请求遵循系统 locale，不修改共享宿主 storefront；缓存按稳定 catalog 身份与
+locale 隔离。切换语言后阻止新的旧语言结果写入；已原位修改的标题可能保留到
+新语言查询成功，不保证立即恢复原标题。异步结果重新验证 manager、generation、队列 ID 与 catalog ID；
+旧曲结果仅可入缓存。反射签名、歌曲类型或响应 ID 不匹配时 fail-closed，保留 stock
+标题，不猜测任意首个响应实体或非歌曲内容。
+
+macOS 默认文件系统可能在解压时混淆 `na.smali` / `Na.smali`、
+`d2.smali` / `D2.smali`。用 `tar -xOzf focused-sources.tar.gz <精确成员路径>`
+读取并核对 `.class` 描述符，不能把被覆盖的文件当成小写类的证据。
+
 ## 5. 六个必要 Hook
 
-补丁在两个 Smali 文件里插入六个 `invoke-static` 调用（见 `cloud-patch/apple-vivo-car-lyrics.patch`）：
+以下六个歌词 Hook 保持冻结。1607 另外只有一个标题 UI Hook（5.1），不可为标题刷新改变以下调用：
 
 ```text
 VivoCarLyrics.onNativeMediaItem(Object mediaItem)
@@ -196,13 +220,23 @@ VivoCarLyrics.onAtomicControllerConnected(String controllerPackageName)
 
 每个 Hook 在其方法体内和整个文件内都必须**恰好出现一次**（`apply.sh` 与 `rebuild.sh` 都会检查）。新版本重新定位后，`apply.sh` 里的 `manager_target` / `connection_target` 路径、六个方法签名、以及 `rebuild.sh` 最后一段 Python 里的同一组签名和 `native_order` 锚点都要同步修改。
 
+### 5.1 独立标题 UI Hook
+
+`q8.na.l()V` 在 stock `getTitle()` 返回后调用
+`VivoCarLyrics.correctPlayerTitle(Object binding, Object item, CharSequence stock)`；
+返回值沿原寄存器流到标题 TextView 的两个 stock adapter，不改歌手、专辑或 UI 模型。
+复用已确认失活的 `v40/v41`，`.locals 58` 不变；异步结果通过同一 binding 的
+`q0(item)` 重新求值。`verify_title_hook.py` 检查唯一类/方法、寄存器、
+stock 计算与 UI 赋值顺序，最终回编译后再次执行。
+
 ## 6. 元数据与封面刷新规则
 
 - 当前歌词行变化：只调用会话 Extras 发布接口（3.1 + 3.2(c) 的空 action）。
 - 完整歌词 / 状态变化：只通过会话 Extras 发原子 `lrc_change` 事件，**不**重建 MediaMetadata。
-- `publishMetadata()` 在当前实现中是空操作（`return false`），`verify_source_contract.py` 强制它保持空操作，并禁止整个源码里出现 `invokeRequired(manager, "I", newMediaItem` 和 `setFieldValue(`。
+- `publishMetadata()` 仍是空操作（`return false`），禁止重发 MediaItem、替换或重建 MediaMetadata。标题专用路径仅可原位写现有 `z3.x.a` 与兼容 `StoreMediaItem.title`，不放宽歌词、Atomic、session extras 的写入限制。
 - 原子能力位：只能在 `advertiseAtomicLyricSupport()` 里对原生 MediaItem 的 extras 原位 `putLong`，禁止 `new Bundle(`、禁止重发。
 - Apple Music 自己覆盖元数据时，下一次原生发布 Hook 会再次幂等补位，不需要额外动作。
+- 标题结果匹配当前身份后原位写标题，并通过宿主 `Y2.g(session,boolean)` 独立刷新 Notification。这不是重建 MediaItem / MediaMetadata，不可换成 `S.P`、`S.I` 或等价发布方法。系统 MediaSession / 车机标题仅观察，不承诺所有显示面同步。
 
 ## 7. 更新 APK 的标准流程
 
@@ -314,9 +348,13 @@ CI 会依次验证：契约测试 → apktool 重建 → javac/d8 → helper mar
 gh release download v1.0.0-build-<N> -p '*.apk' -p '*.sha256' -D downloads/
 ```
 
-### 7.7 构建内嵌 AM++ 版（当前手机使用的安装包）
+### 7.7 历史 AM++ 嵌入实验（非默认安装目标）
 
-歌词补丁确认能构建后，再触发内嵌版：
+仅在明确需要复现旧方案时运行。普通 `embed_ampp=false` 构建已包含独立标题修正，
+不得把嵌入成功当成普通构建前提。1607 的 AM++ 1.6.4
+`AppleMusicHostProfiles.find(1607)` 返回 null，随后 host factory 抛出
+`Required value was null`；强制开关或绕过版本检查不能补齐 profile。
+下述流程保留为旧版历史记录，不表示支持 1607：
 
 ```bash
 gh workflow run "APK analysis and rebuild" --ref <branch> \
@@ -324,7 +362,7 @@ gh workflow run "APK analysis and rebuild" --ref <branch> \
 gh run watch <run-id> --exit-status
 ```
 
-必须下载并安装 artifact：
+显式测试历史嵌入版时对应 artifact 为：
 
 ```text
 apple-music-vivo-car-lyrics-ampp-npatched
@@ -332,9 +370,8 @@ apple-music-vivo-car-lyrics-ampp-npatched
 └── apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
 ```
 
-不要安装同一次运行的普通 `apple-music-vivo-car-lyrics-debug`，也不要安装
-`combined-lsp-module`。当前手机没有 root / LSPosed，只有 NPatch 内嵌版可用；
-`combined-lsp-module` 是实验性 LSPosed 方案，不用于日常安装。
+不要混淆普通 APK 和历史嵌入版。当前独立实现不需要 root、LSPosed 或 NPatch；
+`combined-lsp-module` 仍是实验性方案，不用于日常安装。
 
 内嵌版包含：
 
@@ -383,6 +420,9 @@ Key alias:     apple-music-vivo-car-lyrics
 9. 原子随身听：首次连接、断开重连、Apple Music 已播放后再打开，都能显示当前完整歌词。
 10. 原子随身听：连续切歌不残留上一首，无歌词歌曲清空歌词。
 11. 原子随身听：进度条显示时长并随播放前进，拖动可 seek；若首曲短暂 `--:--` 后自愈，记录为 DURATION 时序（KNOWN_ISSUES 第 1 节）。
+12. 独立标题：播放页与通知在请求完成前显示原标题，之后只修正匹配曲目；同名、空结果、无匹配或非歌曲内容保持 stock。
+13. 请求中快速切歌、重复队列曲目与 metadata 补全时，旧结果不得落到新曲；切换系统语言后不得复用旧语言缓存。
+14. 检查应用进程 logcat 中的目录与绑定反射错误。`dumpsys media_session` 只作观察，不作为标题修正通过条件。1607 新路径以上项目仍待设备验证。
 
 ## 10. 普通外挂方案的边界
 
@@ -395,10 +435,13 @@ Key alias:     apple-music-vivo-car-lyrics
 .github/workflows/vivo-decompile.yml     jadx 反编译 vivo 侧 APK（原子随身听 / 车联），上传源码 artifact
 .github/workflows/kuwo-bridge.yml        独立的 KuWo 桥接原型构建
 payload.tar.part.* / payload.sha256      APKM 解出的 split APK + CI 脚本 + search-patterns（见 7.1）
-cloud-patch/apple-vivo-car-lyrics.patch  六个 Smali Hook 的 unified diff
+cloud-patch/apple-vivo-car-lyrics.patch  六个冻结歌词 Hook + 一个独立标题 UI Hook
+cloud-patch/verify_title_hook.py          标题 UI 的目标、寄存器与 stock 赋值顺序校验
 cloud-patch/apply.sh                     打补丁、插入 manifest action、校验 Hook 位置
 cloud-patch/rebuild.sh                   apktool b、编译辅助类、加 DEX、zipalign、固定签名、全部终检
-cloud-patch/java/.../VivoCarLyrics.java  歌词加载、时间轴、逐句发布、原子事件、能力位
+cloud-patch/java/.../VivoCarLyrics.java  歌词通道与独立标题集成；不重新发布 metadata
+cloud-patch/java/.../TitleCorrectionState.java  标题身份、generation、locale 隔离有界缓存
+cloud-patch/java/.../CatalogQueryMethod.java / CatalogTitleResolver.java  独立宿主 catalog 查询
 cloud-patch/java/.../ClusterLyricsPaginator.java  仪表分页（r37 起不再发布，保留编译与测试）
 cloud-patch/tests/verify_source_contract.py       源码契约：禁止重发 MediaItem、要求能力位 8 与 16
 cloud-patch/tests/.../ClusterLyricsPaginatorTest.java
@@ -421,6 +464,14 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 - 在第 13 节追加变更记录，并更新 `docs/KNOWN_ISSUES.zh-CN.md`。
 
 ## 13. 版本变更记录
+
+### 2026-10-10 - 1607 独立标题修正
+
+- 普通构建 `embed_ampp=false` 包含独立实现，不加载 AM++ / NPatch。
+- 保留六个歌词 Hook；新增 `q8.na.l()` 字符串 Hook，通过同一 binding 刷新播放页。
+- 标题专用路径原位更新标题，宿主通知服务独立刷新，不重建或重新发布 metadata。
+- 请求与缓存跟随系统 locale，异步结果做当前身份校验；未知签名和无效响应 fail-closed。
+- AM++ 1607 profile 失败作为历史实验记录保留；静态映射已确认，设备与实车运行效果待验证。
 
 ### 2026-09-28 - 标准化 APKM 更新与内嵌 AM++ 构建流程
 

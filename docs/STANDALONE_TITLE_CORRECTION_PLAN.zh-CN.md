@@ -1,6 +1,6 @@
 # 独立歌名修正（不依赖 AM++）实施计划
 
-> 状态：**计划已批准，尚未实施**。本文档只记录方案、已确认的事实和未决问题，不代表代码已改动。
+> 状态：**独立实现已完成，云端构建验证中；真机回归待完成**（2026-10-10）。下文保留设计步骤，并补充实际确认的 1607 接缝与风险处理。
 
 ## 1. 背景
 
@@ -46,9 +46,16 @@ TitleCorrectionFeature.install
 | metadata 构建 | `player.Q.f(MediaPlayerController, PlayerQueueItem)`（`m17335f`） | 通过 `item.getTitle()` 取标题 |
 | 队列项实现 | `StoreMediaItem`，包级私有字段 `title:Ljava/lang/String;` | 没有 setter；`PlayerMediaItem` 接口只有 `getTitle()` |
 | 媒体库查询 | `C13426U`（`MediaPlaybackManager$lookupCurrentItemInLibrary$1`） | 会再次调用 `S.P(...)`，只更新库状态/喜欢状态，不改标题 |
-| Catalog 查询 | `w9.Q.F` / `w9.a.F`：实例方法 `Object X(String, Map, Continuation)` | 旧版为 `s8.F.x`、`u8.E.v` |
+| Catalog 查询 | `w9.Q.F` / `w9.a.F`：实例方法 `Object F(String, Map, Continuation)` | 旧版为 `s8.F.x`、`u8.E.v` |
+| Catalog 实例 | `MediaApiRepositoryHolder.Companion.getMediaApi()` | 请求 `songs`，参数 `ids`、`l`、`platform=android`、`include[songs]=artists` |
+| Catalog 响应 | `MediaApiResponse.getData()` → `getId()/getType()/getAttributes().getName()` | 仅接受与请求 ID 精确匹配的歌曲；歧义拒绝 |
+| 正在播放页绑定 | `q8.na.l()V`，`ma.t0` 中的 `PlaybackItem` | `getTitle()` 后替换 `v39`，沿用原有 58 locals；异步通过 `q0(item)` 重新绑定 |
+| 通知刷新 | `MediaPlaybackService` 继承的 `J4.Y2.g(J4.f2, boolean)` | 主线程调用 `g(session,false)`，检查 service/session/manager 的归属；不发布 metadata |
+| 协程符号 | `fi.f.a`（空上下文）、`bi.q$a`（失败）、`gi.a.COROUTINE_SUSPENDED` | 使用宿主真实符号，不伪造上下文 |
 
 Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat/CatalogQueryMethod.java`：首选名 → 重命名映射 → 唯一签名兜底，有歧义时拒绝，不猜。
+
+实际实现仅从明确的 `getSubscriptionStoreId()` 取得 catalog ID，不将任意 `persistentId/getId` 发往 Catalog。队列身份要求正十进制 queue ID，并同时校验 catalog ID。宿主 `w9.Q.q0(Map)` 会以系统语言覆盖 `l`，因此请求与 LRU 缓存均按系统语言分区，不修改全局 Locale 或宿主语言逻辑。超时/调用失败不写负缓存；旧曲目结果可以入原分区缓存，但不能更新当前曲目。
 
 ### 2.1 现有的 6 个 smali hook（保持不变）
 
@@ -129,9 +136,12 @@ Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat
 
 | 项 | 说明 |
 | --- | --- |
-| 正在播放页标题接缝 | 确切的 smali 方法（`getTitle()` → player binder/ViewModel）尚未定位，是第 3、4 步的前置条件。 |
-| Catalog 调用细节 | 宿主实例获取方式、请求参数、响应解析路径尚未从 AM++ 1.6.4 dexdump / 1607 产物中提取，是第 2 步的前置条件。 |
-| 写字段与源码契约冲突 | `verify_source_contract.py` 全局禁止 `setFieldValue(`，需要把例外限定到专用方法，避免松动对 metadata 的保护。 |
+| 正在播放页标题接缝 | 已确认 `q8.na.l()V`；只新增一个静态 hook，补丁前后及最终 APK 回编译均校验类、方法、寄存器和赋值顺序。 |
+| Catalog 调用细节 | 已从云端 1607 分析产物确认，见第 2 节。APK 混淆类大小写敏感，本机归档提取需精确选择成员，避免大小写覆盖。 |
+| 写字段与源码契约冲突 | 保留全局禁止 `setFieldValue(`；仅专用方法内允许一次 `Field.set`，限定精确类与字段类型：`z3.x.a:CharSequence`、`StoreMediaItem.title:String`。 |
+| 通知刷新 | 已确认宿主安全入口，且只在当前 metadata 标题确实变化时刷新。对象归属不匹配则不执行；实际通知呈现仍待真机验证。 |
+| 进程内语言切换 | 新写入必须匹配当前系统语言，进行中的旧语言响应丢弃；已经原位改过的标题在新语言查询成功前可能继续显示旧修正，不主动重建对象或还原标题。 |
+| 验证边界 | 云端单元、集成与静态检查不等同于真机成功；标题显示、快速切歌、歌词、seek、封面和车机 Atomic 回归仍需设备确认。 |
 | media_session 标题 | 由于禁止重新发布 MediaMetadata，车机/系统媒体会话中的标题可能仍是原标题，这是有意的取舍，不属于本计划的目标范围。 |
 | 混淆名漂移 | 后续 Apple Music 版本的 `z3.x.a`、`w9.Q.F` 等名字可能改变，解析器必须在签名不匹配时安静地不做任何操作。 |
 | 约束 | 所有 APK 分析/打包都在 GitHub Actions 中进行；push/gh 前先设置 7897 端口代理并确认推送成功；r38 歌词通道行为冻结。 |

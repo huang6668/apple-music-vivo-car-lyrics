@@ -1,20 +1,43 @@
-# AM++ 嵌入版兼容调试
+# 独立标题修正与 AM++ 历史兼容调试
 
-更新：2026-09-28。分支：`embed-ampp-npatch`。
+更新：2026-10-10。当前目标：Apple Music 7.0.0-beta（1607）。
 
 ## 当前标准流程
+
+默认使用普通构建的独立标题修正，不嵌入 AM++，不下载或初始化 NPatch。
+以下 #95–#97 等记录属于旧版历史验证，不代表 1607 已通过设备验证。
 
 Apple Music 新版本通常以 `.apkm` 发布。更新流程固定为：
 
 1. 本地只用 `unzip` 把 `.apkm` 解到 `payload.tar` 的 `input/splits/`
    （保留 `base.apk` 和全部 `split_config.*.apk`），重新生成 `payload.tar.part.*` 和 `payload.sha256`。
-2. 先跑 `rebuild=false` 分析，按 `docs/APK_UPDATE_GUIDE.zh-CN.md` 重新定位歌词补丁的六个 Hook 和反射目标。
-3. 适配通过后触发 `rebuild=true`、`embed_ampp=true`、`standalone_module=false`。
-4. 只下载并覆盖安装 `apple-music-vivo-car-lyrics-ampp-npatched` artifact。
-5. 当前手机没有 root / LSPosed，不要安装 `combined-lsp-module`；该实验方案不是当前路径。
+2. 先跑 `rebuild=false` 分析，重新定位六个冻结的歌词 Hook、独立标题 UI Hook 和反射目标。
+3. 适配通过后触发 `rebuild=true`、`embed_ampp=false`、`standalone_module=false`。
+4. 下载普通歌词 APK 及校验和，验证固定签名后覆盖安装。
+5. 当前手机没有 root / LSPosed，不安装 `combined-lsp-module`。`embed_ampp=true` 仅保留为历史实验，不是普通构建的前提。
 
-内嵌 AM++ v1.6.2 只安装“修正歌曲名”功能，并默认关闭液态玻璃。设置界面没有裁剪，
+历史内嵌 AM++ v1.6.2 只安装“修正歌曲名”功能，并默认关闭液态玻璃。设置界面没有裁剪，
 所以仍会显示 AM++ 的旧设置项；这不代表对应功能仍被安装。
+
+## 1607 独立架构
+
+- 标题状态机、generation 与有界 LRU 和歌词状态隔离，缓存按稳定 catalog 身份及系统 locale 隔离；语言切换后禁止新的旧语言结果写入，不修改共享 storefront。已原位修改的旧语言标题可能保留到新语言查询成功，不保证切换时立即恢复原标题。
+- Catalog 使用宿主 `MediaApiRepositoryHolder.Companion` 的实例，严格匹配 `w9.Q.F` / `w9.a.F` 的实例签名 `(String, Map, Continuation) -> Object`；旧映射为 `s8.F.x` / `u8.E.v`。响应必须匹配请求 ID 与歌曲类型；反射失败、歧义或空结果 fail-closed，保留原标题。
+- 管理器为 `player.S`，当前 MediaItem getter 为 `S.c()`（回退 `a()`）；metadata 为 `z3.v.d`，标题为 `z3.x.a`，extras 为 `z3.x.J`。
+- UI 接缝为 `q8.na.l()V`：item 在 `v8`，stock `getTitle()` 结果在 `v39`。唯一 `correctPlayerTitle(Object,Object,CharSequence)` Hook 只替换字符串，通过同一 binding 的 `ma.q0(item)` 重新求值，不修改 UI 模型。
+- 通知刷新链为 `J4.Y2.g(session,boolean)` → `X1` → `a2` → `p.a` → `d2.f`。provider 读取当前 `player.i0().a`；结果匹配当前 manager、generation、队列与 catalog 身份后原位更新现有标题并刷新 Notification，不重建或重新发布 MediaItem / MediaMetadata。
+- `publishMetadata()` 仍为空操作，六个歌词 Hook、Atomic `7|8|16`、seek、封面、进度条通道保持冻结；系统 MediaSession / 车机标题不承诺同步修正。
+
+以上映射与通知链已由云端静态分析定位。最终 APK 的反射可达性、播放页与通知刷新、
+语言切换、快速切歌和车机回归仍待设备验证，不得用静态分析替代。
+
+### AM++ 1607 profile 失败
+
+AM++ 1.6.4 的 `AppleMusicHostProfiles.find(1607)` 返回 null，
+`AppleMusicHostFactory.appleMusic` 随后抛出 `Required value was null`。
+强制标题开关或绕过版本判断不能补齐整套 host profile。
+相关 force patch 和嵌入脚本保留为历史实验；独立实现不依赖 AM++、HLE、
+DexKit、LSPosed 或 NPatch。
 
 ## 上游 PR
 
@@ -29,7 +52,7 @@ JDK 17 / Kotlin 1.9.24 编译并运行了 22 项相关 JVM 测试，全部通过
 
 - 不卸载 Apple Music，不清除数据；只允许同签名 `adb install -r`。
 - 签名证书必须匹配 `config/signing-cert-sha256.txt`。
-- r38 的宿主补丁与歌词发布逻辑不变，兼容修复位于嵌入的 AM++ 模块。
+- r38 歌词发布行为冻结，1607 独立标题逻辑不改变六个已有歌词 Hook。
 - Actions 的 `apple-music-vivo-car-lyrics-ampp-npatched` artifact 才是嵌入版。
   同一次运行发布到 Release 的普通 APK 不含 AM++，两者不可混淆。
 
@@ -107,17 +130,19 @@ Java 兼容测试。APK SHA-256：
 
 ```sh
 python3 -m unittest discover -s cloud-patch/tests -p 'test_*.py' -v
-gh workflow run 'APK analysis and rebuild' --ref embed-ampp-npatch \
-  -f rebuild=true -f embed_ampp=true -f standalone_module=false
+gh workflow run 'APK analysis and rebuild' --ref <branch> \
+  -f rebuild=true -f embed_ampp=false -f standalone_module=false
 ```
 
-嵌入步骤允许独立失败，因此必须检查该步骤自身成功且 APK/校验和均存在，
-不能只看整个工作流的绿色状态。Java 测试在 `prepare-module.sh` 中执行。
+Java 状态机、catalog 反射与解析测试、helper 编译及 DEX 回编译验证在 GitHub Actions
+执行，本机不安装 Android 构建依赖。若显式运行历史嵌入实验，必须另行检查嵌入步骤与
+artifact；其失败不能只靠工作流绿色状态判断。
 
 安装前验证 APK 校验和与固定证书；覆盖安装后检查 `pm path`、
 `lastUpdateTime`，不要把 dexopt profile 警告直接当成安装失败。
 
 框架文件日志可能只有启动信息，功能健康状态与查询异常应从
 `adb shell logcat -d --pid=<Apple Music PID>` 检查。
-最终必须确认目录查询返回有效名称，并通过 `dumpsys media_session`
-及实际播放页面验证；`title_correction: ACTIVE` 只代表安装阶段完成。
+最终必须确认目录查询返回有效名称，并检查实际播放页、通知、快速切歌与语言切换。
+`dumpsys media_session` 只作观察，不作为标题修正通过条件；
+历史日志中的 `title_correction: ACTIVE` 只代表 AM++ 安装阶段完成。

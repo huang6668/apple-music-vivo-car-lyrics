@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 
 SOURCE = Path("cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java")
@@ -27,6 +28,10 @@ capability = method_body("private static boolean advertiseAtomicLyricSupport(")
 line_publish = method_body(
     "private static void requestLinePublish(Object manager, String line, String clusterLine,"
 )
+title_write = method_body("private static boolean writeCorrectedTitle(")
+native_title = method_body("private static boolean applyTitleCorrection(Object mediaItem)")
+title_refresh = method_body("private static void applyTitleCorrectionFromState(")
+title_binding = method_body("public static CharSequence correctPlayerTitle(")
 
 # The playback manager's MediaItem publish path rebuilds session MediaMetadata and resets the
 # native PlaybackState, which removes Atomic Player's progress bar and reloads cluster cover art.
@@ -49,10 +54,41 @@ assert 'invokeRequired(manager, "I", newMediaItem' not in text, (
 assert "setFieldValue(" not in text, (
     "Mutating MediaItem/Metadata builder fields reintroduces MediaMetadata override"
 )
+assert not re.search(r'invoke(?:Required|Optional)\([^;\n]*,\s*"[PI]"\s*[,)]', text), (
+    "Never invoke an old or 1607 MediaItem publish method"
+)
 
-# The only permitted MediaMetadata mutation is the in-place Atomic capability bit.
+# Title fields are the sole, type-checked exception. Do not relax Atomic or session code.
+assert text.count("field.set(") == title_write.count("field.set(") == 1
+for required in ('"z3.x"', '"a"', "CharSequence.class",
+                 '"com.apple.android.music.playback.model.StoreMediaItem"',
+                 '"title"', "String.class", "Modifier.isStatic", "field.getType() != expected"):
+    assert required in title_write, f"Title write must remain narrowly typed: {required}"
+for body in (metadata, capability, session_extras):
+    assert ".set(" not in body and "writeCorrectedTitle(" not in body
+for required in ("isCurrentTitle(state)", "APPLE_QUEUE_ID", "APPLE_MEDIA_ID"):
+    assert required in native_title, f"Native title requires its own identity: {required}"
+for required in ("isCurrentTitle(state)", "titleBindingGeneration == state.generation",
+                 "titleItemMatches(state, item)"):
+    assert required in title_refresh
+assert "titleItemMatches(state, item)" in title_binding
+assert "return stock;" in title_binding
+assert "writeCorrectedTitle(" not in title_binding, "UI hook must substitute, not mutate a model"
+notification = method_body("private static void refreshTitleNotification(")
+for required in ("isCurrentTitle(state)", 'getFieldValue(service, "y") != session',
+                 'invokeOptional(session, "c") != state.manager', '"J4.Y2"', '"J4.f2"'):
+    assert required in notification, "Notification refresh must validate its exact owner: " + required
+assert "writeCorrectedTitle(" not in notification
+assert "getPersistentId" not in method_body("private static String titleCatalogId(")
+assert '"getId"' not in method_body("private static String titleCatalogId(")
+assert "TITLE_STATE.complete(request, title)" in text
+assert "TITLE_STATE.fail(request)" in text
+assert "WeakReference<Object>" in text
+
+# Atomic capability mutation remains in-place and independent of title correction.
 assert "ATOMIC_SUPPORT_EVENTS" in capability
 assert "ATOMIC_LYRIC_SUPPORT_EVENT" in capability
+assert "ATOMIC_BASELINE_SUPPORT_EVENTS" in capability
 # Atomic's SeekBarLayout needs (support_event & 16) or it renders "--:--" regardless of duration.
 assert "ATOMIC_SEEK_SUPPORT_EVENT" in capability, (
     "Seek/time-info bit 16 must be ORed in, Atomic hides the progress bar without it"

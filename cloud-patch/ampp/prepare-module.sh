@@ -14,6 +14,7 @@ mkdir -p "$work/test-classes"
 javac --release 8 -d "$work/test-classes" \
   "$compat_root/java/dev/amenhancer/compat/CatalogQueryMethod.java" \
   "$compat_root/../tests/catalog_query/kotlin/coroutines/Continuation.java" \
+  "$compat_root/../tests/catalog_query/kotlin/coroutines/CoroutineContext.java" \
   "$compat_root/../tests/catalog_query/s8/F.java" \
   "$compat_root/../tests/catalog_query/CatalogQueryMethodTest.java"
 java -cp "$work/test-classes" CatalogQueryMethodTest

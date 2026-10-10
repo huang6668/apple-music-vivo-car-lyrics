@@ -18,6 +18,10 @@ public final class TitleCorrectionStateTest {
         testSnapshotIdentity();
         testInvalidQueueKeys();
         testResetCompletedState();
+        testCacheNamespaces();
+        testNamespaceLateResults();
+        testNamespaceRequestSuppression();
+        testNamespaceLruBound();
         testSnapshotsAndStockPreservation();
         testInvalidCacheSize();
         System.out.println("TitleCorrectionState tests passed");
@@ -367,6 +371,109 @@ public final class TitleCorrectionStateTest {
             throw new AssertionError("negative capacity accepted");
         } catch (IllegalArgumentException expected) {
         }
+    }
+
+    private static void testCacheNamespaces() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        equal("", state.snapshot().cacheNamespace);
+        check(state.setCacheNamespace("en-US"), "language namespace initialized");
+        state.complete(state.request(), "English");
+        equal("English", state.correctedTitle(manager, "1", "10"));
+        check(state.setCacheNamespace("zh-CN"), "language namespace changed");
+        equal(null, state.correctedTitle(manager, "1", "10"));
+        TitleCorrectionState.Request chinese = state.request();
+        check(chinese != null, "different locale must query independently");
+        equal("zh-CN", chinese.cacheNamespace);
+        state.complete(chinese, "Chinese");
+        equal("Chinese", state.correctedTitle(manager, "1", "10"));
+        state.setCacheNamespace("en-US");
+        check(state.request() == null, "English cached independently");
+        equal("English", state.correctedTitle(manager, "1", "10"));
+
+        state.begin(manager, "2", "20", "", "No English match");
+        state.complete(state.request(), null);
+        state.setCacheNamespace("zh-CN");
+        chinese = state.request();
+        check(chinese != null, "negative English result cannot suppress Chinese query");
+        state.complete(chinese, "Chinese match");
+        state.setCacheNamespace("en-US");
+        check(state.request() == null && state.snapshot().completed, "negative locale cache retained");
+        equal(null, state.correctedTitle(manager, "2", "20"));
+        state.setCacheNamespace("zh-CN");
+        check(state.request() == null, "positive locale cache retained");
+        equal("Chinese match", state.correctedTitle(manager, "2", "20"));
+    }
+
+    private static void testNamespaceLateResults() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        state.setCacheNamespace("en-US");
+        TitleCorrectionState.Request english = state.request();
+        TitleCorrectionState.Snapshot englishSnapshot = state.snapshot();
+        state.setCacheNamespace("zh-CN");
+        check(!state.matchesSnapshot(englishSnapshot), "language change invalidates old snapshot");
+        check(state.snapshot().generation > english.generation, "language change increments generation");
+        equal(manager, state.snapshot().manager);
+        equal("1", state.snapshot().queueId);
+        equal("10", state.snapshot().catalogId);
+        equal("Stock", state.snapshot().originalTitle);
+        check(!state.snapshot().pending && !state.snapshot().completed, "language change resets result");
+        TitleCorrectionState.Request chinese = state.request();
+        check(!state.complete(english, "Late English"), "old language result cannot apply");
+        check(state.snapshot().pending, "old language result cannot settle current query");
+        equal(null, state.correctedTitle(manager, "1", "10"));
+        state.complete(chinese, "Chinese");
+        state.setCacheNamespace("en-US");
+        check(state.request() == null, "late result cached in original language");
+        equal("Late English", state.correctedTitle(manager, "1", "10"));
+        state.setCacheNamespace("zh-CN");
+        check(state.request() == null, "late result did not overwrite other language");
+        equal("Chinese", state.correctedTitle(manager, "1", "10"));
+
+        state.begin(manager, "2", "20", "persistent", "Other");
+        TitleCorrectionState.Request old = state.request();
+        state.setCacheNamespace("en-US");
+        check(!state.fail(old), "old namespace failure cannot settle new namespace");
+        equal("persistent", state.snapshot().persistentId);
+        check(state.request() != null, "old namespace failure not cached in new namespace");
+    }
+
+    private static void testNamespaceRequestSuppression() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        state.setCacheNamespace("en-US");
+        TitleCorrectionState.Request english = state.request();
+        long generation = english.generation;
+        check(!state.setCacheNamespace(" en-US "), "same normalized namespace is a no-op");
+        equal(generation, state.snapshot().generation);
+        check(state.snapshot().pending, "same namespace preserves in-flight request");
+        check(state.request() == null, "same namespace suppresses duplicate request");
+        state.complete(english, "English");
+        check(!state.setCacheNamespace("en-US"), "same completed namespace is a no-op");
+        check(state.request() == null, "same completed namespace suppresses duplicate");
+        equal("English", state.correctedTitle(manager, "1", "10"));
+        state.setCacheNamespace(null);
+        equal("", state.snapshot().cacheNamespace);
+        check(state.request() != null, "default namespace remains separate");
+    }
+
+    private static void testNamespaceLruBound() {
+        Object manager = new Object();
+        TitleCorrectionState state = new TitleCorrectionState(2);
+        state.begin(manager, "1", "10", "", "Stock");
+        state.setCacheNamespace("en-US");
+        state.complete(state.request(), "English");
+        state.setCacheNamespace("zh-CN");
+        state.complete(state.request(), "Chinese");
+        state.setCacheNamespace("en-US");
+        check(state.request() == null, "locale cache access updates LRU");
+        state.setCacheNamespace("fr-FR");
+        state.complete(state.request(), "French");
+        state.setCacheNamespace("en-US");
+        check(state.request() == null, "recent locale retained");
+        state.setCacheNamespace("zh-CN");
+        check(state.request() != null, "bounded cache evicts old locale entry");
     }
 
     private static TitleCorrectionState started(Object manager, String queueId,

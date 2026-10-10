@@ -70,22 +70,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Test cluster lyric pagination and publishing contract
+      - name: Test lyrics and standalone title contracts
         shell: bash
         run: |
           set -Eeuo pipefail
-          test_classes="$RUNNER_TEMP/cluster-lyrics-tests"
-          rm -rf "$test_classes"
-          mkdir -p "$test_classes"
-          javac --release 8 -d "$test_classes" \
-            cloud-patch/java/com/apple/android/music/player/ClusterLyricsPaginator.java \
-            cloud-patch/java/com/apple/android/music/player/TitleCorrectionState.java \
-            cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java \
-            cloud-patch/tests/com/apple/android/music/player/TitleCorrectionStateTest.java
-          java -cp "$test_classes" com.apple.android.music.player.ClusterLyricsPaginatorTest
-          java -cp "$test_classes" com.apple.android.music.player.TitleCorrectionStateTest
+          bash cloud-patch/tests/run-java-tests.sh
           python3 cloud-patch/tests/verify_source_contract.py
-          python3 -m unittest discover -s cloud-patch/tests -p 'test_embed_build.py'
+          python3 -m unittest discover -s cloud-patch/tests -p 'test_*.py' -v
 
       - name: Install Android build tools
         shell: bash
@@ -526,7 +517,7 @@ jobs:
             payload/out/apple-music-vivo-car-lyrics-debug.apk \
             payload/out/apple-music-vivo-car-lyrics-debug.apk.sha256 \
             --title "Apple Music Vivo Car Lyrics - Build #${{ github.run_number }}" \
-            --notes "Patched APK with fixed signature, correct cluster MediaMetadata lyrics, and timestamped long-line pagination. Album artwork flashing may still depend on CarNetworking behavior."
+            --notes "Patched APK with fixed signature, cluster lyrics, timestamped long-line pagination, and standalone catalog title correction for the player and notification. No AM++ or NPatch required. Title correction does not republish MediaItem or MediaMetadata. Device and car regression testing is still required."
 
       - name: Upload verified APK
         if: ${{ inputs.rebuild && success() }}
