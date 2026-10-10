@@ -16,6 +16,8 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -118,8 +120,11 @@ public final class VivoCarLyrics {
             });
     private static TitleCacheStore titleCacheStore;
     private static final Set<String> PREFETCH_PENDING = new LinkedHashSet<String>();
+    private static final Set<String> PREFETCH_SEEN = new HashSet<String>();
     private static final Object PREFETCH_LOCK = new Object();
     private static boolean prefetchScheduled;
+    private static final Set<WeakReference<Object>> ACTIVE_CONTROLLERS =
+            Collections.synchronizedSet(new HashSet<WeakReference<Object>>());
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
@@ -368,9 +373,38 @@ public final class VivoCarLyrics {
     }
 
     private static String titleCatalogId(Object item) {
-        // getId() / public mediaId can be a numeric library persistentId, not a catalog song ID.
-        return TitleCorrectionState.normalizeCatalogId(
-                stringValue(invokeOptional(item, "getSubscriptionStoreId")));
+        if (item == null) return "";
+        try {
+            // 1. Direct subscription store ID (for Song / BasePlaybackItem / etc.)
+            String storeId = TitleCorrectionState.normalizeCatalogId(
+                    stringValue(invokeOptional(item, "getSubscriptionStoreId")));
+            if (!storeId.isEmpty()) return storeId;
+
+            // 2. PlayParams catalogId (from Attributes or MediaEntity)
+            Object attrs = invokeOptional(item, "getAttributes");
+            Object targetAttrs = (attrs != null) ? attrs : item;
+            Object playParams = invokeOptional(targetAttrs, "getPlayParams");
+            if (playParams == null) {
+                playParams = getFieldValueQuietly(targetAttrs, "playParams");
+            }
+            if (playParams != null) {
+                String catId = TitleCorrectionState.normalizeCatalogId(
+                        stringValue(invokeOptional(playParams, "getCatalogId")));
+                if (!catId.isEmpty()) return catId;
+                catId = TitleCorrectionState.normalizeCatalogId(
+                        stringValue(getFieldValueQuietly(playParams, "catalogId")));
+                if (!catId.isEmpty()) return catId;
+                catId = TitleCorrectionState.normalizeCatalogId(
+                        stringValue(getFieldValueQuietly(playParams, "id")));
+                if (!catId.isEmpty()) return catId;
+            }
+
+            // 3. MediaEntity.catalogId()
+            String catId = TitleCorrectionState.normalizeCatalogId(
+                    stringValue(invokeOptional(item, "catalogId")));
+            if (!catId.isEmpty()) return catId;
+        } catch (Throwable ignored) {}
+        return "";
     }
 
     private static boolean isCurrentTitle(TitleCorrectionState.Snapshot state) {
@@ -568,7 +602,9 @@ public final class VivoCarLyrics {
     public static void enqueuePrefetch(String catalogId) {
         if (catalogId == null || catalogId.isEmpty()) return;
         synchronized (PREFETCH_LOCK) {
+            if (PREFETCH_SEEN.contains(catalogId)) return;
             if (PREFETCH_PENDING.size() >= 1000) return;
+            PREFETCH_SEEN.add(catalogId);
             PREFETCH_PENDING.add(catalogId);
             if (!prefetchScheduled) {
                 prefetchScheduled = true;
@@ -579,6 +615,75 @@ public final class VivoCarLyrics {
                 }, 150L);
             }
         }
+    }
+
+    public static void registerActiveController(Object controller) {
+        if (controller == null) return;
+        synchronized (ACTIVE_CONTROLLERS) {
+            Iterator<WeakReference<Object>> it = ACTIVE_CONTROLLERS.iterator();
+            while (it.hasNext()) {
+                Object c = it.next().get();
+                if (c == null) {
+                    it.remove();
+                } else if (c == controller) {
+                    return;
+                }
+            }
+            ACTIVE_CONTROLLERS.add(new WeakReference<Object>(controller));
+        }
+    }
+
+    public static void onPlaylistTrack(Object controller, Object entity) {
+        if (controller != null) {
+            registerActiveController(controller);
+        }
+        if (entity != null) {
+            String id = titleCatalogId(entity);
+            if (!id.isEmpty()) {
+                final String cached;
+                synchronized (TITLE_LOCK) {
+                    cached = TITLE_STATE.getCachedTitle(id);
+                }
+                if (cached != null && !cached.isEmpty()) {
+                    Object attrs = invokeOptional(entity, "getAttributes");
+                    if (attrs != null) {
+                        invokeOptional(attrs, "setName", cached);
+                    }
+                } else {
+                    enqueuePrefetch(id);
+                }
+            }
+        }
+    }
+
+    public static void triggerActiveControllersRefresh() {
+        MAIN.post(new Runnable() {
+            @Override public void run() {
+                List<Object> targets = new ArrayList<Object>();
+                synchronized (ACTIVE_CONTROLLERS) {
+                    Iterator<WeakReference<Object>> it = ACTIVE_CONTROLLERS.iterator();
+                    while (it.hasNext()) {
+                        Object c = it.next().get();
+                        if (c == null) {
+                            it.remove();
+                        } else {
+                            targets.add(c);
+                        }
+                    }
+                }
+                for (Object ctrl : targets) {
+                    try {
+                        Method m = ctrl.getClass().getMethod("requestForcedModelBuild");
+                        m.invoke(ctrl);
+                        continue;
+                    } catch (Throwable ignored) {}
+                    try {
+                        Method m = ctrl.getClass().getMethod("requestModelBuild");
+                        m.invoke(ctrl);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        });
     }
 
     private static void drainPrefetchQueue() {
@@ -614,6 +719,7 @@ public final class VivoCarLyrics {
                                     synchronized (TITLE_LOCK) {
                                         TITLE_STATE.putCachedTitles(diskHits);
                                     }
+                                    triggerActiveControllersRefresh();
                                 }
                             });
                         }
@@ -655,6 +761,7 @@ public final class VivoCarLyrics {
                                     TITLE_STATE.putCachedTitles(titles);
                                 }
                                 persistBatchTitles(titles);
+                                triggerActiveControllersRefresh();
                             }
                         });
                     }
@@ -2423,6 +2530,15 @@ public final class VivoCarLyrics {
     private static Object getFieldValue(Object target, String name) throws Exception {
         Field field = findField(target.getClass(), name);
         return field.get(target);
+    }
+
+    private static Object getFieldValueQuietly(Object target, String name) {
+        if (target == null || name == null) return null;
+        try {
+            return getFieldValue(target, name);
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
