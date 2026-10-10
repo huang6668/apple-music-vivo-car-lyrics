@@ -317,7 +317,7 @@ jobs:
           # Export full generated binders and coroutine/notification implementations:
           # obfuscated calls often no longer contain the searchable source method name.
           for root in work/apktool/smali*; do
-            for package in q8 J4 w9 fi gi bi kotlin/coroutines; do
+            for package in q8 J4 w9 x9 y9 kk fi gi bi kotlin/coroutines; do
               [[ ! -d "$root/$package" ]] || find "$root/$package" -type f \
                 >> "$report/focused-paths.txt"
             done

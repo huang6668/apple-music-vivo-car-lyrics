@@ -1,6 +1,52 @@
 # 独立歌名修正（不依赖 AM++）实施计划
 
-> 状态：**独立实现已完成，云端构建验证中；真机回归待完成**（2026-10-10）。下文保留设计步骤，并补充实际确认的 1607 接缝与风险处理。
+> 状态：**功能定义已纠正，现有实现不符合 AM++ 的地区模式语义，需重新实现**（2026-10-10）。build #146 只通过此前定义下的云端检查，手机上未确认标题修正成功。下文的 1607 映射保留为分析证据，不代表功能已完成。
+
+## 0. AM++ 源码核对与方案纠正
+
+核对上游 `Zennmn/AM-plus-plus` 提交
+`6a33085b023950f2d4a73b3fd5cfe0204e095a49`（2026-10-10），而非把旧版
+AM++ APK 的安装成功当作当前功能契约。
+
+源码入口：
+
+- `core/src/main/kotlin/dev/amenhancer/module/config/TitleCorrectionMode.kt`
+- `app/src/main/java/dev/amenhancer/module/hook/TitleCorrectionFeature.kt`
+- `host-applemusic/src/main/java/dev/amenhancer/module/hook/HleMetadataRuntime.kt`
+- `host-applemusic/src/main/java/io/github/proify/lyricon/amprovider/xposed/NativeCatalogQueryAccess.kt`
+- `host-applemusic/src/main/java/io/github/proify/lyricon/amprovider/xposed/hooks/AppleContentLocalizationHooks.kt`
+- 同目录的 `CatalogOriginalResolution.kt`、`AppleLocalizedMetadataCache.kt`、`AppleOriginalMetadataCache.kt`
+
+真实契约：
+
+| 状态 / 模式 | 行为 |
+| --- | --- |
+| 关闭 | 不安装标题修正链路，跟随 Apple Music 账号地区；不是跟随系统语言。 |
+| 按歌曲原地区修正（默认模式） | 解析歌曲身份，根据 genre / Catalog genre / ISRC 等证据选择原语言和地区；必要时按 ISRC 查找对应歌曲，不是统一转中文。 |
+| 固定中国大陆 | 模块自己的元数据请求使用 `cn` + `zh-CN`。 |
+| 固定日本 | 模块自己的元数据请求使用 `jp` + `ja-JP`。 |
+| 缓存 | 按 `original_hyper_v1` / `cn_v1` / `jp_v1` 隔离，并持久化到 SQLite；重启后可复用，不只是进程内 LRU。 |
+| 设置生效 | 开关和模式属于进程安装配置，选择后重开 Apple Music。 |
+
+上游为模块请求附加 `hle_catalog_request` token。MediaApi 参数生成后只对这些请求
+恢复选定的 `l`；HTTP 层只对这些请求改写 Catalog URL 地区、语言和相关请求头，并移除
+内部 token。调用期间临时设置 MediaApi storefront，`finally` 恢复。普通账号目录、
+播放、歌词等请求不应被全局改地区。独立补丁不能直接照搬 Xposed 安装机制，必须先确认
+1607 中等价的请求接缝，验证异步请求隔离，再实现。
+
+此前方案的错误：接受 `w9.Q.q0(Map)` 的系统语言覆盖、以系统 locale 分区、没有模式
+选择、明确排除持久化缓存。即使所有旧测试通过，也不能证明实现了用户要求的功能。
+上游还覆盖更多应用内显示面；本方案限定“正在播放页 + 通知”属于裁剪范围，不能称为
+AM++ 完整等价移植。
+
+重新实施的必要工作：
+
+1. 明确用户所需模式及设置入口；至少保留可持久保存的开关/模式，重启生效。
+2. 确认 1607 的模块专属请求地区、语言与请求头接缝，禁止改全局 Locale 或账号地区。
+3. 实现所需地区解析与跨地区身份回退，按模式持久缓存成功结果；失败不污染缓存。
+4. 排查 build #146 的运行时激活情况。没有 debug 日志不能单独证明 hook 没执行。
+5. 增加关闭、模式隔离、重启缓存、账号普通请求不受影响和异步切歌测试，再云端打包。
+6. 真机实际标题变化与歌词/Atomic 回归通过后，才能标记完成。
 
 ## 1. 背景
 
@@ -55,7 +101,7 @@ TitleCorrectionFeature.install
 
 Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat/CatalogQueryMethod.java`：首选名 → 重命名映射 → 唯一签名兜底，有歧义时拒绝，不猜。
 
-实际实现仅从明确的 `getSubscriptionStoreId()` 取得 catalog ID，不将任意 `persistentId/getId` 发往 Catalog。队列身份要求正十进制 queue ID，并同时校验 catalog ID。宿主 `w9.Q.q0(Map)` 会以系统语言覆盖 `l`，因此请求与 LRU 缓存均按系统语言分区，不修改全局 Locale 或宿主语言逻辑。超时/调用失败不写负缓存；旧曲目结果可以入原分区缓存，但不能更新当前曲目。
+现有实验实现仅从明确的 `getSubscriptionStoreId()` 取得 catalog ID，不将任意 `persistentId/getId` 发往 Catalog。队列身份要求正十进制 queue ID，并同时校验 catalog ID。宿主 `w9.Q.q0(Map)` 会以系统语言覆盖 `l`，这是需要解决的请求隔离问题，不能作为接受系统语言模式的理由。现有 LRU 仍按系统语言分区，待改为所选模式的持久缓存。超时/调用失败不写负缓存；旧曲目结果可以入原分区缓存，但不能更新当前曲目。
 
 ### 2.1 现有的 6 个 smali hook（保持不变）
 
@@ -87,7 +133,7 @@ Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat
 - 候选顺序：`w9.Q.F` → `w9.a.F` → 旧版 `s8.F.x` / `u8.E.v`，全部经过严格的签名校验（实例方法；参数恰好是 `String`、`Map`、`kotlin.coroutines.Continuation` 接口；返回 `Object`；有歧义就拒绝）。
 - 通过代理 `Continuation` 异步调用，只解析歌曲标题。反射失败、结果为空、非歌曲内容、与原标题相同，都按无操作处理。
 - **编码前需先确认**（来源：AM++ 1.6.4 的 dexdump + 1607 分析产物）：宿主 catalog 实例怎么获取、请求 URL/参数形状、响应中标题所在的路径。
-- 不移植：AM++ 设置、HLE 注册表、艺人/专辑本地化、缓存持久化、原生 DexKit 加载、功能安装机制。
+- 不移植：完整 AM++ 设置、HLE 注册表、艺人/专辑本地化、原生 DexKit 加载、Xposed 功能安装机制。必要的开关、模式选择与持久化缓存属于标题功能本身，不能排除。
 
 ### 第 3 步：原地修改内存中的标题，绝不发布替换对象
 
@@ -140,7 +186,7 @@ Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat
 | Catalog 调用细节 | 已从云端 1607 分析产物确认，见第 2 节。APK 混淆类大小写敏感，本机归档提取需精确选择成员，避免大小写覆盖。 |
 | 写字段与源码契约冲突 | 保留全局禁止 `setFieldValue(`；仅专用方法内允许一次 `Field.set`，限定精确类与字段类型：`z3.x.a:CharSequence`、`StoreMediaItem.title:String`。 |
 | 通知刷新 | 已确认宿主安全入口，且只在当前 metadata 标题确实变化时刷新。对象归属不匹配则不执行；实际通知呈现仍待真机验证。 |
-| 进程内语言切换 | 新写入必须匹配当前系统语言，进行中的旧语言响应丢弃；已经原位改过的标题在新语言查询成功前可能继续显示旧修正，不主动重建对象或还原标题。 |
+| 模式与重启 | 待实现开关和模式持久设置；进程内配置固定，切换后重启。不能把系统语言切换当成模式切换；缓存必须按所选 profile 隔离。 |
 | 验证边界 | 云端单元、集成与静态检查不等同于真机成功；标题显示、快速切歌、歌词、seek、封面和车机 Atomic 回归仍需设备确认。 |
 | media_session 标题 | 由于禁止重新发布 MediaMetadata，车机/系统媒体会话中的标题可能仍是原标题，这是有意的取舍，不属于本计划的目标范围。 |
 | 混淆名漂移 | 后续 Apple Music 版本的 `z3.x.a`、`w9.Q.F` 等名字可能改变，解析器必须在签名不匹配时安静地不做任何操作。 |
