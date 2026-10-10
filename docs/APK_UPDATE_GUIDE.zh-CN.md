@@ -242,7 +242,7 @@ stock 计算与 UI 赋值顺序，最终回编译后再次执行。
 
 ### 7.1 把新 APKM 解包并装进 payload
 
-新版本通常先下载为 `.apkm`。`.apkm` 本质是 zip 容器，里面是 base APK 和多个 `split_config.*.apk`。原始 APK 不进 Git 历史，而是把这些 split APK 放进 `payload.tar/input/splits/`，再把 `payload.tar` 切成 `payload.tar.part.000…`（每片 20 MiB，最后一片 < 25 MB）。CI 会重新合并 splits 并执行后续分析、歌词补丁和 AM++ 嵌入。
+新版本通常先下载为 `.apkm`。`.apkm` 本质是 zip 容器，里面是 base APK 和多个 `split_config.*.apk`。原始 APK 不进 Git 历史，而是把这些 split APK 放进 `payload.tar/input/splits/`，再把 `payload.tar` 切成 `payload.tar.part.000…`（每片 20 MiB，最后一片 < 25 MB）。CI 重新合并 splits 并分析、应用歌词与独立标题补丁；只有显式选择历史实验时才执行 AM++ 嵌入。
 
 当前推荐 payload 内部结构（CI 脚本也在里面）：
 
@@ -330,6 +330,7 @@ legacy-bridge-*.txt / session-class-*.txt                Media3 legacy 桥接与
 3. 改 `apply.sh`：`manager_target`、`connection_target`、六个签名、`native_order` 锚点。
 4. 改 `rebuild.sh` 末尾 Python：同一组签名、`P.smali` / `c0.smali` 的 glob、`native_order`。
 5. Manifest 插入由 `apply.sh` 自动完成，前提是 `MediaPlaybackService` 类名与 `intent-filter` 结构不变；变了就改脚本里的服务名。
+6. 独立标题须另行确认生成 binder 的 `getTitle()` → TextView adapter 接缝；打补丁前运行 `verify_title_hook.py <decoded-root> --unpatched`，之后与最终回编译后运行默认校验。六个歌词 Hook 不因标题逻辑改动。
 
 ### 7.5 额外 DEX
 
@@ -342,7 +343,7 @@ gh workflow run "APK analysis and rebuild" --ref <branch> \
   -f rebuild=true -f embed_ampp=false -f standalone_module=false
 ```
 
-CI 会依次验证：契约测试 → apktool 重建 → javac/d8 → helper marker → zipalign → 固定签名 + 证书 pin → 包名/版本一致 → manifest 中合作 action 恰好一次且与 MediaBrowser 同一 filter → 六个 Hook 各恰好一次 → helper DEX 签名前后一致。成功后自动创建 Release `v1.0.0-build-<run_number>`，附 APK 与 `.sha256`。
+CI 验证源码/patch 契约、Java 状态机与 catalog 测试、标题 UI 补丁前后接缝、apktool 重建、javac/d8、helper marker、zipalign、固定签名与证书 pin、包名/版本、manifest 合作 action 唯一性、六个歌词 Hook 和单一标题 Hook，以及 helper DEX 签名前后一致。最终回编译再次检查 Hook 顺序。成功后创建 Release `v1.0.0-build-<run_number>`，附 APK 与 `.sha256`；构建成功不等于设备回归通过。
 
 ```bash
 gh release download v1.0.0-build-<N> -p '*.apk' -p '*.sha256' -D downloads/
@@ -458,6 +459,7 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 
 - 新版本已重新分析，第 4 节全部反射目标与第 5 节六个 Hook 均按语义确认，不是盲套旧补丁。
 - `verify_source_contract.py` 通过；GitHub Actions 构建成功并产出 Release。
+- 独立标题的状态机、catalog、patch 测试通过，标题 UI 接缝的补丁前与最终回编译校验通过；实际播放页、通知、快速切歌与语言切换仍待设备验证。
 - Manifest 含 `com.vivo.musicwidgetmix.support.service`，`support_event` 发布值包含 `7|8|16`。
 - 明确说明签名和卸载风险。
 - 第 9 节清单至少完成一次实车测试；未实测的项目必须明确标为"待实车验证"。
