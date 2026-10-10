@@ -24,7 +24,29 @@ public final class TitleCorrectionStateTest {
         testNamespaceLruBound();
         testSnapshotsAndStockPreservation();
         testInvalidCacheSize();
+        testPersistentRestoreGuards();
         System.out.println("TitleCorrectionState tests passed");
+    }
+
+    private static void testPersistentRestoreGuards() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Original");
+        TitleCorrectionState.Snapshot first = state.snapshot();
+        check(!state.restore(first, ""), "empty disk entries are ignored");
+        check(state.restore(first, "Mainland"), "matching disk entry settles generation");
+        equal("Mainland", state.correctedTitle(manager, "1", "10"));
+        check(state.request() == null, "disk hit skips network");
+        check(!state.restore(first, "Overwrite"), "settled generation is immutable");
+        state.begin(manager, "2", "20", "", "Second");
+        check(!state.restore(first, "Wrong"), "late disk hit cannot change another track");
+        TitleCorrectionState.Snapshot second = state.snapshot();
+        TitleCorrectionState.Request request = state.request();
+        check(!state.restore(second, "Overtake network"), "disk hit cannot supersede active query");
+        check(state.acceptsResult(request), "active completion may persist");
+        state.fail(request);
+        check(!state.acceptsResult(request), "timed out result must not persist");
+        TitleCorrectionState other = started(new Object(), "2", "20", "Other");
+        check(!other.acceptsResult(request), "foreign result cannot persist");
     }
 
     private static void testCatalogIdentity() {
@@ -158,13 +180,16 @@ public final class TitleCorrectionStateTest {
         Object manager = new Object();
         TitleCorrectionState state = started(manager, "1", "10", "Localized");
         state.complete(state.request(), " Localized ");
-        equal(null, state.correctedTitle(manager, "1", "10"));
+        equal("Localized", state.correctedTitle(manager, "1", "10"));
+        CharSequence stock = new StringBuilder("Localized");
+        check(state.currentTitle(manager, "1", "10", stock) == stock,
+                "same visible title preserves its stock object");
         state.begin(manager, "2", "10", "", "English");
         check(state.request() == null, "same-name response must be cached");
         equal("Localized", state.correctedTitle(manager, "2", "10"));
         state.begin(manager, "3", "10", "", " Localized ");
         state.request();
-        equal(null, state.correctedTitle(manager, "3", "10"));
+        equal("Localized", state.correctedTitle(manager, "3", "10"));
     }
 
     private static void testLru() {

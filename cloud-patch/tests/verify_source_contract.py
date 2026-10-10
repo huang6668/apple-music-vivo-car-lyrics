@@ -84,6 +84,18 @@ assert '"getId"' not in method_body("private static String titleCatalogId(")
 assert "TITLE_STATE.complete(request, title)" in text
 assert "TITLE_STATE.fail(request)" in text
 assert "WeakReference<Object>" in text
+assert 'private static final String TITLE_PROFILE = "cn_v1";' in text
+assert 'private static final String TITLE_LANGUAGE = "zh-CN";' in text
+for body in (
+    title_binding,
+    method_body("private static void beginTitleCorrection("),
+    method_body("private static boolean isCurrentTitle("),
+    method_body("private static void requestTitleCorrection("),
+    method_body("private static void startTitleQuery("),
+):
+    assert "Locale.getDefault()" not in body, "Fixed mainland titles must not follow system locale"
+assert "TITLE_IO.execute(" in method_body("private static void loadPersistedTitle(")
+assert "TITLE_IO.execute(" in method_body("private static void persistTitle(")
 
 # Atomic capability mutation remains in-place and independent of title correction.
 assert "ATOMIC_SUPPORT_EVENTS" in capability

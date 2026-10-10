@@ -24,6 +24,7 @@ python3 "$title_verifier" work/apktool --unpatched
 echo "Applying vivo car and Atomic Player lyrics hooks"
 patch --batch --forward --fuzz=0 --strip=1 --directory=work/apktool < "$patch_file"
 python3 "$title_verifier" work/apktool
+python3 "$patch_root/patch_catalog_region.py" work/apktool --apply
 
 python3 - "$manager_target" "$connection_target" <<'PY'
 import re
@@ -199,7 +200,9 @@ PY
 
 mkdir -p out/report
 sha256sum "$patch_file" "$helper_source" "$paginator_source" "$title_verifier" \
+  "$patch_root/patch_catalog_region.py" \
   "$patch_root/java/com/apple/android/music/player/TitleCorrectionState.java" \
+  "$patch_root/java/com/apple/android/music/player/TitleCacheStore.java" \
   "$patch_root/java/com/apple/android/music/player/CatalogQueryMethod.java" \
   "$patch_root/java/com/apple/android/music/player/CatalogTitleResolver.java" \
   > out/report/vivo-car-lyrics-patch-sha256.txt

@@ -48,12 +48,30 @@ public final class CatalogTitleResolverTest {
         Object early;
         RuntimeException thrown;
         Continuation pending;
+        Map<?, ?> parameters;
+        boolean omitHook;
         public Object F(String path, Map<?, ?> params, Continuation continuation) {
             equal("songs", path);
             equal("123", params.get("ids"));
-            equal("zh-Hans-CN", params.get("l"));
             equal("android", params.get("platform"));
-            equal("artists", params.get("include[songs]"));
+            if (params.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER)) {
+                equal("zh-CN", params.get("l"));
+                check(params.get(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER) instanceof String,
+                        "resolver owns a request token");
+                equal("artists", params.get("include[songs]"));
+                if (!omitHook) {
+                    LinkedHashMap<String, Object> localized = new LinkedHashMap<String, Object>();
+                    for (Map.Entry<?, ?> entry : params.entrySet()) {
+                        localized.put((String) entry.getKey(), entry.getValue());
+                    }
+                    equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
+                            "/v1/catalog/us/songs", new LinkedHashMap<String, String>(), localized));
+                }
+            } else {
+                equal(null, params.get("l"));
+                equal(null, params.get("include[songs]"));
+            }
+            parameters = params;
             CoroutineContext context = continuation.getContext();
             check(context == EmptyCoroutineContext.INSTANCE, "use genuine empty context");
             check(context.get(new Object()) == null, "empty get returns null");
@@ -85,6 +103,9 @@ public final class CatalogTitleResolverTest {
         testSyncAndSuspend();
         testErrorEnvelopes();
         testFailuresAndDuplicates();
+        testFinalRequestIsolation();
+        testMissingLocalizationFailsClosed();
+        testIsrcFallback();
         check(CatalogTitleResolver.emptyContext(fi.e.class) == fi.f.a,
                 "obfuscated empty context singleton");
         try {
@@ -93,6 +114,142 @@ public final class CatalogTitleResolverTest {
         } catch (ClassNotFoundException expected) {
         }
         System.out.println("CatalogTitleResolver tests passed");
+    }
+
+    private static void testMissingLocalizationFailsClosed() {
+        Catalog catalog = new Catalog();
+        catalog.omitHook = true;
+        Recorder result = new Recorder();
+        query(catalog, result);
+        equal(1, result.calls);
+        equal(null, result.title);
+        check(result.error instanceof IllegalStateException, "unlocalized title rejected");
+    }
+
+    public static final class ScriptedCatalog {
+        final Object[] responses;
+        final java.util.List<Map<?, ?>> calls = new java.util.ArrayList<Map<?, ?>>();
+        Continuation pending;
+        boolean suspended;
+        ScriptedCatalog(Object... responses) { this.responses = responses; }
+        public Object F(String path, Map<?, ?> parameters, Continuation continuation) {
+            equal("songs", path);
+            int step = calls.size();
+            calls.add(parameters);
+            if (parameters.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER)) {
+                LinkedHashMap<String, Object> fresh = new LinkedHashMap<String, Object>();
+                for (Map.Entry<?, ?> entry : parameters.entrySet()) {
+                    fresh.put((String) entry.getKey(), entry.getValue());
+                }
+                fresh.put("l", "en-US");
+                equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
+                        "/v1/catalog/us/songs", new LinkedHashMap<String, String>(), fresh));
+                equal("zh-CN", fresh.get("l"));
+                check(!fresh.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                        "internal token stays off network");
+            } else {
+                equal("123", parameters.get("ids"));
+                equal(null, parameters.get("l"));
+                equal(null, parameters.get("filter[isrc]"));
+            }
+            pending = continuation;
+            if (suspended) return Suspended.COROUTINE_SUSPENDED;
+            return responses[step];
+        }
+    }
+
+    private static void testIsrcFallback() {
+        String isrc = "TWABC1200001";
+        Object identity = map("data", Arrays.asList(map(
+                "id", "123", "type", "songs",
+                "attributes", map("name", "Account romanization", "isrc", isrc))));
+        Object regional = map("data", Arrays.asList(map(
+                "id", "987", "type", "songs",
+                "attributes", map("name", "Mainland result", "isrc", isrc))));
+        for (Object miss : new Object[]{
+                new Response(),
+                map("errors", Arrays.asList(map("status", 404)))}) {
+            ScriptedCatalog catalog = new ScriptedCatalog(miss, identity, regional);
+            Recorder result = new Recorder();
+            check(CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result),
+                    "ISRC fallback dispatch");
+            equal(1, result.calls);
+            equal("Mainland result", result.title);
+            equal(null, result.error);
+            equal(3, catalog.calls.size());
+            equal(isrc, catalog.calls.get(2).get("filter[isrc]"));
+            equal(null, catalog.calls.get(2).get("ids"));
+            check(!catalog.calls.get(1).containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                    "account identity stays account scoped");
+        }
+        for (Object invalidRegional : new Object[]{
+                new Response(),
+                map("data", Arrays.asList(map("id", "987", "type", "songs",
+                        "attributes", map("name", "Wrong recording", "isrc", "JPABC1200001")))),
+                map("data", Arrays.asList(map("id", "i.987", "type", "songs",
+                        "attributes", map("name", "Wrong identity", "isrc", isrc)))),
+                map("data", Arrays.asList(map("id", "987", "type", "albums",
+                        "attributes", map("name", "Wrong entity", "isrc", isrc)))),
+                map("data", Arrays.asList(map("id", "987", "type", "songs",
+                        "attributes", map("name", " ", "isrc", isrc)))),
+                map("data", Arrays.asList(
+                        map("id", "987", "type", "songs",
+                                "attributes", map("name", "One", "isrc", isrc)),
+                        map("id", "988", "type", "songs",
+                                "attributes", map("name", "Two", "isrc", isrc))))}) {
+            ScriptedCatalog catalog = new ScriptedCatalog(new Response(), identity, invalidRegional);
+            Recorder result = new Recorder();
+            CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result);
+            equal(1, result.calls);
+            equal(null, result.error);
+            equal(null, result.title);
+        }
+        for (Object invalidIdentity : new Object[]{
+                new Response(), new Response(new Entity("123", "songs", "No ISRC")),
+                map("data", Arrays.asList(map("id", "555", "type", "songs",
+                        "attributes", map("isrc", isrc)))),
+                map("data", Arrays.asList(map("id", "123", "type", "songs",
+                        "attributes", map("isrc", "invalid"))))}) {
+            ScriptedCatalog catalog = new ScriptedCatalog(new Response(), invalidIdentity);
+            Recorder result = new Recorder();
+            CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result);
+            equal(2, catalog.calls.size());
+            equal(null, result.title);
+            equal(null, result.error);
+        }
+
+        ScriptedCatalog failure = new ScriptedCatalog(new Response(), identity,
+                map("errors", Arrays.asList(map("status", 403))));
+        Recorder failed = new Recorder();
+        CatalogTitleResolver.query(failure, "123", "zh-CN", "F", failed);
+        equal(1, failed.calls);
+        check(failed.error instanceof IllegalStateException, "regional auth error not cached as miss");
+
+        final java.util.List<Runnable> tasks = new java.util.ArrayList<Runnable>();
+        java.util.concurrent.Executor hostExecutor = new java.util.concurrent.Executor() {
+            public void execute(Runnable task) { tasks.add(task); }
+        };
+        ScriptedCatalog async = new ScriptedCatalog();
+        async.suspended = true;
+        Recorder result = new Recorder();
+        CatalogTitleResolver.query(async, "123", "zh-CN", "F", result, hostExecutor);
+        equal(0, async.calls.size());
+        tasks.remove(0).run();
+        Continuation first = async.pending;
+        first.resumeWith(new Response());
+        first.resumeWith(regional);
+        equal(1, tasks.size());
+        equal(0, result.calls);
+        tasks.remove(0).run();
+        Continuation second = async.pending;
+        second.resumeWith(identity);
+        second.resumeWith(identity);
+        equal(1, tasks.size());
+        tasks.remove(0).run();
+        async.pending.resumeWith(regional);
+        async.pending.resumeWith(regional);
+        equal(1, result.calls);
+        equal("Mainland result", result.title);
     }
 
     private static void testErrorEnvelopes() {
@@ -127,7 +284,8 @@ public final class CatalogTitleResolverTest {
         CatalogTitleResolver.Request request = CatalogTitleResolver.songRequest("00123", "zh-Hans-CN");
         equal("songs", request.path);
         equal("123", request.parameters.get("ids"));
-        equal("zh-Hans-CN", request.parameters.get("l"));
+        equal("zh-CN", request.parameters.get("l"));
+        equal("zh-CN", CatalogTitleResolver.songRequest("123", "zh-CN").parameters.get("l"));
         try {
             request.parameters.put("ids", "999");
             throw new AssertionError("mutable request");
@@ -140,11 +298,108 @@ public final class CatalogTitleResolverTest {
             } catch (IllegalArgumentException expected) {
             }
         }
-        try {
-            CatalogTitleResolver.songRequest("123", "");
-            throw new AssertionError("missing locale silently assumed");
-        } catch (IllegalArgumentException expected) {
+        for (String language : new String[]{null, "", "en-US", "ja-JP", "zh-TW"}) {
+            try {
+                CatalogTitleResolver.songRequest("123", language);
+                throw new AssertionError("non-mainland locale accepted");
+            } catch (IllegalArgumentException expected) {
+            }
         }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static void testFinalRequestIsolation() throws Exception {
+        Catalog catalog = new Catalog();
+        catalog.result = Suspended.COROUTINE_SUSPENDED;
+        Recorder result = new Recorder();
+        check(query(catalog, result), "register mainland request");
+        LinkedHashMap parameters = new LinkedHashMap(catalog.parameters);
+        parameters.put("l", "en-US");
+        LinkedHashMap headers = new LinkedHashMap(map(
+                "Authorization", "Bearer account-token",
+                "User-Agent", "AppleMusic/1607",
+                "X-Dsid", "321",
+                "accept-language", "en",
+                "x-apple-store-front", "143441-1,29",
+                "X-Apple-Request-Store-Front", "143462-1,26"));
+        String path = CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/us/songs", headers, parameters);
+        equal("/v1/catalog/cn/songs", path);
+        equal("zh-CN", parameters.get("l"));
+        equal(null, parameters.get(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER));
+        equal("zh-Hans", headers.get("Accept-Language"));
+        equal("143465-1,29", headers.get("X-Apple-Store-Front"));
+        equal("143465-1,26", headers.get("X-Apple-Request-Store-Front"));
+        equal(null, headers.get("accept-language"));
+        equal(null, headers.get("x-apple-store-front"));
+        equal("Bearer account-token", headers.get("Authorization"));
+        equal("AppleMusic/1607", headers.get("User-Agent"));
+        equal("321", headers.get("X-Dsid"));
+        equal("zh-CN", catalog.parameters.get("l"));
+        check(catalog.parameters.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                "do not mutate resolver input reused by host retries");
+
+        LinkedHashMap ordinary = new LinkedHashMap(map("ids", "123", "l", "en-US"));
+        LinkedHashMap originalHeaders = new LinkedHashMap(map("Accept-Language", "en"));
+        LinkedHashMap expected = new LinkedHashMap(ordinary);
+        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/us/songs", originalHeaders, ordinary));
+        equal(expected, ordinary);
+        equal(map("Accept-Language", "en"), originalHeaders);
+
+        for (String unsafePath : new String[]{null, "songs", "/v1/catalog/us/albums",
+                "/v1/catalog/us/songs/123", "/v1/me/songs", "/v1/catalog/usa/songs",
+                "https://example.com/v1/catalog/us/songs"}) {
+            LinkedHashMap protectedParameters = new LinkedHashMap(catalog.parameters);
+            LinkedHashMap protectedHeaders = new LinkedHashMap(originalHeaders);
+            equal(unsafePath, CatalogTitleResolver.correctCatalogRequest(
+                    unsafePath, protectedHeaders, protectedParameters));
+            equal(catalog.parameters, protectedParameters);
+            equal(originalHeaders, protectedHeaders);
+        }
+
+        LinkedHashMap spoof = new LinkedHashMap(catalog.parameters);
+        spoof.put(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER, "unknown-token");
+        LinkedHashMap spoofOriginal = new LinkedHashMap(spoof);
+        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/us/songs", originalHeaders, spoof));
+        equal(spoofOriginal, spoof);
+        spoof = new LinkedHashMap(catalog.parameters);
+        spoof.put("ids", "456");
+        spoofOriginal = new LinkedHashMap(spoof);
+        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/us/songs", originalHeaders, spoof));
+        equal(spoofOriginal, spoof);
+
+        LinkedHashMap withoutHeaders = new LinkedHashMap();
+        parameters = new LinkedHashMap(catalog.parameters);
+        equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/jp/songs", withoutHeaders, parameters));
+        equal("143465", withoutHeaders.get("X-Apple-Store-Front"));
+        equal("143465", withoutHeaders.get("X-Apple-Request-Store-Front"));
+
+        catalog.pending.resumeWith(new Response(new Entity("123", "songs", "Done")));
+        parameters = new LinkedHashMap(catalog.parameters);
+        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/us/songs", originalHeaders, parameters));
+        equal(catalog.parameters, parameters);
+
+        Catalog expired = new Catalog();
+        expired.result = Suspended.COROUTINE_SUSPENDED;
+        query(expired, new Recorder());
+        java.lang.reflect.Field pendingField = CatalogTitleResolver.class.getDeclaredField("PENDING");
+        pendingField.setAccessible(true);
+        Map pending = (Map) pendingField.get(null);
+        Object ownedRequest = pending.get(
+                expired.parameters.get(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER));
+        java.lang.reflect.Field deadline = ownedRequest.getClass().getDeclaredField("deadlineNanos");
+        deadline.setAccessible(true);
+        deadline.setLong(ownedRequest, System.nanoTime() - 1L);
+        parameters = new LinkedHashMap(expired.parameters);
+        equal("/v1/catalog/us/songs", CatalogTitleResolver.correctCatalogRequest(
+                "/v1/catalog/us/songs", originalHeaders, parameters));
+        equal(expired.parameters, parameters);
+        expired.pending.resumeWith(new Response());
     }
 
     private static void testSchema() {

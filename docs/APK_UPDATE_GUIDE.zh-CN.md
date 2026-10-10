@@ -2,10 +2,10 @@
 
 最后整理日期：2026-10-10（r38 歌词行为基线 + 1607 独立标题修正）
 
-> 2026-10-10 功能定义纠正：现有独立标题实现是系统 locale + 内存 LRU 实验，
-> 不是 AM++ 的所选地区解析与持久缓存功能。build #146 云端通过不代表移植完成，
-> 手机效果未确认。后续以 `STANDALONE_TITLE_CORRECTION_PLAN.zh-CN.md` 第 0 节为准；
-> 本文的旧 locale 描述仅记录现有实现，不作为目标契约。
+> 2026-10-10 用户确认范围：永久固定中国大陆 `cn` / `zh-CN`，无需模式选择、
+> 设置或原地区算法。r42 正在实施，尚未完成云端 Java / APK 与设备验证。
+> build #146 的系统 locale + 内存 LRU 是已废弃的历史实验，其云端通过不代表当前目标完成，
+> 手机效果未确认。后续以 `STANDALONE_TITLE_CORRECTION_PLAN.zh-CN.md` 第 0 节为准。
 
 本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：移植车机歌词、原子随身听歌词、进度条和独立标题修正，在 GitHub Actions 构建测试 APK。默认 `embed_ampp=false`，普通 APK 即包含独立实现；AM++ 嵌入仅保留为历史实验。1607 新标题路径的设备效果仍待验证。
 
@@ -191,9 +191,12 @@ com/vivo/ucar/databus/ControlChannel.java    ucar 路径 sendMusicInfo()
 | UI 刷新 | 同一 `ma.q0(PlaybackItem)` 重新绑定，不修改 UI 模型 |
 | 通知刷新 | `J4.Y2.g(session,boolean)` → `X1` → `a2` → `p.a` → `d2.f`；读取当前 `player.i0().a` |
 
-目录请求遵循系统 locale，不修改共享宿主 storefront；缓存按稳定 catalog 身份与
-locale 隔离。切换语言后阻止新的旧语言结果写入；已原位修改的标题可能保留到
-新语言查询成功，不保证立即恢复原标题。异步结果重新验证 manager、generation、队列 ID 与 catalog ID；
+标题目录请求永久固定 `cn` / `zh-CN`，不跟随系统语言或账号地区，也不增加模式或设置。
+必须隔离模块请求的地区、语言与必要请求头；宿主 `w9.Q.q0(Map)` 覆盖系统语言的行为
+不能泄漏到模块请求，普通账号目录、播放和歌词请求保持原样，禁止全局改 Locale 或共享
+storefront。缓存按 `cn_v1` 与稳定 catalog 身份隔离；成功非空结果在应用私有目录持久保存，
+最多 256 项 / 30 天，失败不落盘，后台原子写入失败保留旧缓存。以上 r42 路径待云端与设备验证。
+异步结果重新验证 manager、generation、队列 ID 与 catalog ID；
 旧曲结果仅可入缓存。反射签名、歌曲类型或响应 ID 不匹配时 fail-closed，保留 stock
 标题，不猜测任意首个响应实体或非歌曲内容。
 
@@ -203,7 +206,7 @@ macOS 默认文件系统可能在解压时混淆 `na.smali` / `Na.smali`、
 
 ## 5. 六个必要 Hook
 
-以下六个歌词 Hook 保持冻结。1607 另外只有一个标题 UI Hook（5.1），不可为标题刷新改变以下调用：
+以下六个歌词 Hook 保持冻结。1607 另有一个标题 UI Hook（5.1）和一个模块专属地区请求入口（5.2），不可为标题刷新改变以下调用：
 
 ```text
 VivoCarLyrics.onNativeMediaItem(Object mediaItem)
@@ -233,6 +236,14 @@ VivoCarLyrics.onAtomicControllerConnected(String controllerPackageName)
 复用已确认失活的 `v40/v41`，`.locals 58` 不变；异步结果通过同一 binding 的
 `q0(item)` 重新求值。`verify_title_hook.py` 检查唯一类/方法、寄存器、
 stock 计算与 UI 赋值顺序，最终回编译后再次执行。
+
+### 5.2 固定大陆请求入口
+
+`y9.k.a(String,String,boolean,LinkedHashMap,Map,kk.C,hi.c)` 在参数本地化之后、
+URL/请求头序列化之前调用 `CatalogTitleResolver.correctCatalogRequest(p1,p4,p5)`。
+`.locals 2` 不变，不写共享账号 storefront。只接受活动模块 token 与精确 ID / ISRC，
+改为 `/v1/catalog/cn/songs`、`zh-CN`、`zh-Hans` 和大陆请求头，并移除内部 token。
+`patch_catalog_region.py` 校验原始类指纹及最终 APK 的完整 stock 指令；普通请求保持原样。
 
 ## 6. 元数据与封面刷新规则
 
@@ -348,7 +359,11 @@ gh workflow run "APK analysis and rebuild" --ref <branch> \
   -f rebuild=true -f embed_ampp=false -f standalone_module=false
 ```
 
-CI 验证源码/patch 契约、Java 状态机与 catalog 测试、标题 UI 补丁前后接缝、apktool 重建、javac/d8、helper marker、zipalign、固定签名与证书 pin、包名/版本、manifest 合作 action 唯一性、六个歌词 Hook 和单一标题 Hook，以及 helper DEX 签名前后一致。最终回编译再次检查 Hook 顺序。成功后创建 Release `v1.0.0-build-<run_number>`，附 APK 与 `.sha256`；构建成功不等于设备回归通过。
+CI 验证源码/patch 契约、Java 状态机与 catalog 测试、固定大陆模块请求隔离与持久缓存测试、
+标题 UI 补丁前后接缝、apktool 重建、javac/d8、helper marker、zipalign、固定签名与证书 pin、
+包名/版本、manifest 合作 action 唯一性、六个歌词 Hook 和单一标题 Hook，以及 helper DEX
+签名前后一致。最终回编译再次检查 Hook 顺序。成功后创建 Release `v1.0.0-build-<run_number>`，
+附 APK 与 `.sha256`；r42 当前尚未完成此验证，构建成功也不等于设备回归通过。
 
 ```bash
 gh release download v1.0.0-build-<N> -p '*.apk' -p '*.sha256' -D downloads/
@@ -427,7 +442,8 @@ Key alias:     apple-music-vivo-car-lyrics
 10. 原子随身听：连续切歌不残留上一首，无歌词歌曲清空歌词。
 11. 原子随身听：进度条显示时长并随播放前进，拖动可 seek；若首曲短暂 `--:--` 后自愈，记录为 DURATION 时序（KNOWN_ISSUES 第 1 节）。
 12. 独立标题：播放页与通知在请求完成前显示原标题，之后只修正匹配曲目；同名、空结果、无匹配或非歌曲内容保持 stock。
-13. 请求中快速切歌、重复队列曲目与 metadata 补全时，旧结果不得落到新曲；切换系统语言后不得复用旧语言缓存。
+13. 请求中快速切歌、重复队列曲目与 metadata 补全时，旧结果不得落到新曲；重启后可复用
+    `cn_v1` 成功缓存，系统语言或账号地区变化后模块仍固定 `cn` / `zh-CN`，普通请求不受影响。
 14. 检查应用进程 logcat 中的目录与绑定反射错误。`dumpsys media_session` 只作观察，不作为标题修正通过条件。1607 新路径以上项目仍待设备验证。
 
 ## 10. 普通外挂方案的边界
@@ -446,7 +462,8 @@ cloud-patch/verify_title_hook.py          标题 UI 的目标、寄存器与 sto
 cloud-patch/apply.sh                     打补丁、插入 manifest action、校验 Hook 位置
 cloud-patch/rebuild.sh                   apktool b、编译辅助类、加 DEX、zipalign、固定签名、全部终检
 cloud-patch/java/.../VivoCarLyrics.java  歌词通道与独立标题集成；不重新发布 metadata
-cloud-patch/java/.../TitleCorrectionState.java  标题身份、generation、locale 隔离有界缓存
+cloud-patch/java/.../TitleCorrectionState.java  标题身份、generation、cn_v1 隔离有界内存缓存
+cloud-patch/java/.../TitleCacheStore.java  固定大陆成功标题的有界持久缓存，后台原子写入
 cloud-patch/java/.../CatalogQueryMethod.java / CatalogTitleResolver.java  独立宿主 catalog 查询
 cloud-patch/java/.../ClusterLyricsPaginator.java  仪表分页（r37 起不再发布，保留编译与测试）
 cloud-patch/tests/verify_source_contract.py       源码契约：禁止重发 MediaItem、要求能力位 8 与 16
@@ -464,7 +481,9 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 
 - 新版本已重新分析，第 4 节全部反射目标与第 5 节六个 Hook 均按语义确认，不是盲套旧补丁。
 - `verify_source_contract.py` 通过；GitHub Actions 构建成功并产出 Release。
-- 独立标题的状态机、catalog、patch 测试通过，标题 UI 接缝的补丁前与最终回编译校验通过；实际播放页、通知、快速切歌与语言切换仍待设备验证。
+- 独立标题的状态机、catalog、固定大陆请求隔离、持久缓存、patch 测试通过，标题 UI 接缝
+  的补丁前与最终回编译校验通过；实际播放页、通知、快速切歌、重启缓存，以及系统语言 /
+  账号地区变化后模块仍固定大陆、普通请求不受影响，均有设备验证记录。
 - Manifest 含 `com.vivo.musicwidgetmix.support.service`，`support_event` 发布值包含 `7|8|16`。
 - 明确说明签名和卸载风险。
 - 第 9 节清单至少完成一次实车测试；未实测的项目必须明确标为"待实车验证"。
@@ -472,12 +491,15 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 
 ## 13. 版本变更记录
 
-### 2026-10-10 - 1607 独立标题修正
+### 2026-10-10 - 1607 固定大陆标题修正 r42（实施中）
 
 - 普通构建 `embed_ampp=false` 包含独立实现，不加载 AM++ / NPatch。
 - 保留六个歌词 Hook；新增 `q8.na.l()` 字符串 Hook，通过同一 binding 刷新播放页。
 - 标题专用路径原位更新标题，宿主通知服务独立刷新，不重建或重新发布 metadata。
-- 请求与缓存跟随系统 locale，异步结果做当前身份校验；未知签名和无效响应 fail-closed。
+- 用户确认永久固定中国大陆 `cn` / `zh-CN`，无需模式选择、设置或原地区算法。
+- 标题模块请求与普通宿主请求隔离；固定 `cn_v1` 有界持久缓存，异步结果做当前身份校验；
+  未知签名和无效响应 fail-closed。云端 Java / APK 与设备验证尚未完成，不能标记适配完成。
+- build #146 的系统 locale + 内存 LRU 方案是已废弃的历史实验，手机标题修正未确认成功。
 - AM++ 1607 profile 失败作为历史实验记录保留；静态映射已确认，设备与实车运行效果待验证。
 
 ### 2026-09-28 - 标准化 APKM 更新与内嵌 AM++ 构建流程

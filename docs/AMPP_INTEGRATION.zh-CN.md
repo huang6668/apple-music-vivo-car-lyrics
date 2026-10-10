@@ -2,9 +2,10 @@
 
 更新：2026-10-10。当前目标：Apple Music 7.0.0-beta（1607）。
 
-> 功能定义纠正：build #146 的独立实验仅按系统 locale 查询并使用内存缓存，
-> 不符合 AM++“歌曲名显示修正”的原地区 / 固定中国大陆 / 固定日本模式及持久缓存语义。
-> 手机上未确认修正成功，不能标记为已移植完成。真实契约与重做事项见
+> 用户已确认：独立标题修正永久固定中国大陆 `cn` / `zh-CN`，不需要模式选择、
+> 设置或原地区算法。r42 正在按此范围实施，尚未完成云端 Java / APK 与设备验证。
+> build #146 的系统 locale + 内存缓存方案是已废弃的历史实验，手机上未确认修正成功。
+> 固定大陆契约与实施事项见
 > `STANDALONE_TITLE_CORRECTION_PLAN.zh-CN.md` 第 0 节。
 
 ## 当前标准流程
@@ -24,17 +25,24 @@ Apple Music 新版本通常以 `.apkm` 发布。更新流程固定为：
 历史内嵌 AM++ v1.6.2 只安装“修正歌曲名”功能，并默认关闭液态玻璃。设置界面没有裁剪，
 所以仍会显示 AM++ 的旧设置项；这不代表对应功能仍被安装。
 
-## 1607 现有实验架构（待纠正）
+## 1607 固定大陆架构（r42 待验证）
 
-- 标题状态机、generation 与有界 LRU 和歌词状态隔离，缓存按稳定 catalog 身份及系统 locale 隔离；语言切换后禁止新的旧语言结果写入，不修改共享 storefront。已原位修改的旧语言标题可能保留到新语言查询成功，不保证切换时立即恢复原标题。
+- 标题状态机、generation 与有界 LRU 和歌词状态隔离，固定 profile 为 `cn_v1`；
+  模块专属目录请求固定 `cn` / `zh-CN`，系统语言和账号地区不决定修正结果。不增加模式或设置，
+  不移植原地区 / genre / ISRC 算法；普通目录、播放和歌词请求不得被全局改地区。
+- 成功非空标题通过 `TitleCacheStore` 在应用私有目录持久缓存，最多 256 项、有效期 30 天，
+  串行后台读写；UTF-8 Properties 带 schema / `cn_v1` 校验，临时文件同步后原子替换。
+  失败和空结果不落盘，磁盘写入失败保留旧缓存，不影响当前标题显示。重启复用待验证。
 - Catalog 使用宿主 `MediaApiRepositoryHolder.Companion` 的实例，严格匹配 `w9.Q.F` / `w9.a.F` 的实例签名 `(String, Map, Continuation) -> Object`；旧映射为 `s8.F.x` / `u8.E.v`。响应必须匹配请求 ID 与歌曲类型；反射失败、歧义或空结果 fail-closed，保留原标题。
 - 管理器为 `player.S`，当前 MediaItem getter 为 `S.c()`（回退 `a()`）；metadata 为 `z3.v.d`，标题为 `z3.x.a`，extras 为 `z3.x.J`。
 - UI 接缝为 `q8.na.l()V`：item 在 `v8`，stock `getTitle()` 结果在 `v39`。唯一 `correctPlayerTitle(Object,Object,CharSequence)` Hook 只替换字符串，通过同一 binding 的 `ma.q0(item)` 重新求值，不修改 UI 模型。
 - 通知刷新链为 `J4.Y2.g(session,boolean)` → `X1` → `a2` → `p.a` → `d2.f`。provider 读取当前 `player.i0().a`；结果匹配当前 manager、generation、队列与 catalog 身份后原位更新现有标题并刷新 Notification，不重建或重新发布 MediaItem / MediaMetadata。
 - `publishMetadata()` 仍为空操作，六个歌词 Hook、Atomic `7|8|16`、seek、封面、进度条通道保持冻结；系统 MediaSession / 车机标题不承诺同步修正。
 
-以上映射与通知链已由云端静态分析定位。最终 APK 的反射可达性、播放页与通知刷新、
-语言切换、快速切歌和车机回归仍待设备验证，不得用静态分析替代。
+以上映射与通知链已由云端静态分析定位。宿主 `w9.Q.q0(Map)` 会覆盖 `l` 为系统语言，
+固定大陆链路必须对模块请求恢复 `zh-CN` 并隔离 Catalog 地区及请求头，不得接受覆盖后
+仍声称固定大陆。r42 云端 Java / APK 检查尚未完成；最终 APK 的反射可达性、真实请求地区、
+播放页与通知刷新、持久缓存、快速切歌和车机回归仍待设备验证，不得用静态分析替代。
 
 ### AM++ 1607 profile 失败
 
@@ -148,6 +156,7 @@ artifact；其失败不能只靠工作流绿色状态判断。
 
 框架文件日志可能只有启动信息，功能健康状态与查询异常应从
 `adb shell logcat -d --pid=<Apple Music PID>` 检查。
-最终必须确认目录查询返回有效名称，并检查实际播放页、通知、快速切歌与语言切换。
+最终必须确认模块请求使用 `cn` / `zh-CN` 并返回有效名称，普通宿主请求保持原行为，
+检查实际播放页、通知、快速切歌、重启缓存及系统语言变化后仍固定大陆。
 `dumpsys media_session` 只作观察，不作为标题修正通过条件；
 历史日志中的 `title_correction: ACTIVE` 只代表 AM++ 安装阶段完成。

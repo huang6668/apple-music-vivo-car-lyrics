@@ -9,6 +9,7 @@ PATCH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/VivoCarLyrics.java"
 PAGINATOR_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/ClusterLyricsPaginator.java"
 TITLE_STATE_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/TitleCorrectionState.java"
+TITLE_CACHE_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/TitleCacheStore.java"
 CATALOG_METHOD_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/CatalogQueryMethod.java"
 CATALOG_RESOLVER_SOURCE="$PATCH_ROOT/java/com/apple/android/music/player/CatalogTitleResolver.java"
 HELPER_WORK="$RUNNER_TEMP/vivo-car-lyrics-helper"
@@ -25,6 +26,7 @@ FINAL_HELPER_DEX="$HELPER_WORK/final-helper.dex"
 [[ -f "$HELPER_SOURCE" ]] || { echo "VivoCarLyrics.java is missing" >&2; exit 1; }
 [[ -f "$PAGINATOR_SOURCE" ]] || { echo "ClusterLyricsPaginator.java is missing" >&2; exit 1; }
 [[ -f "$TITLE_STATE_SOURCE" ]] || { echo "TitleCorrectionState.java is missing" >&2; exit 1; }
+[[ -f "$TITLE_CACHE_SOURCE" ]] || { echo "TitleCacheStore.java is missing" >&2; exit 1; }
 [[ -f "$CATALOG_METHOD_SOURCE" ]] || { echo "CatalogQueryMethod.java is missing" >&2; exit 1; }
 [[ -f "$CATALOG_RESOLVER_SOURCE" ]] || { echo "CatalogTitleResolver.java is missing" >&2; exit 1; }
 [[ -f "$SIGNING_CERT_SHA256_FILE" ]] || { echo "Signing certificate pin is missing" >&2; exit 1; }
@@ -40,7 +42,7 @@ find work/apktool -path '*/META-INF/*' -type f \
 java -Xmx4g -jar "$APKTOOL_JAR" b work/apktool -o out/app-unsigned.apk
 
 javac --release 8 -classpath "$PLATFORM" -d "$HELPER_WORK/classes" \
-  "$HELPER_SOURCE" "$PAGINATOR_SOURCE" "$TITLE_STATE_SOURCE" \
+  "$HELPER_SOURCE" "$PAGINATOR_SOURCE" "$TITLE_STATE_SOURCE" "$TITLE_CACHE_SOURCE" \
   "$CATALOG_METHOD_SOURCE" "$CATALOG_RESOLVER_SOURCE"
 jar --create --file "$HELPER_WORK/vivo-car-lyrics.jar" -C "$HELPER_WORK/classes" .
 "$BT/d8" --min-api 30 --output "$HELPER_WORK/dex" "$HELPER_WORK/vivo-car-lyrics.jar"
@@ -70,9 +72,11 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/VivoCarLyrics' \
   'com/apple/android/music/player/ClusterLyricsPaginator' \
   'com/apple/android/music/player/TitleCorrectionState' \
+  'com/apple/android/music/player/TitleCacheStore' \
   'com/apple/android/music/player/CatalogQueryMethod' \
   'com/apple/android/music/player/CatalogTitleResolver' \
-  'vivo-car-standalone-title-r41-2026-10-10' \
+  'correctCatalogRequest' \
+  'vivo-car-cn-title-r42-2026-10-10' \
   'correctPlayerTitle' \
   'VivoCarTitle' \
   'onNativeMediaItem' \
@@ -262,6 +266,8 @@ done
 sha256sum "$FINAL_HELPER_DEX" > out/report/final-helper-dex.sha256
 python3 "$PATCH_ROOT/verify_title_hook.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-title-hook.txt
+python3 "$PATCH_ROOT/patch_catalog_region.py" "$FINAL_MANIFEST_DIR" \
+  > out/report/verified-catalog-region-hook.txt
 python3 - "$FINAL_MANIFEST_DIR" <<'PY'
 import glob
 import re

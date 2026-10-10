@@ -2,16 +2,21 @@ package com.apple.android.music.player;
 
 import android.os.Bundle;
 import android.os.Handler;
+import com.apple.android.music.AppleMusicApplication;
 import com.apple.android.music.mediaapi.repository.MediaApiRepositoryHolder;
 import com.apple.android.music.playback.model.StoreMediaItem;
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import kotlin.coroutines.Continuation;
 
 public final class VivoTitleIntegrationTest {
@@ -31,7 +36,12 @@ public final class VivoTitleIntegrationTest {
         testUnknownQueueEnrichment();
         testUnavailableCatalogIsBounded();
         testNotificationIdentityGuards();
-        testLocaleNamespaceSwitch();
+        testFixedChinaIgnoresSystemLocale();
+        testReplayUsesCachedTitleWithoutCatalog();
+        testPersistedCacheAvoidsCatalog(false);
+        testPersistedCacheAvoidsCatalog(true);
+        testStalePersistedCacheCallback();
+        testSuccessfulCatalogResultPersists();
         Handler.reset();
         System.out.println("Vivo title integration tests passed");
     }
@@ -295,58 +305,171 @@ public final class VivoTitleIntegrationTest {
         equal(0, wrongMetadata.manager.service.notificationRefreshes);
     }
 
-    private static void testLocaleNamespaceSwitch() throws Exception {
+    private static void testFixedChinaIgnoresSystemLocale() throws Exception {
         Handler.reset();
         Locale original = Locale.getDefault();
         try {
             Locale.setDefault(Locale.US);
             Fixture fixture = new Fixture("Locale stock");
             fixture.request();
-            equal("en-US", fixture.catalog.calls.get(0).language);
+            equal("zh-CN", fixture.catalog.calls.get(0).language);
+            equal("cn_v1", state().snapshot().cacheNamespace);
             Locale.setDefault(Locale.SIMPLIFIED_CHINESE);
             fixture.request();
-            equal(2, fixture.catalog.calls.size());
-            equal("zh-CN", fixture.catalog.calls.get(1).language);
-            fixture.catalog.succeed(0, "English localized");
-            Handler.drain();
-            equal("Locale stock", fixture.manager.media.d.a);
-            check(state().snapshot().pending, "old locale callback cannot settle new locale query");
-            fixture.catalog.succeed(1, "Chinese localized");
+            equal(1, fixture.catalog.calls.size());
+            check(state().snapshot().pending, "system language does not restart a China query");
+            fixture.catalog.succeed(0, "Chinese localized");
             Handler.drain();
             equal("Chinese localized", fixture.manager.media.d.a);
             equal(Locale.SIMPLIFIED_CHINESE, Locale.getDefault());
             Locale.setDefault(Locale.US);
             fixture.request();
-            equal(3, fixture.catalog.calls.size());
-            equal("en-US", fixture.catalog.calls.get(2).language);
+            equal(1, fixture.catalog.calls.size());
             equal("Chinese localized", fixture.manager.media.d.a);
-            check(state().snapshot().pending, "discarded locale result must be queried again");
-            fixture.catalog.succeed(2, "Fresh English localized");
-            Handler.drain();
-            equal("Fresh English localized", fixture.manager.media.d.a);
             equal(Locale.US, Locale.getDefault());
-
-            Fixture settled = new Fixture("Settled locale stock");
-            settled.request();
-            settled.catalog.succeed(0, "Settled English");
-            Handler.drain();
-            equal("Settled English", settled.manager.media.d.a);
-            Locale.setDefault(Locale.SIMPLIFIED_CHINESE);
-            z3.v freshNative = media(settled.queue.id, settled.id, "Fresh native stock");
+            z3.v freshNative = media(fixture.queue.id, fixture.id, "Fresh native stock");
             VivoCarLyrics.onNativeMediaItem(freshNative);
-            equal("Fresh native stock", freshNative.d.a);
-            equal(1, settled.catalog.calls.size());
-            settled.request();
-            equal(2, settled.catalog.calls.size());
-            equal("zh-CN", settled.catalog.calls.get(1).language);
-            settled.catalog.succeed(1, "Settled Chinese");
-            Handler.drain();
-            equal("Settled Chinese", settled.manager.media.d.a);
-            VivoCarLyrics.onNativeMediaItem(freshNative);
-            equal("Settled Chinese", freshNative.d.a);
+            equal("Chinese localized", freshNative.d.a);
+            equal(1, fixture.catalog.calls.size());
         } finally {
             Locale.setDefault(original);
         }
+    }
+
+    private static void testPersistedCacheAvoidsCatalog(boolean unavailableApi) throws Exception {
+        Handler.reset();
+        File directory = openDiskCache();
+        try {
+            String id = String.valueOf(nextId + 1L);
+            check(new TitleCacheStore(directory).put(id, "Persisted China title"),
+                    "prepare a disk entry for the next fixture");
+            Fixture fixture = new Fixture("Disk stock");
+            equal(id, fixture.id);
+            Binding binding = new Binding();
+            VivoCarLyrics.correctPlayerTitle(binding, fixture.item, "Disk stock");
+            if (unavailableApi) MediaApiRepositoryHolder.Companion.setMediaApi(null);
+            fixture.request();
+            flushTitleIO();
+            Handler.drain();
+            equal(0, fixture.catalog.calls.size());
+            equal("Persisted China title", fixture.manager.media.d.a);
+            equal("Persisted China title", fixture.item.getTitle());
+            equal("Persisted China title", binding.title);
+            equal(1, binding.rebinds);
+            equal(1, fixture.manager.service.notificationRefreshes);
+            equal(0, fixture.manager.republishes);
+            check(state().snapshot().completed && !state().snapshot().pending,
+                    "disk cache settles before any catalog availability check");
+            equal(0, Handler.pendingCount());
+        } finally {
+            closeDiskCache(directory);
+        }
+    }
+
+    private static void testReplayUsesCachedTitleWithoutCatalog() throws Exception {
+        Handler.reset();
+        Fixture fixture = new Fixture("English stock");
+        fixture.request();
+        fixture.catalog.succeed(0, "China title");
+        Handler.drain();
+        equal("China title", fixture.item.getTitle());
+        fixture.activate();
+        MediaApiRepositoryHolder.Companion.setMediaApi(null);
+        Binding binding = new Binding();
+        VivoCarLyrics.correctPlayerTitle(binding, fixture.item, "English stock");
+        fixture.request();
+        equal("China title", binding.title);
+        equal(1, fixture.catalog.calls.size());
+        z3.v fresh = media(fixture.queue.id, fixture.id, "English stock");
+        VivoCarLyrics.onNativeMediaItem(fresh);
+        equal("China title", fresh.d.a);
+        equal(0, Handler.pendingCount());
+    }
+
+    private static void testStalePersistedCacheCallback() throws Exception {
+        Handler.reset();
+        File directory = openDiskCache();
+        try {
+            String firstId = String.valueOf(nextId + 1L);
+            check(new TitleCacheStore(directory).put(firstId, "Old disk title"),
+                    "prepare the old track's disk entry");
+            Fixture first = new Fixture("Old disk stock");
+            Binding firstBinding = new Binding();
+            VivoCarLyrics.correctPlayerTitle(firstBinding, first.item, "Old disk stock");
+            first.request();
+            flushTitleIO();
+            // The background read has completed, but its main-thread callback is still queued.
+            Fixture second = new Fixture("New disk stock");
+            Handler.drain();
+            equal("Old disk stock", first.manager.media.d.a);
+            equal("Old disk stock", first.item.getTitle());
+            equal("New disk stock", second.manager.media.d.a);
+            equal("New disk stock", second.item.getTitle());
+            equal(0, firstBinding.rebinds);
+            equal(0, first.manager.service.notificationRefreshes);
+            equal(0, second.manager.service.notificationRefreshes);
+            equal(0, first.catalog.calls.size());
+            equal(0, second.catalog.calls.size());
+            equal(second.id, state().snapshot().catalogId);
+            check(!state().snapshot().completed && !state().snapshot().pending,
+                    "stale disk callback does not settle the new track");
+            second.request();
+            flushTitleIO();
+            Handler.drain();
+            equal(1, second.catalog.calls.size());
+            equal(second.id, second.catalog.calls.get(0).id);
+        } finally {
+            closeDiskCache(directory);
+        }
+    }
+
+    private static void testSuccessfulCatalogResultPersists() throws Exception {
+        Handler.reset();
+        File directory = openDiskCache();
+        try {
+            Fixture fixture = new Fixture("Network disk stock");
+            fixture.request();
+            flushTitleIO();
+            Handler.drain();
+            equal(1, fixture.catalog.calls.size());
+            fixture.catalog.succeed(0, "Persisted network title");
+            Handler.drain();
+            flushTitleIO();
+            equal("Persisted network title", fixture.manager.media.d.a);
+            equal("Persisted network title", new TitleCacheStore(directory).get(fixture.id));
+            equal(0, fixture.manager.republishes);
+        } finally {
+            closeDiskCache(directory);
+        }
+    }
+
+    private static File openDiskCache() throws Exception {
+        flushTitleIO();
+        File directory = Files.createTempDirectory("vivo-title-integration-").toFile();
+        set("titleCacheStore", null);
+        AppleMusicApplication.setFilesDirectory(directory);
+        return directory;
+    }
+
+    private static void closeDiskCache(File directory) throws Exception {
+        flushTitleIO();
+        Handler.reset();
+        AppleMusicApplication.setFilesDirectory(null);
+        set("titleCacheStore", null);
+        File[] children = directory.listFiles();
+        if (children != null) {
+            for (File child : children) check(child.delete(), "remove temporary cache file");
+        }
+        check(directory.delete(), "remove temporary cache directory");
+    }
+
+    private static void flushTitleIO() throws Exception {
+        Field field = VivoCarLyrics.class.getDeclaredField("TITLE_IO");
+        field.setAccessible(true);
+        ExecutorService executor = (ExecutorService) field.get(null);
+        executor.submit(new Runnable() {
+            @Override public void run() {}
+        }).get(5L, TimeUnit.SECONDS);
     }
 
     private static final class Fixture {
@@ -421,6 +544,16 @@ public final class VivoTitleIntegrationTest {
         final List<Call> calls = new ArrayList<Call>();
         public Object F(String path, Map<?, ?> parameters, Continuation continuation) {
             equal("songs", path);
+            Map<Object, Object> fresh = new LinkedHashMap<Object, Object>(parameters);
+            fresh.put("l", Locale.getDefault().toLanguageTag());
+            LinkedHashMap<Object, Object> headers = new LinkedHashMap<Object, Object>();
+            equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
+                    "/v1/catalog/us/songs", headers, fresh));
+            equal("zh-Hans", headers.get("Accept-Language"));
+            equal("143465", headers.get("X-Apple-Store-Front"));
+            check(!fresh.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                    "module token does not leave final HTTP adapter");
+            parameters = fresh;
             check(parameters.get("ids") instanceof String, "request has catalog ID");
             check(parameters.get("l") instanceof String, "request has language");
             equal("android", parameters.get("platform"));

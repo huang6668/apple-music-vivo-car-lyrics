@@ -13,18 +13,21 @@ public final class Handler {
     public Looper getLooper() { return looper; }
     public boolean post(Runnable runnable) { return postDelayed(runnable, 0L); }
     public boolean postDelayed(Runnable runnable, long delay) {
+        return enqueue(runnable, delay);
+    }
+    private static synchronized boolean enqueue(Runnable runnable, long delay) {
         TASKS.add(new Task(now + Math.max(0L, delay), sequence++, runnable));
         return true;
     }
-    public static void reset() {
+    public static synchronized void reset() {
         TASKS.clear();
         now = 0L;
         sequence = 0L;
     }
-    public static long now() { return now; }
-    public static int pendingCount() { return TASKS.size(); }
-    public static void drain() { advanceBy(0L); }
-    public static void advanceBy(long elapsed) {
+    public static synchronized long now() { return now; }
+    public static synchronized int pendingCount() { return TASKS.size(); }
+    public static synchronized void drain() { advanceBy(0L); }
+    public static synchronized void advanceBy(long elapsed) {
         if (elapsed < 0L) throw new IllegalArgumentException("negative time");
         long target = now + elapsed;
         int remaining = 1000;

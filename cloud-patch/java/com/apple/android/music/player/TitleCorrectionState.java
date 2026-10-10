@@ -121,7 +121,7 @@ public final class TitleCorrectionState {
         };
     }
 
-    /** Language changes invalidate active work but retain independently bounded cache entries. */
+    /** Profile changes invalidate active work but retain independently bounded cache entries. */
     public synchronized boolean setCacheNamespace(String namespace) {
         String normalized = text(namespace);
         if (cacheNamespace.equals(normalized)) return false;
@@ -175,12 +175,7 @@ public final class TitleCorrectionState {
                 || pending || completed) {
             return null;
         }
-        CachedTitle cached = cache.get(new CacheKey(cacheNamespace, catalogId));
-        if (cached != null) {
-            resolvedTitle = cached.title;
-            completed = true;
-            return null;
-        }
+        if (restoreCached(new Snapshot(this))) return null;
         activeRequest = new Request(new Snapshot(this));
         pending = true;
         return activeRequest;
@@ -248,6 +243,31 @@ public final class TitleCorrectionState {
         return new Snapshot(this);
     }
 
+    public synchronized boolean acceptsResult(Request request) {
+        if (request == null || request.owner != this || request.completed) return false;
+        CachedTitle cached = cache.get(request.cacheKey);
+        return cached == null || cached.generation <= request.generation;
+    }
+
+    /** A disk result cannot supersede an already-started query or a different identity. */
+    public synchronized boolean restore(Snapshot identity, String title) {
+        String normalized = text(title);
+        if (!matchesSnapshot(identity) || pending || completed || normalized.isEmpty()) return false;
+        cache.put(new CacheKey(cacheNamespace, catalogId), new CachedTitle(generation, normalized));
+        resolvedTitle = normalized;
+        completed = true;
+        return true;
+    }
+
+    public synchronized boolean restoreCached(Snapshot identity) {
+        if (!matchesSnapshot(identity) || pending || completed) return false;
+        CachedTitle cached = cache.get(new CacheKey(cacheNamespace, catalogId));
+        if (cached == null) return false;
+        resolvedTitle = cached.title;
+        completed = true;
+        return true;
+    }
+
     /** Revalidate a captured identity immediately before applying an asynchronous UI update. */
     public synchronized boolean matchesSnapshot(Snapshot candidate) {
         return candidate != null && candidate.owner == this
@@ -311,8 +331,7 @@ public final class TitleCorrectionState {
     }
 
     private String correction() {
-        return completed && resolvedTitle != null
-                && !resolvedTitle.equals(originalTitle.trim()) ? resolvedTitle : null;
+        return completed ? resolvedTitle : null;
     }
 
     private static String text(String value) {

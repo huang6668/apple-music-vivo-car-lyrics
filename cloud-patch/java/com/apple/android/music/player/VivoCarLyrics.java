@@ -14,16 +14,23 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-standalone-title-r41-2026-10-10";
+    private static final String BUILD_MARKER = "vivo-car-cn-title-r42-2026-10-10";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
+    private static final String TITLE_PROFILE = "cn_v1";
+    private static final String TITLE_LANGUAGE = "zh-CN";
     private static final String EXTRA_LINE = "music.media.extras.LYRIC";
     private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
     private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
@@ -96,6 +103,16 @@ public final class VivoCarLyrics {
     private static WeakReference<Object> reboundTitleItem = new WeakReference<Object>(null);
     private static WeakReference<Object> reboundTitleBinding = new WeakReference<Object>(null);
     private static Object titleSourceQueue;
+    private static boolean titleEntryLogged;
+    private static final ExecutorService TITLE_IO = Executors.newSingleThreadExecutor(
+            new ThreadFactory() {
+                @Override public Thread newThread(Runnable task) {
+                    Thread thread = new Thread(task, "VivoCarTitleCache");
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            });
+    private static TitleCacheStore titleCacheStore;
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
@@ -167,7 +184,7 @@ public final class VivoCarLyrics {
 
     public static void onCurrentItemChanged(Object playbackManager, Object newQueueItem) {
         try {
-            Log.d(TITLE_LOG_TAG, "current-item callback");
+            Log.w(TITLE_LOG_TAG, "current-item callback " + BUILD_MARKER);
             long generation = GENERATION.incrementAndGet();
             currentManager = playbackManager;
             currentQueueItem = newQueueItem;
@@ -256,7 +273,12 @@ public final class VivoCarLyrics {
     public static CharSequence correctPlayerTitle(Object binding, Object item, CharSequence stock) {
         try {
             synchronized (TITLE_LOCK) {
-                boolean localeChanged = TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
+                if (!titleEntryLogged) {
+                    titleEntryLogged = true;
+                    Log.w(TITLE_LOG_TAG, "player-title hook " + BUILD_MARKER
+                            + " manager=" + (currentManager != null));
+                }
+                TITLE_STATE.setCacheNamespace(TITLE_PROFILE);
                 TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
                 if (!isCurrentTitle(state) || !titleItemMatches(state, item)) {
                     if (currentTitleBinding.get() == binding) {
@@ -269,7 +291,6 @@ public final class VivoCarLyrics {
                 currentTitleBinding = new WeakReference<Object>(binding);
                 currentTitleItem = new WeakReference<Object>(item);
                 titleBindingGeneration = state.generation;
-                if (localeChanged) requestTitleCorrection();
                 return TITLE_STATE.currentTitle(state.manager, state.queueId, state.catalogId, stock);
             }
         } catch (Throwable ignored) {
@@ -286,12 +307,12 @@ public final class VivoCarLyrics {
                 titleBindingGeneration = -1L;
                 titleRebindGeneration = -1L;
                 Object item = invokeOptional(queueItem, "getItem");
-                TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
+                TITLE_STATE.setCacheNamespace(TITLE_PROFILE);
                 TITLE_STATE.begin(manager, titleQueueId(queueItem), titleCatalogId(item),
                         stringValue(invokeOptional(item, "getPersistentId")),
                         stringValue(invokeOptional(item, "getTitle")));
                 TitleCorrectionState.Snapshot snapshot = TITLE_STATE.snapshot();
-                Log.d(TITLE_LOG_TAG, "begin q=" + snapshot.queueId
+                Log.w(TITLE_LOG_TAG, "begin q=" + snapshot.queueId
                         + " catalog=" + snapshot.catalogId
                         + " lang=" + snapshot.cacheNamespace);
             }
@@ -347,7 +368,7 @@ public final class VivoCarLyrics {
 
     private static boolean isCurrentTitle(TitleCorrectionState.Snapshot state) {
         return TITLE_STATE.matchesSnapshot(state) && currentManager == state.manager
-                && state.cacheNamespace.equals(Locale.getDefault().toLanguageTag())
+                && state.cacheNamespace.equals(TITLE_PROFILE)
                 && state.queueId.equals(titleQueueId(titleSourceQueue))
                 && state.catalogId.equals(titleCatalogId(invokeOptional(titleSourceQueue, "getItem")))
                 && state.queueId.equals(titleQueueId(currentQueueItem));
@@ -362,7 +383,7 @@ public final class VivoCarLyrics {
     private static void requestTitleCorrection() {
         final TitleCorrectionState.Snapshot state;
         synchronized (TITLE_LOCK) {
-            TITLE_STATE.setCacheNamespace(Locale.getDefault().toLanguageTag());
+            TITLE_STATE.setCacheNamespace(TITLE_PROFILE);
             state = TITLE_STATE.snapshot();
             Log.d(TITLE_LOG_TAG, "request q=" + state.queueId
                     + " catalog=" + state.catalogId
@@ -370,19 +391,20 @@ public final class VivoCarLyrics {
         }
         MAIN.post(new Runnable() {
             @Override public void run() {
-                startTitleQuery(state, 0);
+                loadPersistedTitle(state);
             }
         });
     }
 
     private static void startTitleQuery(final TitleCorrectionState.Snapshot state, final int attempt) {
         synchronized (TITLE_LOCK) {
-            if (!state.cacheNamespace.equals(Locale.getDefault().toLanguageTag())) {
-                if (TITLE_STATE.matchesSnapshot(state)) requestTitleCorrection();
-                return;
-            }
             if (!isCurrentTitle(state)) {
                 Log.d(TITLE_LOG_TAG, "skip stale title state");
+                return;
+            }
+            TITLE_STATE.restoreCached(state);
+            if (TITLE_STATE.snapshot().completed) {
+                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
                 return;
             }
             final Object api = findCatalogApi();
@@ -405,7 +427,7 @@ public final class VivoCarLyrics {
                 applyTitleCorrectionFromState(TITLE_STATE.snapshot());
                 return;
             }
-            Log.d(TITLE_LOG_TAG, "catalog query id=" + request.catalogId);
+            Log.w(TITLE_LOG_TAG, "catalog query cn/zh-CN id=" + request.catalogId);
             MAIN.postDelayed(new Runnable() {
                 @Override public void run() {
                     synchronized (TITLE_LOCK) {
@@ -415,20 +437,19 @@ public final class VivoCarLyrics {
                     }
                 }
             }, TITLE_TIMEOUT_MS);
-            CatalogTitleResolver.query(api, request.catalogId, request.cacheNamespace, "F",
+            CatalogTitleResolver.query(api, request.catalogId, TITLE_LANGUAGE, "F",
                     new CatalogTitleResolver.Callback() {
                         @Override public void onTitle(final String title) {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
                                     synchronized (TITLE_LOCK) {
-                                        if (!request.cacheNamespace.equals(Locale.getDefault().toLanguageTag())) {
-                                            TITLE_STATE.fail(request);
-                                            requestTitleCorrection();
-                                            return;
-                                        }
+                                        boolean accepted = TITLE_STATE.acceptsResult(request);
                                         if (TITLE_STATE.complete(request, title)) {
-                                            Log.d(TITLE_LOG_TAG, "catalog title=" + title);
+                                            Log.w(TITLE_LOG_TAG, "catalog title=" + title);
                                             applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+                                        }
+                                        if (accepted && title != null && !title.trim().isEmpty()) {
+                                            persistTitle(request.catalogId, title);
                                         }
                                     }
                                 }
@@ -447,8 +468,75 @@ public final class VivoCarLyrics {
                                 }
                             });
                         }
+                    }, new Executor() {
+                        @Override public void execute(Runnable task) {
+                            MAIN.post(task);
+                        }
                     });
         }
+    }
+
+    private static File titleCacheDirectory() {
+        try {
+            Object directory = invokeOptional(appleApplication(), "getFilesDir");
+            return directory instanceof File ? (File) directory : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** All disk access is serialized off main; identity is rechecked after loading. */
+    private static void loadPersistedTitle(final TitleCorrectionState.Snapshot state) {
+        synchronized (TITLE_LOCK) {
+            if (!isCurrentTitle(state)) return;
+            if (state.completed || state.pending || state.catalogId.isEmpty()) {
+                startTitleQuery(state, 0);
+                return;
+            }
+        }
+        final File directory = titleCacheDirectory();
+        if (directory == null) {
+            startTitleQuery(state, 0);
+            return;
+        }
+        TITLE_IO.execute(new Runnable() {
+            @Override public void run() {
+                String value = null;
+                try {
+                    if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
+                    value = titleCacheStore.get(state.catalogId);
+                } catch (Throwable error) {
+                    Log.w(TITLE_LOG_TAG, "title cache read failed", error);
+                }
+                final String cached = value;
+                MAIN.post(new Runnable() {
+                    @Override public void run() {
+                        synchronized (TITLE_LOCK) {
+                            if (!isCurrentTitle(state)) return;
+                            if (cached != null) TITLE_STATE.restore(state, cached);
+                            startTitleQuery(state, 0);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private static void persistTitle(final String catalogId, final String title) {
+        final File directory = titleCacheDirectory();
+        if (directory == null) return;
+        TITLE_IO.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
+                    if (!titleCacheStore.put(catalogId, title)) {
+                        Log.w(TITLE_LOG_TAG, "title cache write failed");
+                    }
+                } catch (Throwable error) {
+                    Log.w(TITLE_LOG_TAG, "title cache write failed", error);
+                }
+            }
+        });
     }
 
     private static Object findCatalogApi() {
