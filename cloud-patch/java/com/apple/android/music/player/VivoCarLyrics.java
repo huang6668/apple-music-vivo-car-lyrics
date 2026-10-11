@@ -126,7 +126,8 @@ public final class VivoCarLyrics {
     private static boolean prefetchScheduled;
     private static final Set<WeakReference<Object>> ACTIVE_CONTROLLERS =
             Collections.synchronizedSet(new HashSet<WeakReference<Object>>());
-    private static Runnable activeRefreshRunnable;
+    private static final java.util.concurrent.atomic.AtomicLong REFRESH_SEQUENCE =
+            new java.util.concurrent.atomic.AtomicLong();
 
     private static final java.util.concurrent.ConcurrentHashMap<String, Method> METHOD_CACHE =
             new java.util.concurrent.ConcurrentHashMap<String, Method>();
@@ -771,12 +772,12 @@ public final class VivoCarLyrics {
     public static void triggerActiveControllersRefresh() {
         MAIN.post(new Runnable() {
             @Override public void run() {
-                if (activeRefreshRunnable != null) {
-                    MAIN.removeCallbacks(activeRefreshRunnable);
-                }
-                activeRefreshRunnable = new Runnable() {
+                final long seq = REFRESH_SEQUENCE.incrementAndGet();
+                MAIN.postDelayed(new Runnable() {
                     @Override public void run() {
-                        activeRefreshRunnable = null;
+                        if (seq != REFRESH_SEQUENCE.get()) {
+                            return;
+                        }
                         List<Object> targets = new ArrayList<Object>();
                         synchronized (ACTIVE_CONTROLLERS) {
                             Iterator<WeakReference<Object>> it = ACTIVE_CONTROLLERS.iterator();
@@ -796,8 +797,7 @@ public final class VivoCarLyrics {
                             } catch (Throwable ignored) {}
                         }
                     }
-                };
-                MAIN.postDelayed(activeRefreshRunnable, 300L);
+                }, 300L);
             }
         });
     }

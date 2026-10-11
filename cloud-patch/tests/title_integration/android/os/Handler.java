@@ -15,6 +15,18 @@ public final class Handler {
     public boolean postDelayed(Runnable runnable, long delay) {
         return enqueue(runnable, delay);
     }
+    public static synchronized boolean removeCallbacks(Runnable runnable) {
+        if (runnable == null) return false;
+        java.util.Iterator<Task> it = TASKS.iterator();
+        boolean removed = false;
+        while (it.hasNext()) {
+            if (it.next().runnable == runnable) {
+                it.remove();
+                removed = true;
+            }
+        }
+        return removed;
+    }
     private static synchronized boolean enqueue(Runnable runnable, long delay) {
         TASKS.add(new Task(now + Math.max(0L, delay), sequence++, runnable));
         return true;
