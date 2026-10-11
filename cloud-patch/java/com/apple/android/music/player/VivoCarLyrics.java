@@ -126,6 +126,24 @@ public final class VivoCarLyrics {
     private static boolean prefetchScheduled;
     private static final Set<WeakReference<Object>> ACTIVE_CONTROLLERS =
             Collections.synchronizedSet(new HashSet<WeakReference<Object>>());
+    private static Runnable activeRefreshRunnable;
+
+    private static final java.util.concurrent.ConcurrentHashMap<String, Method> METHOD_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<String, Method>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, Field> FIELD_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<String, Field>();
+    private static final Method NO_SUCH_METHOD_MARKER;
+    private static final Field NO_SUCH_FIELD_MARKER;
+    static {
+        Method dummyMethod = null;
+        Field dummyField = null;
+        try {
+            dummyMethod = Object.class.getMethod("toString");
+            dummyField = Boolean.class.getField("TRUE");
+        } catch (Throwable ignored) {}
+        NO_SUCH_METHOD_MARKER = dummyMethod;
+        NO_SUCH_FIELD_MARKER = dummyField;
+    }
 
     private static volatile Object currentManager;
     private static volatile String currentTrackKey = "";
@@ -598,19 +616,24 @@ public final class VivoCarLyrics {
         }
         TITLE_IO.execute(new Runnable() {
             @Override public void run() {
-                String value = null;
+                TitleCorrectionState.TrackInfo info = null;
                 try {
                     if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
-                    value = titleCacheStore.get(state.catalogId);
+                    info = titleCacheStore.getTrack(state.catalogId);
                 } catch (Throwable error) {
                     Log.w(TITLE_LOG_TAG, "title cache read failed", error);
                 }
-                final String cached = value;
+                final TitleCorrectionState.TrackInfo trackInfo = info;
                 MAIN.post(new Runnable() {
                     @Override public void run() {
                         synchronized (TITLE_LOCK) {
                             if (!isCurrentTitle(state)) return;
-                            if (cached != null) TITLE_STATE.restore(state, cached);
+                            if (trackInfo != null && !trackInfo.title.isEmpty()) {
+                                TITLE_STATE.restore(state, trackInfo.title);
+                                if (!trackInfo.artist.isEmpty()) {
+                                    TITLE_STATE.putCachedTrack(state.catalogId, trackInfo.title, trackInfo.artist);
+                                }
+                            }
                             startTitleQuery(state, 0);
                         }
                     }
@@ -626,7 +649,14 @@ public final class VivoCarLyrics {
             @Override public void run() {
                 try {
                     if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
-                    if (!titleCacheStore.put(catalogId, title)) {
+                    String artist = TITLE_STATE.snapshot().correctedArtist;
+                    boolean ok;
+                    if (artist != null && !artist.isEmpty()) {
+                        ok = titleCacheStore.putTrack(catalogId, title, artist);
+                    } else {
+                        ok = titleCacheStore.put(catalogId, title);
+                    }
+                    if (!ok) {
                         Log.w(TITLE_LOG_TAG, "title cache write failed");
                     }
                 } catch (Throwable error) {
@@ -641,10 +671,7 @@ public final class VivoCarLyrics {
         try {
             String catalogId = titleCatalogId(item);
             if (catalogId.isEmpty()) return stockTitle;
-            final String cached;
-            synchronized (TITLE_LOCK) {
-                cached = TITLE_STATE.getCachedTitle(catalogId);
-            }
+            String cached = TITLE_STATE.getCachedTitle(catalogId);
             if (cached != null && !cached.isEmpty()) {
                 return ChineseConverter.toSimplified(cached);
             }
@@ -652,6 +679,23 @@ public final class VivoCarLyrics {
             return stockTitle;
         } catch (Throwable ignored) {
             return stockTitle;
+        }
+    }
+
+    public static String resolveItemArtist(Object item, String stockArtist) {
+        if (item == null) return stockArtist;
+        try {
+            String catalogId = titleCatalogId(item);
+            if (!catalogId.isEmpty()) {
+                String cached = TITLE_STATE.getCachedArtist(catalogId);
+                if (cached != null && !cached.isEmpty()) {
+                    return ChineseConverter.toSimplified(cached);
+                }
+                enqueuePrefetch(catalogId);
+            }
+            return ChineseConverter.toSimplified(stockArtist);
+        } catch (Throwable ignored) {
+            return stockArtist;
         }
     }
 
@@ -695,18 +739,30 @@ public final class VivoCarLyrics {
         }
         if (entity != null) {
             String id = titleCatalogId(entity);
+            Object attrs = invokeOptional(entity, "getAttributes");
             if (!id.isEmpty()) {
-                final String cached;
-                synchronized (TITLE_LOCK) {
-                    cached = TITLE_STATE.getCachedTitle(id);
-                }
-                if (cached != null && !cached.isEmpty()) {
-                    Object attrs = invokeOptional(entity, "getAttributes");
+                String cachedTitle = TITLE_STATE.getCachedTitle(id);
+                String cachedArtist = TITLE_STATE.getCachedArtist(id);
+                if (cachedTitle != null && !cachedTitle.isEmpty()) {
                     if (attrs != null) {
-                        invokeOptional(attrs, "setName", ChineseConverter.toSimplified(cached));
+                        invokeOptional(attrs, "setName", ChineseConverter.toSimplified(cachedTitle));
+                        if (cachedArtist != null && !cachedArtist.isEmpty()) {
+                            invokeOptional(attrs, "setArtistName", ChineseConverter.toSimplified(cachedArtist));
+                        }
                     }
                 } else {
+                    if (attrs != null) {
+                        String stockArtist = stringValue(invokeOptional(attrs, "getArtistName"));
+                        if (stockArtist != null && !stockArtist.isEmpty()) {
+                            invokeOptional(attrs, "setArtistName", ChineseConverter.toSimplified(stockArtist));
+                        }
+                    }
                     enqueuePrefetch(id);
+                }
+            } else if (attrs != null) {
+                String stockArtist = stringValue(invokeOptional(attrs, "getArtistName"));
+                if (stockArtist != null && !stockArtist.isEmpty()) {
+                    invokeOptional(attrs, "setArtistName", ChineseConverter.toSimplified(stockArtist));
                 }
             }
         }
@@ -715,29 +771,33 @@ public final class VivoCarLyrics {
     public static void triggerActiveControllersRefresh() {
         MAIN.post(new Runnable() {
             @Override public void run() {
-                List<Object> targets = new ArrayList<Object>();
-                synchronized (ACTIVE_CONTROLLERS) {
-                    Iterator<WeakReference<Object>> it = ACTIVE_CONTROLLERS.iterator();
-                    while (it.hasNext()) {
-                        Object c = it.next().get();
-                        if (c == null) {
-                            it.remove();
-                        } else {
-                            targets.add(c);
+                if (activeRefreshRunnable != null) {
+                    MAIN.removeCallbacks(activeRefreshRunnable);
+                }
+                activeRefreshRunnable = new Runnable() {
+                    @Override public void run() {
+                        activeRefreshRunnable = null;
+                        List<Object> targets = new ArrayList<Object>();
+                        synchronized (ACTIVE_CONTROLLERS) {
+                            Iterator<WeakReference<Object>> it = ACTIVE_CONTROLLERS.iterator();
+                            while (it.hasNext()) {
+                                Object c = it.next().get();
+                                if (c == null) {
+                                    it.remove();
+                                } else {
+                                    targets.add(c);
+                                }
+                            }
+                        }
+                        for (Object ctrl : targets) {
+                            try {
+                                Method m = ctrl.getClass().getMethod("requestModelBuild");
+                                m.invoke(ctrl);
+                            } catch (Throwable ignored) {}
                         }
                     }
-                }
-                for (Object ctrl : targets) {
-                    try {
-                        Method m = ctrl.getClass().getMethod("requestForcedModelBuild");
-                        m.invoke(ctrl);
-                        continue;
-                    } catch (Throwable ignored) {}
-                    try {
-                        Method m = ctrl.getClass().getMethod("requestModelBuild");
-                        m.invoke(ctrl);
-                    } catch (Throwable ignored) {}
-                }
+                };
+                MAIN.postDelayed(activeRefreshRunnable, 300L);
             }
         });
     }
@@ -768,13 +828,12 @@ public final class VivoCarLyrics {
                 @Override public void run() {
                     try {
                         if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
-                        final Map<String, String> diskHits = titleCacheStore.getAll(batch);
+                        final Map<String, TitleCorrectionState.TrackInfo> diskHits =
+                                titleCacheStore.getAllTracks(batch);
                         if (!diskHits.isEmpty()) {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
-                                    synchronized (TITLE_LOCK) {
-                                        TITLE_STATE.putCachedTitles(diskHits);
-                                    }
+                                    TITLE_STATE.putCachedTracks(diskHits);
                                     triggerActiveControllersRefresh();
                                 }
                             });
@@ -807,22 +866,23 @@ public final class VivoCarLyrics {
     private static void queryCatalogBatch(final List<String> catalogIds) {
         final Object api = findCatalogApi();
         if (api == null || catalogIds.isEmpty()) return;
-        CatalogTitleResolver.batchQuery(api, catalogIds, TITLE_LANGUAGE, "F",
-                new CatalogTitleResolver.BatchCallback() {
-                    @Override public void onTitles(final Map<String, String> rawTitles) {
-                        if (rawTitles == null || rawTitles.isEmpty()) return;
-                        final Map<String, String> titles = new LinkedHashMap<String, String>();
-                        for (Map.Entry<String, String> entry : rawTitles.entrySet()) {
+        CatalogTitleResolver.batchQueryTracks(api, catalogIds, TITLE_LANGUAGE, "F",
+                new CatalogTitleResolver.BatchTrackCallback() {
+                    @Override public void onTracks(final Map<String, CatalogTitleResolver.TrackInfo> rawTracks) {
+                        if (rawTracks == null || rawTracks.isEmpty()) return;
+                        final Map<String, TitleCorrectionState.TrackInfo> tracks =
+                                new LinkedHashMap<String, TitleCorrectionState.TrackInfo>();
+                        for (Map.Entry<String, CatalogTitleResolver.TrackInfo> entry : rawTracks.entrySet()) {
                             if (entry.getValue() != null) {
-                                titles.put(entry.getKey(), ChineseConverter.toSimplified(entry.getValue()));
+                                tracks.put(entry.getKey(), new TitleCorrectionState.TrackInfo(
+                                        ChineseConverter.toSimplified(entry.getValue().title),
+                                        ChineseConverter.toSimplified(entry.getValue().artist)));
                             }
                         }
                         MAIN.post(new Runnable() {
                             @Override public void run() {
-                                synchronized (TITLE_LOCK) {
-                                    TITLE_STATE.putCachedTitles(titles);
-                                }
-                                persistBatchTitles(titles);
+                                TITLE_STATE.putCachedTracks(tracks);
+                                persistBatchTracks(tracks);
                                 triggerActiveControllersRefresh();
                             }
                         });
@@ -837,16 +897,16 @@ public final class VivoCarLyrics {
                 });
     }
 
-    private static void persistBatchTitles(final Map<String, String> titles) {
+    private static void persistBatchTracks(final Map<String, TitleCorrectionState.TrackInfo> tracks) {
         final File directory = titleCacheDirectory();
-        if (directory == null || titles.isEmpty()) return;
+        if (directory == null || tracks.isEmpty()) return;
         TITLE_IO.execute(new Runnable() {
             @Override public void run() {
                 try {
                     if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
-                    titleCacheStore.putAll(titles);
+                    titleCacheStore.putAllTracks(tracks);
                 } catch (Throwable error) {
-                    Log.w(TITLE_LOG_TAG, "batch title cache write failed", error);
+                    Log.w(TITLE_LOG_TAG, "batch track cache write failed", error);
                 }
             }
         });
@@ -939,20 +999,35 @@ public final class VivoCarLyrics {
             String type = target.getClass().getName();
             String name;
             Class<?> expected;
+            String artist = TITLE_STATE.snapshot().correctedArtist;
+            String[][] specs;
             if ("z3.x".equals(type)) {
                 name = "a";
                 expected = CharSequence.class;
+                specs = artist != null && !artist.isEmpty()
+                        ? new String[][]{{"a", "java.lang.CharSequence", title}, {"b", "java.lang.CharSequence", artist}}
+                        : new String[][]{{"a", "java.lang.CharSequence", title}};
             } else if ("com.apple.android.music.playback.model.StoreMediaItem".equals(type)) {
                 name = "title";
                 expected = String.class;
+                specs = artist != null && !artist.isEmpty()
+                        ? new String[][]{{"title", "java.lang.String", title}, {"artistName", "java.lang.String", artist}}
+                        : new String[][]{{"title", "java.lang.String", title}};
             } else {
                 return false;
             }
-            Field field = findField(target.getClass(), name);
-            if (Modifier.isStatic(field.getModifiers()) || field.getType() != expected) return false;
-            if (title.equals(field.get(target))) return false;
-            field.set(target, title);
-            return true;
+            boolean changed = false;
+            for (String[] spec : specs) {
+                Field field = findField(target.getClass(), spec[0]);
+                expected = "java.lang.String".equals(spec[1]) ? String.class : CharSequence.class;
+                if (Modifier.isStatic(field.getModifiers()) || field.getType() != expected) continue;
+                Object val = spec[2];
+                if (!val.equals(field.get(target))) {
+                    field.set(target, val);
+                    changed = true;
+                }
+            }
+            return changed;
         } catch (Throwable error) {
             Log.w(TITLE_LOG_TAG, "title field unavailable; keep stock title", error);
         }
@@ -2528,6 +2603,20 @@ public final class VivoCarLyrics {
 
     private static Method findCompatibleMethod(Class<?> type, String name, Object[] args, boolean requireStatic)
             throws NoSuchMethodException {
+        StringBuilder keyBuilder = new StringBuilder(type.getName()).append('#').append(name)
+                .append('#').append(args.length).append('#').append(requireStatic);
+        for (Object arg : args) {
+            keyBuilder.append('#').append(arg == null ? "null" : arg.getClass().getName());
+        }
+        String cacheKey = keyBuilder.toString();
+        Method cached = METHOD_CACHE.get(cacheKey);
+        if (cached != null) {
+            if (cached == NO_SUCH_METHOD_MARKER) {
+                throw new NoSuchMethodException(type.getName() + "." + name);
+            }
+            return cached;
+        }
+
         for (Class<?> cursor = type; cursor != null; cursor = cursor.getSuperclass()) {
             Method[] methods = cursor.getDeclaredMethods();
             for (Method method : methods) {
@@ -2539,9 +2628,13 @@ public final class VivoCarLyrics {
                 }
                 if (parametersMatch(method.getParameterTypes(), args)) {
                     method.setAccessible(true);
+                    METHOD_CACHE.put(cacheKey, method);
                     return method;
                 }
             }
+        }
+        if (NO_SUCH_METHOD_MARKER != null) {
+            METHOD_CACHE.put(cacheKey, NO_SUCH_METHOD_MARKER);
         }
         throw new NoSuchMethodException(type.getName() + "." + name);
     }
@@ -2604,13 +2697,26 @@ public final class VivoCarLyrics {
     }
 
     private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
+        String cacheKey = type.getName() + "#" + name;
+        Field cached = FIELD_CACHE.get(cacheKey);
+        if (cached != null) {
+            if (cached == NO_SUCH_FIELD_MARKER) {
+                throw new NoSuchFieldException(type.getName() + "." + name);
+            }
+            return cached;
+        }
+
         for (Class<?> cursor = type; cursor != null; cursor = cursor.getSuperclass()) {
             try {
                 Field field = cursor.getDeclaredField(name);
                 field.setAccessible(true);
+                FIELD_CACHE.put(cacheKey, field);
                 return field;
             } catch (NoSuchFieldException ignored) {
             }
+        }
+        if (NO_SUCH_FIELD_MARKER != null) {
+            FIELD_CACHE.put(cacheKey, NO_SUCH_FIELD_MARKER);
         }
         throw new NoSuchFieldException(type.getName() + "." + name);
     }

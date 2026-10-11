@@ -29,6 +29,21 @@ public final class CatalogTitleResolver {
     private static final Map<String, PendingRequest> PENDING =
             new LinkedHashMap<String, PendingRequest>();
 
+    public static final class TrackInfo {
+        public final String title;
+        public final String artist;
+
+        public TrackInfo(String title, String artist) {
+            this.title = title == null ? "" : title;
+            this.artist = artist == null ? "" : artist;
+        }
+
+        @Override
+        public String toString() {
+            return title + "\t" + artist;
+        }
+    }
+
     public interface Callback {
         void onTitle(String title);
         void onError(Throwable error);
@@ -36,6 +51,11 @@ public final class CatalogTitleResolver {
 
     public interface BatchCallback {
         void onTitles(Map<String, String> titles);
+        void onError(Throwable error);
+    }
+
+    public interface BatchTrackCallback {
+        void onTracks(Map<String, TrackInfo> tracks);
         void onError(Throwable error);
     }
 
@@ -150,6 +170,25 @@ public final class CatalogTitleResolver {
                                       String preferredName, final BatchCallback callback, final Executor hostExecutor) {
         if (callback == null) return false;
         final BatchOnce once = new BatchOnce(callback);
+        return startBatchExecution(catalog, catalogIds, preferredName, hostExecutor, once);
+    }
+
+    public static boolean batchQueryTracks(Object catalog, Collection<String> catalogIds, String language,
+                                            String preferredName, BatchTrackCallback callback) {
+        return batchQueryTracks(catalog, catalogIds, language, preferredName, callback, new Executor() {
+            public void execute(Runnable task) { task.run(); }
+        });
+    }
+
+    public static boolean batchQueryTracks(final Object catalog, Collection<String> catalogIds, String language,
+                                            String preferredName, final BatchTrackCallback callback, final Executor hostExecutor) {
+        if (callback == null) return false;
+        final BatchOnce once = new BatchOnce(callback);
+        return startBatchExecution(catalog, catalogIds, preferredName, hostExecutor, once);
+    }
+
+    private static boolean startBatchExecution(final Object catalog, Collection<String> catalogIds,
+                                               String preferredName, final Executor hostExecutor, final BatchOnce once) {
         try {
             if (catalog == null) throw new IllegalArgumentException("Missing catalog instance");
             final Method method = CatalogQueryMethod.resolve(catalog.getClass(),
@@ -164,7 +203,7 @@ public final class CatalogTitleResolver {
             }
             if (targetIds.isEmpty()) throw new IllegalArgumentException("No valid catalog IDs");
 
-            final Map<String, String> accumulated = new LinkedHashMap<String, String>();
+            final Map<String, TrackInfo> accumulated = new LinkedHashMap<String, TrackInfo>();
             executeBatchStage(catalog, method, targetIds, "cn", accumulated, hostExecutor, once);
             return true;
         } catch (Throwable error) {
@@ -175,7 +214,7 @@ public final class CatalogTitleResolver {
 
     private static void executeBatchStage(final Object catalog, final Method method,
                                           final List<String> pendingIds, final String storefront,
-                                          final Map<String, String> accumulated,
+                                          final Map<String, TrackInfo> accumulated,
                                           final Executor hostExecutor, final BatchOnce once) {
         if (!once.active()) return;
         if (pendingIds.isEmpty()) {
@@ -201,9 +240,9 @@ public final class CatalogTitleResolver {
                             return;
                         }
                     }
-                    Map<String, String> stageHits = hasResponseErrors(response)
-                            ? Collections.<String, String>emptyMap()
-                            : extractTitles(response);
+                    Map<String, TrackInfo> stageHits = hasResponseErrors(response)
+                            ? Collections.<String, TrackInfo>emptyMap()
+                            : extractTracks(response);
                     accumulated.putAll(stageHits);
                     final List<String> remaining = new ArrayList<String>();
                     for (String id : pendingIds) {
@@ -578,9 +617,9 @@ public final class CatalogTitleResolver {
         return ChineseConverter.toSimplified(title);
     }
 
-    public static Map<String, String> extractTitles(Object response) {
+    public static Map<String, TrackInfo> extractTracks(Object response) {
         if (response == null) return Collections.emptyMap();
-        Map<String, String> result = new LinkedHashMap<String, String>();
+        Map<String, TrackInfo> result = new LinkedHashMap<String, TrackInfo>();
         for (Object entity : values(member(response, "getData", "data"))) {
             if (!isSong(entity)) continue;
             Object entityId = member(entity, "getId", "id");
@@ -589,12 +628,24 @@ public final class CatalogTitleResolver {
             if (id.isEmpty()) continue;
             Object attributes = member(entity, "getAttributes", "attributes");
             Object value = member(attributes, "getName", "name");
-            if (value instanceof String) {
-                String text = ((String) value).trim();
-                if (!text.isEmpty()) {
-                    result.put(id, ChineseConverter.toSimplified(text));
-                }
+            Object artistValue = member(attributes, "getArtistName", "artistName");
+            String title = (value instanceof String) ? ((String) value).trim() : "";
+            String artist = (artistValue instanceof String) ? ((String) artistValue).trim() : "";
+            if (!title.isEmpty() || !artist.isEmpty()) {
+                result.put(id, new TrackInfo(
+                    ChineseConverter.toSimplified(title),
+                    ChineseConverter.toSimplified(artist)
+                ));
             }
+        }
+        return Collections.unmodifiableMap(result);
+    }
+
+    public static Map<String, String> extractTitles(Object response) {
+        Map<String, TrackInfo> tracks = extractTracks(response);
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        for (Map.Entry<String, TrackInfo> entry : tracks.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().title);
         }
         return Collections.unmodifiableMap(result);
     }
@@ -724,27 +775,51 @@ public final class CatalogTitleResolver {
 
     private static final class BatchOnce implements Chain {
         private final BatchCallback callback;
+        private final BatchTrackCallback trackCallback;
         private final AtomicBoolean done = new AtomicBoolean();
         private final long deadlineNanos = System.nanoTime() + QUERY_LIFETIME_NANOS;
-        BatchOnce(BatchCallback callback) { this.callback = callback; }
+
+        BatchOnce(BatchCallback callback) {
+            this.callback = callback;
+            this.trackCallback = null;
+        }
+
+        BatchOnce(BatchTrackCallback trackCallback) {
+            this.callback = null;
+            this.trackCallback = trackCallback;
+        }
+
         public boolean active() {
             if (done.get()) return false;
             if (System.nanoTime() - deadlineNanos < 0L) return true;
             failure(new IllegalStateException("Mainland title batch query timed out"));
             return false;
         }
+
         public long deadlineNanos() { return deadlineNanos; }
-        void success(Map<String, String> titles) {
+
+        void success(Map<String, TrackInfo> tracks) {
             if (!active()) return;
             if (done.compareAndSet(false, true)) {
                 finishChain(this);
-                callback.onTitles(titles);
+                if (trackCallback != null) {
+                    trackCallback.onTracks(tracks);
+                }
+                if (callback != null) {
+                    Map<String, String> titles = new LinkedHashMap<String, String>();
+                    for (Map.Entry<String, TrackInfo> entry : tracks.entrySet()) {
+                        titles.put(entry.getKey(), entry.getValue().title);
+                    }
+                    callback.onTitles(titles);
+                }
             }
         }
+
         public void failure(Throwable error) {
             if (done.compareAndSet(false, true)) {
                 finishChain(this);
-                callback.onError(error);
+                if (trackCallback != null) trackCallback.onError(error);
+                if (callback != null) callback.onError(error);
             }
         }
     }

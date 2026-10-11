@@ -37,6 +37,44 @@ def stock_attributes_fixture():
     )
 
 
+def stock_fixture_with_artist():
+    return (
+        ".class public Lcom/apple/android/music/model/BaseContentItem;\n"
+        ".super Lcom/apple/android/music/model/BaseCollectionItemView;\n\n"
+        ".method public getTitle()Ljava/lang/String;\n"
+        "    .locals 0\n\n"
+        "    .line 1\n"
+        "    iget-object p0, p0, Lcom/apple/android/music/model/BaseContentItem;->name:Ljava/lang/String;\n\n"
+        "    return-object p0\n"
+        ".end method\n\n"
+        ".method public getArtistName()Ljava/lang/String;\n"
+        "    .registers 2\n\n"
+        "    .line 2\n"
+        "    iget-object v0, p0, Lcom/apple/android/music/model/BaseContentItem;->artistName:Ljava/lang/String;\n\n"
+        "    return-object v0\n"
+        ".end method\n"
+    )
+
+
+def stock_attributes_fixture_with_artist():
+    return (
+        ".class public final Lcom/apple/android/music/mediaapi/models/internals/Attributes;\n"
+        ".super LA6/b;\n\n"
+        ".method public final getName()Ljava/lang/String;\n"
+        "    .registers 2\n\n"
+        "    .line 1\n"
+        "    iget-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->name:Ljava/lang/String;\n\n"
+        "    return-object v0\n"
+        ".end method\n\n"
+        ".method public final getArtistName()Ljava/lang/String;\n"
+        "    .registers 2\n\n"
+        "    .line 2\n"
+        "    iget-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->artistName:Ljava/lang/String;\n\n"
+        "    return-object v0\n"
+        ".end method\n"
+    )
+
+
 def stock_playlist_fixture():
     return (
         ".class public final Lcom/apple/android/music/collection/mediaapi/controller/PlaylistPageController;\n"
@@ -100,6 +138,38 @@ class ItemTitlePatchTest(unittest.TestCase):
         self.assertIn("iput-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->name:Ljava/lang/String;", patched)
 
         # Idempotent
+        self.assertEqual(patched, patch_module.patch_attributes_text(patched))
+
+    def test_patch_and_verify_with_artist(self):
+        stock = stock_fixture_with_artist()
+        patch_module.verify_text(stock, patched=False)
+        with self.assertRaises(AssertionError):
+            patch_module.verify_text(stock, patched=True)
+
+        patched = patch_module.patch_text(stock)
+        patch_module.verify_text(patched, patched=True)
+        with self.assertRaises(AssertionError):
+            patch_module.verify_text(patched, patched=False)
+
+        self.assertIn("VivoCarLyrics;->resolveItemTitle", patched)
+        self.assertIn("VivoCarLyrics;->resolveItemArtist", patched)
+        self.assertIn("->artistName:Ljava/lang/String;", patched)
+        self.assertEqual(patched, patch_module.patch_text(patched))
+
+    def test_attributes_patch_and_verify_with_artist(self):
+        stock = stock_attributes_fixture_with_artist()
+        patch_module.verify_attributes_text(stock, patched=False)
+        with self.assertRaises(AssertionError):
+            patch_module.verify_attributes_text(stock, patched=True)
+
+        patched = patch_module.patch_attributes_text(stock)
+        patch_module.verify_attributes_text(patched, patched=True)
+        with self.assertRaises(AssertionError):
+            patch_module.verify_attributes_text(patched, patched=False)
+
+        self.assertIn("VivoCarLyrics;->resolveItemTitle", patched)
+        self.assertIn("VivoCarLyrics;->resolveItemArtist", patched)
+        self.assertIn("iput-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->artistName:Ljava/lang/String;", patched)
         self.assertEqual(patched, patch_module.patch_attributes_text(patched))
 
     def test_playlist_patch_and_verify(self):

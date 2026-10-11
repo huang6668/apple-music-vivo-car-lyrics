@@ -43,6 +43,7 @@ public final class TitleCorrectionState {
         public final boolean pending;
         public final boolean completed;
         public final String correctedTitle;
+        public final String correctedArtist;
         private final TitleCorrectionState owner;
 
         private Snapshot(TitleCorrectionState state) {
@@ -57,6 +58,7 @@ public final class TitleCorrectionState {
             pending = state.pending;
             completed = state.completed;
             correctedTitle = state.correction();
+            correctedArtist = state.correctedArtist();
         }
     }
 
@@ -82,17 +84,36 @@ public final class TitleCorrectionState {
         }
     }
 
-    private static final class CachedTitle {
-        final long generation;
-        final String title;
+    public static final class TrackInfo {
+        public final String title;
+        public final String artist;
 
-        CachedTitle(long generation, String title) {
-            this.generation = generation;
-            this.title = title;
+        public TrackInfo(String title, String artist) {
+            this.title = title == null ? "" : title;
+            this.artist = artist == null ? "" : artist;
+        }
+
+        @Override
+        public String toString() {
+            return title + "\t" + artist;
         }
     }
 
-    private final Map<CacheKey, CachedTitle> cache;
+    private static final class CachedTrack {
+        final long generation;
+        final String title;
+        final String artist;
+
+        CachedTrack(long generation, String title, String artist) {
+            this.generation = generation;
+            this.title = title == null ? "" : title;
+            this.artist = artist == null ? "" : artist;
+        }
+    }
+
+    private final java.util.concurrent.ConcurrentHashMap<String, TrackInfo> fastTrackCache =
+            new java.util.concurrent.ConcurrentHashMap<String, TrackInfo>();
+    private final Map<CacheKey, CachedTrack> cache;
     private Object manager;
     private long generation;
     private String queueId = "";
@@ -113,9 +134,9 @@ public final class TitleCorrectionState {
         if (cacheSize <= 0) {
             throw new IllegalArgumentException("cacheSize must be positive");
         }
-        cache = new LinkedHashMap<CacheKey, CachedTitle>(cacheSize, 0.75f, true) {
+        cache = new LinkedHashMap<CacheKey, CachedTrack>(cacheSize, 0.75f, true) {
             @Override
-            protected boolean removeEldestEntry(Map.Entry<CacheKey, CachedTitle> eldest) {
+            protected boolean removeEldestEntry(Map.Entry<CacheKey, CachedTrack> eldest) {
                 return size() > cacheSize;
             }
         };
@@ -126,6 +147,7 @@ public final class TitleCorrectionState {
         String normalized = text(namespace);
         if (cacheNamespace.equals(normalized)) return false;
         cacheNamespace = normalized;
+        fastTrackCache.clear();
         begin(manager, queueId, catalogId, persistentId, originalTitle);
         return true;
     }
@@ -191,10 +213,11 @@ public final class TitleCorrectionState {
         if (normalizedTitle.isEmpty()) {
             normalizedTitle = null;
         }
-        CachedTitle cached = cache.get(request.cacheKey);
+        CachedTrack cached = cache.get(request.cacheKey);
         if (cached == null || cached.generation <= request.generation) {
-            // Same-name responses retain their value: another play may have a different stock title.
-            cache.put(request.cacheKey, new CachedTitle(request.generation, normalizedTitle));
+            String existingArtist = cached == null ? "" : cached.artist;
+            cache.put(request.cacheKey, new CachedTrack(request.generation, normalizedTitle, existingArtist));
+            fastTrackCache.put(request.catalogId, new TrackInfo(normalizedTitle, existingArtist));
         }
         if (!matchesRequest(request)) {
             return false;
@@ -245,7 +268,7 @@ public final class TitleCorrectionState {
 
     public synchronized boolean acceptsResult(Request request) {
         if (request == null || request.owner != this || request.completed) return false;
-        CachedTitle cached = cache.get(request.cacheKey);
+        CachedTrack cached = cache.get(request.cacheKey);
         return cached == null || cached.generation <= request.generation;
     }
 
@@ -253,7 +276,8 @@ public final class TitleCorrectionState {
     public synchronized boolean restore(Snapshot identity, String title) {
         String normalized = text(title);
         if (!matchesSnapshot(identity) || pending || completed || normalized.isEmpty()) return false;
-        cache.put(new CacheKey(cacheNamespace, catalogId), new CachedTitle(generation, normalized));
+        cache.put(new CacheKey(cacheNamespace, catalogId), new CachedTrack(generation, normalized, ""));
+        fastTrackCache.put(catalogId, new TrackInfo(normalized, ""));
         resolvedTitle = normalized;
         completed = true;
         return true;
@@ -261,31 +285,81 @@ public final class TitleCorrectionState {
 
     public synchronized boolean restoreCached(Snapshot identity) {
         if (!matchesSnapshot(identity) || pending || completed) return false;
-        CachedTitle cached = cache.get(new CacheKey(cacheNamespace, catalogId));
+        CachedTrack cached = cache.get(new CacheKey(cacheNamespace, catalogId));
         if (cached == null) return false;
         resolvedTitle = cached.title;
         completed = true;
         return true;
     }
 
-    public synchronized String getCachedTitle(String candidateCatalogId) {
-        String id = normalizeCatalogId(candidateCatalogId);
-        if (id.isEmpty()) return null;
-        CachedTitle cached = cache.get(new CacheKey(cacheNamespace, id));
-        return cached == null ? null : cached.title;
+    synchronized String correctedArtist() {
+        if (!completed) return null;
+        TrackInfo info = fastTrackCache.get(catalogId);
+        if (info != null && !info.artist.isEmpty()) return info.artist;
+        CachedTrack cached = cache.get(new CacheKey(cacheNamespace, catalogId));
+        return cached == null ? null : (cached.artist.isEmpty() ? null : cached.artist);
     }
 
-    public synchronized void putCachedTitle(String candidateCatalogId, String title) {
+    public String getCachedTitle(String candidateCatalogId) {
+        String id = normalizeCatalogId(candidateCatalogId);
+        if (id.isEmpty()) return null;
+        TrackInfo info = fastTrackCache.get(id);
+        if (info != null && !info.title.isEmpty()) return info.title;
+        synchronized (this) {
+            CachedTrack cached = cache.get(new CacheKey(cacheNamespace, id));
+            return cached == null ? null : (cached.title.isEmpty() ? null : cached.title);
+        }
+    }
+
+    public String getCachedArtist(String candidateCatalogId) {
+        String id = normalizeCatalogId(candidateCatalogId);
+        if (id.isEmpty()) return null;
+        TrackInfo info = fastTrackCache.get(id);
+        if (info != null && !info.artist.isEmpty()) return info.artist;
+        synchronized (this) {
+            CachedTrack cached = cache.get(new CacheKey(cacheNamespace, id));
+            return cached == null ? null : (cached.artist.isEmpty() ? null : cached.artist);
+        }
+    }
+
+    public void putCachedTrack(String candidateCatalogId, String title, String artist) {
         String id = normalizeCatalogId(candidateCatalogId);
         String normalizedTitle = text(title);
-        if (id.isEmpty() || normalizedTitle.isEmpty()) return;
-        cache.put(new CacheKey(cacheNamespace, id), new CachedTitle(generation, normalizedTitle));
+        String normalizedArtist = text(artist);
+        if (id.isEmpty() || (normalizedTitle.isEmpty() && normalizedArtist.isEmpty())) return;
+        fastTrackCache.put(id, new TrackInfo(normalizedTitle, normalizedArtist));
+        synchronized (this) {
+            cache.put(new CacheKey(cacheNamespace, id), new CachedTrack(generation, normalizedTitle, normalizedArtist));
+        }
+    }
+
+    public void putCachedTitle(String candidateCatalogId, String title) {
+        String id = normalizeCatalogId(candidateCatalogId);
+        if (id.isEmpty()) return;
+        String existingArtist = getCachedArtist(id);
+        putCachedTrack(id, title, existingArtist == null ? "" : existingArtist);
     }
 
     public synchronized void putCachedTitles(Map<String, String> titles) {
         if (titles == null || titles.isEmpty()) return;
         for (Map.Entry<String, String> entry : titles.entrySet()) {
             putCachedTitle(entry.getKey(), entry.getValue());
+        }
+    }
+
+    public synchronized void putCachedTracks(Map<String, ?> tracks) {
+        if (tracks == null || tracks.isEmpty()) return;
+        for (Map.Entry<String, ?> entry : tracks.entrySet()) {
+            Object val = entry.getValue();
+            if (val instanceof TrackInfo) {
+                TrackInfo ti = (TrackInfo) val;
+                putCachedTrack(entry.getKey(), ti.title, ti.artist);
+            } else if (val instanceof CatalogTitleResolver.TrackInfo) {
+                CatalogTitleResolver.TrackInfo ti = (CatalogTitleResolver.TrackInfo) val;
+                putCachedTrack(entry.getKey(), ti.title, ti.artist);
+            } else if (val instanceof String) {
+                putCachedTrack(entry.getKey(), (String) val, "");
+            }
         }
     }
 

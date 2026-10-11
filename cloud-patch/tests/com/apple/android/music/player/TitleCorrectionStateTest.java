@@ -519,6 +519,10 @@ public final class TitleCorrectionStateTest {
         state.putCachedTitle("", "Ignore");
         equal(null, state.getCachedTitle(""));
         equal(null, state.getCachedTitle("invalid"));
+
+        state.putCachedTrack("104", "Song 104", "Artist 104");
+        equal("Song 104", state.getCachedTitle("104"));
+        equal("Artist 104", state.getCachedArtist("104"));
     }
 
     private static TitleCorrectionState started(Object manager, String queueId,

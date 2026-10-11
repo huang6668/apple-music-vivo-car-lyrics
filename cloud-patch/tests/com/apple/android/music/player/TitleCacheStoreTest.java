@@ -213,6 +213,15 @@ public final class TitleCacheStoreTest {
             equal("Song 101", fromDisk.get("101"));
             equal("Song 102", fromDisk.get("102"));
 
+            java.util.Map<String, TitleCorrectionState.TrackInfo> trackBatch =
+                    new java.util.HashMap<String, TitleCorrectionState.TrackInfo>();
+            trackBatch.put("201", new TitleCorrectionState.TrackInfo("Song 201", "Artist 201"));
+            check(store.putAllTracks(trackBatch), "batch track put should succeed");
+            TitleCorrectionState.TrackInfo t201 = store.getTrack("201");
+            check(t201 != null, "track 201 found");
+            equal("Song 201", t201.title);
+            equal("Artist 201", t201.artist);
+
             check(!store.putAll(null), "null map rejected");
             check(!store.putAll(java.util.Collections.<String, String>emptyMap()), "empty map rejected");
             check(store.getAll(null).isEmpty(), "null ids return empty map");

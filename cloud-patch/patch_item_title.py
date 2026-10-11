@@ -28,6 +28,21 @@ ATTR_HELPER = (
     "    iput-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->name:Ljava/lang/String;\n"
 )
 
+ARTIST_HELPER = (
+    "    invoke-static {p0, v0}, "
+    "Lcom/apple/android/music/player/VivoCarLyrics;->resolveItemArtist"
+    "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;\n\n"
+    "    move-result-object v0\n"
+)
+
+ATTR_ARTIST_HELPER = (
+    "    invoke-static {p0, v0}, "
+    "Lcom/apple/android/music/player/VivoCarLyrics;->resolveItemArtist"
+    "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;\n\n"
+    "    move-result-object v0\n\n"
+    "    iput-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->artistName:Ljava/lang/String;\n"
+)
+
 PLAYLIST_HOOK = (
     "\n    invoke-static {p0, p1}, "
     "Lcom/apple/android/music/player/VivoCarLyrics;->onPlaylistTrack"
@@ -60,21 +75,31 @@ def patch_text(text: str) -> str:
     assert match, "BaseContentItem getTitle method missing"
 
     header, body, footer = match.groups()
-    if "VivoCarLyrics;->resolveItemTitle" in body:
-        return text  # Already patched
+    if "VivoCarLyrics;->resolveItemTitle" not in body:
+        assert "->name:Ljava/lang/String;" in body, "Expected ->name title field access in getTitle"
+        assert "return-object" in body, "Expected return-object in getTitle"
+        patched_body = (
+            "    .locals 1\n\n"
+            "    iget-object v0, p0, Lcom/apple/android/music/model/BaseContentItem;->name:Ljava/lang/String;\n\n"
+            + HELPER + "\n"
+            "    return-object v0\n"
+        )
+        text = text[:match.start()] + header + patched_body + footer + text[match.end():]
 
-    # The stock method accesses ->name:Ljava/lang/String; and returns it.
-    assert "->name:Ljava/lang/String;" in body, "Expected ->name title field access in getTitle"
-    assert "return-object" in body, "Expected return-object in getTitle"
+    artist_pattern = r"(?ms)(\.method public getArtistName\(\)Ljava/lang/String;\s*\n)(.*?)(\.end method)"
+    artist_match = re.search(artist_pattern, text)
+    if artist_match and "VivoCarLyrics;->resolveItemArtist" not in artist_match.group(2):
+        header_a, body_a, footer_a = artist_match.groups()
+        assert "->artistName:Ljava/lang/String;" in body_a, "Expected ->artistName field access in getArtistName"
+        patched_artist = (
+            "    .locals 1\n\n"
+            "    iget-object v0, p0, Lcom/apple/android/music/model/BaseContentItem;->artistName:Ljava/lang/String;\n\n"
+            + ARTIST_HELPER + "\n"
+            "    return-object v0\n"
+        )
+        text = text[:artist_match.start()] + header_a + patched_artist + footer_a + text[artist_match.end():]
 
-    patched_body = (
-        "    .locals 1\n\n"
-        "    iget-object v0, p0, Lcom/apple/android/music/model/BaseContentItem;->name:Ljava/lang/String;\n\n"
-        + HELPER + "\n"
-        "    return-object v0\n"
-    )
-
-    return text[:match.start()] + header + patched_body + footer + text[match.end():]
+    return text
 
 
 def verify_text(text: str, patched: bool = False):
@@ -84,8 +109,11 @@ def verify_text(text: str, patched: bool = False):
         assert marker in text, "Expected title resolution hook in patched text"
         assert ".locals 1" in text, "Expected .locals 1 in patched getTitle method"
         assert "->name:Ljava/lang/String;" in text, "Expected field access preserved"
+        if "getArtistName" in text:
+            assert "VivoCarLyrics;->resolveItemArtist" in text, "Expected artist resolution hook in patched text"
     else:
         assert marker not in text, "Unexpected title resolution hook in unpatched text"
+        assert "VivoCarLyrics;->resolveItemArtist" not in text
 
 
 def patch_attributes_text(text: str) -> str:
@@ -94,19 +122,31 @@ def patch_attributes_text(text: str) -> str:
     match = re.search(pattern, text)
     assert match, "Attributes getName method missing"
     header, body, footer = match.groups()
-    if "VivoCarLyrics;->resolveItemTitle" in body:
-        return text
+    if "VivoCarLyrics;->resolveItemTitle" not in body:
+        assert "->name:Ljava/lang/String;" in body, "Expected ->name field access in getName"
+        assert "return-object" in body, "Expected return-object in getName"
+        patched_body = (
+            "    .locals 1\n\n"
+            "    iget-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->name:Ljava/lang/String;\n\n"
+            + ATTR_HELPER + "\n"
+            "    return-object v0\n"
+        )
+        text = text[:match.start()] + header + patched_body + footer + text[match.end():]
 
-    assert "->name:Ljava/lang/String;" in body, "Expected ->name field access in getName"
-    assert "return-object" in body, "Expected return-object in getName"
+    artist_pattern = r"(?ms)(\.method public final getArtistName\(\)Ljava/lang/String;\s*\n)(.*?)(\.end method)"
+    artist_match = re.search(artist_pattern, text)
+    if artist_match and "VivoCarLyrics;->resolveItemArtist" not in artist_match.group(2):
+        header_a, body_a, footer_a = artist_match.groups()
+        assert "->artistName:Ljava/lang/String;" in body_a, "Expected ->artistName field access in getArtistName"
+        patched_artist = (
+            "    .locals 1\n\n"
+            "    iget-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->artistName:Ljava/lang/String;\n\n"
+            + ATTR_ARTIST_HELPER + "\n"
+            "    return-object v0\n"
+        )
+        text = text[:artist_match.start()] + header_a + patched_artist + footer_a + text[artist_match.end():]
 
-    patched_body = (
-        "    .locals 1\n\n"
-        "    iget-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->name:Ljava/lang/String;\n\n"
-        + ATTR_HELPER + "\n"
-        "    return-object v0\n"
-    )
-    return text[:match.start()] + header + patched_body + footer + text[match.end():]
+    return text
 
 
 def verify_attributes_text(text: str, patched: bool = False):
@@ -115,8 +155,12 @@ def verify_attributes_text(text: str, patched: bool = False):
     if patched:
         assert marker in text, "Expected title resolution hook in patched Attributes"
         assert "iput-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->name:Ljava/lang/String;" in text
+        if "getArtistName" in text:
+            assert "VivoCarLyrics;->resolveItemArtist" in text, "Expected artist hook in patched Attributes"
+            assert "iput-object v0, p0, Lcom/apple/android/music/mediaapi/models/internals/Attributes;->artistName:Ljava/lang/String;" in text
     else:
         assert marker not in text, "Unexpected title resolution hook in unpatched Attributes"
+        assert "VivoCarLyrics;->resolveItemArtist" not in text
 
 
 def patch_playlist_text(text: str) -> str:
