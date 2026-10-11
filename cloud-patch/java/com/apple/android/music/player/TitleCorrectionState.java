@@ -106,7 +106,7 @@ public final class TitleCorrectionState {
 
         CachedTrack(long generation, String title, String artist) {
             this.generation = generation;
-            this.title = title == null ? "" : title;
+            this.title = title;
             this.artist = artist == null ? "" : artist;
         }
     }
@@ -215,9 +215,13 @@ public final class TitleCorrectionState {
         }
         CachedTrack cached = cache.get(request.cacheKey);
         if (cached == null || cached.generation <= request.generation) {
-            String existingArtist = cached == null ? "" : cached.artist;
+            String existingArtist = cached == null ? "" : (cached.artist == null ? "" : cached.artist);
             cache.put(request.cacheKey, new CachedTrack(request.generation, normalizedTitle, existingArtist));
-            fastTrackCache.put(request.catalogId, new TrackInfo(normalizedTitle, existingArtist));
+            if (normalizedTitle != null) {
+                fastTrackCache.put(request.catalogId, new TrackInfo(normalizedTitle, existingArtist));
+            } else {
+                fastTrackCache.remove(request.catalogId);
+            }
         }
         if (!matchesRequest(request)) {
             return false;
@@ -307,7 +311,7 @@ public final class TitleCorrectionState {
         if (info != null && !info.title.isEmpty()) return info.title;
         synchronized (this) {
             CachedTrack cached = cache.get(new CacheKey(cacheNamespace, id));
-            return cached == null ? null : (cached.title.isEmpty() ? null : cached.title);
+            return cached == null ? null : cached.title;
         }
     }
 
@@ -318,7 +322,7 @@ public final class TitleCorrectionState {
         if (info != null && !info.artist.isEmpty()) return info.artist;
         synchronized (this) {
             CachedTrack cached = cache.get(new CacheKey(cacheNamespace, id));
-            return cached == null ? null : (cached.artist.isEmpty() ? null : cached.artist);
+            return cached == null || cached.artist == null || cached.artist.isEmpty() ? null : cached.artist;
         }
     }
 
