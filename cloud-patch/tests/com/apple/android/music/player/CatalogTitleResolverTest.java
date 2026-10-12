@@ -30,7 +30,10 @@ public final class CatalogTitleResolverTest {
         final String type;
         final Attributes attributes;
         Entity(String id, String type, String name) {
-            this.id = id; this.type = type; attributes = new Attributes(name);
+            this(id, type, name, "");
+        }
+        Entity(String id, String type, String name, String artist) {
+            this.id = id; this.type = type; attributes = new Attributes(name, artist);
         }
         public String getId() { return id; }
         public String getType() { return type; }
@@ -39,8 +42,48 @@ public final class CatalogTitleResolverTest {
 
     public static final class Attributes {
         final String name;
-        Attributes(String name) { this.name = name; }
+        final String artistName;
+        Attributes(String name, String artist) { this.name = name; this.artistName = artist; }
         public String getName() { return name; }
+        public String getArtistName() { return artistName; }
+    }
+
+    public static final class RawEntity {
+        final String id;
+        final Object attributes;
+        RawEntity(String id, Object attributes) { this.id = id; this.attributes = attributes; }
+        public String getId() { return id; }
+        public String getType() { return "songs"; }
+        public Object getAttributes() { return attributes; }
+    }
+
+    public static final class HookLikeAttributes {
+        private String name;
+        private String artistName;
+        private final String isrc;
+        int displayGetterCalls;
+        HookLikeAttributes(String name, String artist, String isrc) {
+            this.name = name;
+            artistName = artist;
+            this.isrc = isrc;
+        }
+        public String getName() {
+            displayGetterCalls++;
+            name = "Stale cached title";
+            return name;
+        }
+        public String getArtistName() {
+            displayGetterCalls++;
+            artistName = "Stale cached artist";
+            return artistName;
+        }
+        public String getIsrc() { return isrc; }
+    }
+
+    public static final class GetterOnlyAttributes {
+        int displayGetterCalls;
+        public String getName() { displayGetterCalls++; return "Unsafe cached title"; }
+        public String getArtistName() { displayGetterCalls++; return "Unsafe cached artist"; }
     }
 
     public static final class Catalog {
@@ -97,16 +140,38 @@ public final class CatalogTitleResolverTest {
         public void onError(Throwable value) { calls++; error = value; }
     }
 
+    static final class TrackRecorder implements CatalogTitleResolver.TrackCallback {
+        int calls;
+        CatalogTitleResolver.TrackInfo track;
+        Throwable error;
+        public void onTrack(CatalogTitleResolver.TrackInfo value) { calls++; track = value; }
+        public void onError(Throwable value) { calls++; error = value; }
+    }
+
+    static final class BatchTrackRecorder implements CatalogTitleResolver.BatchTrackCallback {
+        int calls;
+        Map<String, CatalogTitleResolver.TrackInfo> tracks;
+        Throwable error;
+        public void onTracks(Map<String, CatalogTitleResolver.TrackInfo> value) { calls++; tracks = value; }
+        public void onError(Throwable value) { calls++; error = value; }
+    }
+
     public static void main(String[] args) throws Exception {
         testRequest();
         testSchema();
+        testTrackSchema();
+        testCatalogMetadataBypassesDisplayGetters();
         testSyncAndSuspend();
+        testTrackSyncAndSuspend();
         testErrorEnvelopes();
         testFailuresAndDuplicates();
         testFinalRequestIsolation();
         testMissingLocalizationFailsClosed();
         testIsrcFallback();
+        testTrackIsrcFallback();
+        testTrackLocalizationFailsClosed();
         testSharedDeadline();
+        testTrackLateArtist();
         check(CatalogTitleResolver.emptyContext(fi.e.class) == fi.f.a,
                 "obfuscated empty context singleton");
         try {
@@ -132,6 +197,7 @@ public final class CatalogTitleResolverTest {
         final java.util.List<Map<?, ?>> calls = new java.util.ArrayList<Map<?, ?>>();
         Continuation pending;
         boolean suspended;
+        int omitHookAt = -1;
         ScriptedCatalog(Object... responses) { this.responses = responses; }
         public Object F(String path, Map<?, ?> parameters, Continuation continuation) {
             equal("songs", path);
@@ -143,11 +209,13 @@ public final class CatalogTitleResolverTest {
                     fresh.put((String) entry.getKey(), entry.getValue());
                 }
                 fresh.put("l", "en-US");
-                equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
-                        "/v1/catalog/us/songs", new LinkedHashMap<String, String>(), fresh));
-                equal("zh-CN", fresh.get("l"));
-                check(!fresh.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
-                        "internal token stays off network");
+                if (step != omitHookAt) {
+                    equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
+                            "/v1/catalog/us/songs", new LinkedHashMap<String, String>(), fresh));
+                    equal("zh-CN", fresh.get("l"));
+                    check(!fresh.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                            "internal token stays off network");
+                }
             } else {
                 equal("123", parameters.get("ids"));
                 equal(null, parameters.get("l"));
@@ -251,6 +319,114 @@ public final class CatalogTitleResolverTest {
         async.pending.resumeWith(regional);
         equal(1, result.calls);
         equal("Mainland result", result.title);
+    }
+
+    private static void testTrackIsrcFallback() {
+        String isrc = "TWABC1200001";
+        Object identity = map("data", Arrays.asList(map(
+                "id", "123", "type", "songs",
+                "attributes", map("name", "Account title", "artistName", "Account artist",
+                        "isrc", isrc))));
+        Object regional = map("data", Arrays.asList(map(
+                "id", "987", "type", "songs",
+                "attributes", map("name", "  \u7a3b\u9999  ",
+                        "artistName", "  \u5468\u6770\u502b  ", "isrc", isrc))));
+        for (boolean suspended : new boolean[]{false, true}) {
+            ScriptedCatalog catalog = new ScriptedCatalog(new Response(), identity, regional);
+            catalog.suspended = suspended;
+            TrackRecorder result = new TrackRecorder();
+            check(CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result),
+                    "track ISRC chain dispatch");
+            if (suspended) {
+                Continuation initial = catalog.pending;
+                initial.resumeWith(new Response());
+                initial.resumeWith(regional);
+                equal(0, result.calls);
+                Continuation account = catalog.pending;
+                account.resumeWith(identity);
+                account.resumeWith(identity);
+                equal(0, result.calls);
+                catalog.pending.resumeWith(regional);
+                catalog.pending.resumeWith(regional);
+            }
+            equal(3, catalog.calls.size());
+            equal(1, result.calls);
+            equal(null, result.error);
+            trackEquals("\u7a3b\u9999", "\u5468\u6770\u4f26", result.track);
+            check(!catalog.calls.get(1).containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
+                    "identity metadata remains account scoped, never the track result");
+            equal(isrc, catalog.calls.get(2).get("filter[isrc]"));
+        }
+        for (Object invalidRegional : new Object[]{
+                map("data", Arrays.asList(map("id", "987", "type", "songs",
+                        "attributes", map("name", "Wrong recording", "artistName", "Wrong artist",
+                                "isrc", "JPABC1200001")))),
+                map("data", Arrays.asList(
+                        map("id", "987", "type", "songs",
+                                "attributes", map("name", "One", "artistName", "Artist one",
+                                        "isrc", isrc)),
+                        map("id", "988", "type", "songs",
+                                "attributes", map("name", "One", "artistName", "Artist two",
+                                        "isrc", isrc))))}) {
+            ScriptedCatalog catalog = new ScriptedCatalog(new Response(), identity, invalidRegional);
+            TrackRecorder result = new TrackRecorder();
+            CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result);
+            equal(1, result.calls);
+            equal(null, result.track);
+            equal(null, result.error);
+        }
+    }
+
+    private static void testTrackLocalizationFailsClosed() {
+        Catalog catalog = new Catalog();
+        catalog.result = new Response(new Entity("123", "songs", "Account title", "Account artist"));
+        catalog.omitHook = true;
+        TrackRecorder result = new TrackRecorder();
+        queryTrack(catalog, result);
+        equal(1, result.calls);
+        equal(null, result.track);
+        check(result.error instanceof IllegalStateException, "unlocalized track rejected");
+
+        String isrc = "TWABC1200001";
+        Object identity = map("data", Arrays.asList(map("id", "123", "type", "songs",
+                "attributes", map("name", "Account title", "artistName", "Account artist",
+                        "isrc", isrc))));
+        Object regional = map("data", Arrays.asList(map("id", "987", "type", "songs",
+                "attributes", map("name", "Regional title", "artistName", "Regional artist",
+                        "isrc", isrc))));
+        ScriptedCatalog fallback = new ScriptedCatalog(new Response(), identity, regional);
+        fallback.omitHookAt = 2;
+        result = new TrackRecorder();
+        CatalogTitleResolver.queryTrack(fallback, "123", "zh-CN", "F", result);
+        equal(3, fallback.calls.size());
+        equal(1, result.calls);
+        equal(null, result.track);
+        check(result.error instanceof IllegalStateException, "unlocalized ISRC artist rejected");
+    }
+
+    private static void testTrackLateArtist() throws Exception {
+        String isrc = "TWABC1200001";
+        Object identity = map("data", Arrays.asList(map("id", "123", "type", "songs",
+                "attributes", map("name", "Account title", "artistName", "Account artist",
+                        "isrc", isrc))));
+        Object regional = map("data", Arrays.asList(map("id", "987", "type", "songs",
+                "attributes", map("name", "Late title", "artistName", "Late artist", "isrc", isrc))));
+        for (int stage = 0; stage < 3; stage++) {
+            ScriptedCatalog catalog = new ScriptedCatalog();
+            catalog.suspended = true;
+            TrackRecorder result = new TrackRecorder();
+            CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result);
+            Object chain = chainFor(catalog.calls.get(0));
+            if (stage > 0) catalog.pending.resumeWith(new Response());
+            if (stage > 1) catalog.pending.resumeWith(identity);
+            expire(chain);
+            catalog.pending.resumeWith(stage == 0 ? regional : stage == 1 ? identity : regional);
+            catalog.pending.resumeWith(regional);
+            equal(stage + 1, catalog.calls.size());
+            equal(1, result.calls);
+            equal(null, result.track);
+            check(result.error instanceof IllegalStateException, "late artist cannot settle expired chain");
+        }
     }
 
     @SuppressWarnings("rawtypes")
@@ -553,6 +729,77 @@ public final class CatalogTitleResolverTest {
         equal(null, parse(map("data", Arrays.asList(entity))));
     }
 
+    private static void testTrackSchema() {
+        Entity wanted = new Entity("00123", "songs", "  \u7a3b\u9999  ", "  \u5468\u6770\u502b  ");
+        CatalogTitleResolver.TrackInfo track = CatalogTitleResolver.extractTrack(new Response(
+                new Entity("555", "songs", "Wrong title", "Wrong artist"),
+                new Entity("123", "albums", "Album", "Album artist"), wanted), "123");
+        trackEquals("\u7a3b\u9999", "\u5468\u6770\u4f26", track);
+        equal(null, CatalogTitleResolver.extractTrack(new Response(wanted, wanted), "123"));
+        equal(null, CatalogTitleResolver.extractTrack(new Response(
+                new Entity("123", "songs", " ", "Artist only")), "123"));
+        equal(null, CatalogTitleResolver.extractTrack(new Response(
+                new Entity("555", "songs", "Wrong title", "Wrong artist")), "123"));
+        equal(null, CatalogTitleResolver.extractTrack(new Response(wanted), "i.123"));
+        equal(null, CatalogTitleResolver.extractTrack(null, "123"));
+        trackEquals("Without artist", "", CatalogTitleResolver.extractTrack(new Response(
+                new Entity("123", "songs", "Without artist", null)), "123"));
+        Object mapped = map("data", Arrays.asList(map("id", "123", "type", "songs",
+                "attributes", map("name", "Mapped title", "artistName", "Mapped artist"))));
+        trackEquals("Mapped title", "Mapped artist", CatalogTitleResolver.extractTrack(mapped, "123"));
+        Object invalidArtist = map("data", Arrays.asList(map("id", "123", "type", "songs",
+                "attributes", map("name", "Mapped title", "artistName", new Object()))));
+        trackEquals("Mapped title", "", CatalogTitleResolver.extractTrack(invalidArtist, "123"));
+    }
+
+    private static void testCatalogMetadataBypassesDisplayGetters() {
+        String isrc = "TWABC1200001";
+        HookLikeAttributes direct = new HookLikeAttributes(
+                "\u7a3b\u9999", "\u5468\u6770\u502b", isrc);
+        Catalog catalog = new Catalog();
+        catalog.result = new Response(new RawEntity("123", direct));
+        TrackRecorder result = new TrackRecorder();
+        check(queryTrack(catalog, result), "raw single-track metadata dispatch");
+        equal(1, result.calls);
+        equal(null, result.error);
+        trackEquals("\u7a3b\u9999", "\u5468\u6770\u4f26", result.track);
+        equal(0, direct.displayGetterCalls);
+        equal("\u7a3b\u9999", direct.name);
+        equal("\u5468\u6770\u502b", direct.artistName);
+
+        BatchTrackRecorder batch = new BatchTrackRecorder();
+        check(CatalogTitleResolver.batchQueryTracks(catalog, Arrays.asList("123"),
+                "zh-CN", "F", batch), "raw batch metadata dispatch");
+        equal(1, batch.calls);
+        equal(null, batch.error);
+        trackEquals("\u7a3b\u9999", "\u5468\u6770\u4f26", batch.tracks.get("123"));
+        equal(0, direct.displayGetterCalls);
+
+        Object identity = map("data", Arrays.asList(map("id", "123", "type", "songs",
+                "attributes", map("name", "Account title", "artistName", "Account artist",
+                        "isrc", isrc))));
+        HookLikeAttributes regional = new HookLikeAttributes(
+                "\u7a3b\u9999", "\u5468\u6770\u502b", isrc);
+        ScriptedCatalog fallback = new ScriptedCatalog(new Response(), identity,
+                new Response(new RawEntity("987", regional)));
+        result = new TrackRecorder();
+        check(CatalogTitleResolver.queryTrack(fallback, "123", "zh-CN", "F", result),
+                "raw ISRC metadata dispatch");
+        equal(3, fallback.calls.size());
+        equal(1, result.calls);
+        equal(null, result.error);
+        trackEquals("\u7a3b\u9999", "\u5468\u6770\u4f26", result.track);
+        equal(0, regional.displayGetterCalls);
+        equal("\u7a3b\u9999", regional.name);
+        equal("\u5468\u6770\u502b", regional.artistName);
+
+        GetterOnlyAttributes unavailable = new GetterOnlyAttributes();
+        Object unsafe = new Response(new RawEntity("123", unavailable));
+        equal(null, CatalogTitleResolver.extractTrack(unsafe, "123"));
+        equal(0, CatalogTitleResolver.extractTracks(unsafe).size());
+        equal(0, unavailable.displayGetterCalls);
+    }
+
     private static void testSyncAndSuspend() {
         Catalog catalog = new Catalog();
         Recorder result = new Recorder();
@@ -576,6 +823,51 @@ public final class CatalogTitleResolverTest {
         check(query(catalog, result), "empty sync result");
         equal(1, result.calls);
         equal(null, result.title);
+    }
+
+    private static void testTrackSyncAndSuspend() {
+        Catalog catalog = new Catalog();
+        catalog.result = new Response(new Entity("123", "songs", "Sync title", "Sync artist"));
+        TrackRecorder result = new TrackRecorder();
+        check(queryTrack(catalog, result), "synchronous track dispatch");
+        equal(1, result.calls);
+        equal(null, result.error);
+        trackEquals("Sync title", "Sync artist", result.track);
+        catalog.pending.resumeWith(new Response(new Entity("123", "songs", "Late title", "Late artist")));
+        equal(1, result.calls);
+        trackEquals("Sync title", "Sync artist", result.track);
+
+        catalog = new Catalog();
+        catalog.result = Suspended.COROUTINE_SUSPENDED;
+        result = new TrackRecorder();
+        check(queryTrack(catalog, result), "suspended track dispatch");
+        equal(0, result.calls);
+        catalog.pending.resumeWith(new Response(new Entity("123", "songs", "Resumed title", "Resumed artist")));
+        catalog.pending.resumeWith(new Response(new Entity("123", "songs", "Duplicate", "Wrong artist")));
+        equal(1, result.calls);
+        trackEquals("Resumed title", "Resumed artist", result.track);
+
+        RuntimeException failure = new RuntimeException("host track failed");
+        for (Object value : new Object[]{failure, new kotlin.Result.Failure(failure), new bi.q.a(failure)}) {
+            catalog = new Catalog();
+            catalog.result = Suspended.COROUTINE_SUSPENDED;
+            result = new TrackRecorder();
+            queryTrack(catalog, result);
+            catalog.pending.resumeWith(value);
+            catalog.pending.resumeWith(new Response(new Entity("123", "songs", "Late title", "Late artist")));
+            equal(1, result.calls);
+            equal(null, result.track);
+            check(result.error == failure, "track failure rejects later artist");
+        }
+        catalog = new Catalog();
+        catalog.early = new Response(new Entity("123", "songs", "Early title", "Early artist"));
+        catalog.thrown = failure;
+        result = new TrackRecorder();
+        queryTrack(catalog, result);
+        equal(1, result.calls);
+        trackEquals("Early title", "Early artist", result.track);
+        check(!CatalogTitleResolver.queryTrack(new Object(), "123", "zh-CN", "F", null),
+                "null track callback declines dispatch");
     }
 
     private static void testFailuresAndDuplicates() {
@@ -642,6 +934,14 @@ public final class CatalogTitleResolverTest {
 
     private static boolean query(Catalog catalog, Recorder result) {
         return CatalogTitleResolver.query(catalog, "123", "zh-Hans-CN", "F", result);
+    }
+    private static boolean queryTrack(Catalog catalog, TrackRecorder result) {
+        return CatalogTitleResolver.queryTrack(catalog, "123", "zh-Hans-CN", "F", result);
+    }
+    private static void trackEquals(String title, String artist, CatalogTitleResolver.TrackInfo track) {
+        check(track != null, "track result exists");
+        equal(title, track.title);
+        equal(artist, track.artist);
     }
     private static String parse(Object response) {
         return CatalogTitleResolver.extractTitle(response, "123");

@@ -26,7 +26,391 @@ public final class TitleCorrectionStateTest {
         testInvalidCacheSize();
         testPersistentRestoreGuards();
         testDirectCacheAccess();
+        testTrackCompletionIdentity();
+        testLateArtistResults();
+        testLegacyTrackBackfill();
+        testTrackRestoreGuards();
+        testTrackCacheBoundsAndNamespace();
+        testPrefetchRefreshPreservesRequest();
+        testCacheRequestOrdering();
+        testCacheDiskRestoreBarrier();
+        testCacheTicketNamespaceAndTargets();
+        testCacheTicketEvictionAndNegativeHits();
         System.out.println("TitleCorrectionState tests passed");
+    }
+
+    private static void testTrackCompletionIdentity() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock title");
+        CharSequence stock = new StringBuilder("Stock artist");
+        check(state.currentArtist(manager, "1", "10", stock) == stock,
+                "unresolved artist preserves the original object");
+        TitleCorrectionState.Snapshot before = state.snapshot();
+        check(state.completeTrack(state.request(), " Mainland title ", " Mainland artist "),
+                "current full track accepted");
+        equal("Mainland title", state.correctedTitle(manager, "1", "10"));
+        equal("Mainland artist", state.currentArtist(manager, "001", "0010", stock));
+        equal("Mainland artist", state.snapshot().correctedArtist);
+        check(state.snapshot().artistResolved, "full query records artist resolution");
+        equal(null, before.correctedArtist);
+        check(!before.artistResolved, "old snapshot remains immutable");
+        check(state.currentArtist(new Object(), "1", "10", stock) == stock,
+                "another manager cannot receive the correction");
+        check(state.currentArtist(manager, "2", "10", stock) == stock,
+                "another queue cannot receive the correction");
+        check(state.currentArtist(manager, "1", "20", stock) == stock,
+                "another catalog item cannot receive the correction");
+        CharSequence same = new StringBuilder("Mainland artist");
+        check(state.currentArtist(manager, "1", "10", same) == same,
+                "same artist preserves the original CharSequence");
+        equal("Mainland artist", state.currentArtist(manager, "1", "10", null));
+        state.begin(manager, "2", "10", "", "Stock title");
+        check(state.request() == null, "full cached track avoids another query");
+        equal("Mainland artist", state.currentArtist(manager, "2", "10", stock));
+    }
+
+    private static void testLateArtistResults() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Original");
+        TitleCorrectionState.Request old = state.request();
+        state.begin(manager, "2", "10", "", "Same catalog, new play");
+        TitleCorrectionState.Request current = state.request();
+        check(state.completeTrack(current, "New title", "New artist"), "new track result");
+        check(!state.acceptsResult(old), "late older result cannot be persisted over newer artist");
+        check(!state.completeTrack(old, "Old title", "Old artist"), "old generation cannot apply");
+        equal("New artist", state.snapshot().correctedArtist);
+        equal("New artist", state.getCachedArtist("10"));
+        state.begin(manager, "3", "10", "", "Replay");
+        check(state.request() == null, "newest full track remains cached");
+        equal("New artist", state.snapshot().correctedArtist);
+
+        state.begin(manager, "4", "20", "", "Another song");
+        old = state.request();
+        state.begin(manager, "5", "30", "", "Current song");
+        current = state.request();
+        check(!state.completeTrack(old, "Late title", "Late artist"),
+                "other catalog late result only warms its own cache");
+        equal(null, state.snapshot().correctedArtist);
+        check(state.completeTrack(current, "Current title", "Current artist"), "current succeeds");
+        equal("Late artist", state.getCachedArtist("20"));
+        equal("Current artist", state.snapshot().correctedArtist);
+        check(!state.completeTrack(old, "Duplicate", "Duplicate"), "duplicate callback ignored");
+
+        state.begin(manager, "6", "40", "", "Timeout");
+        TitleCorrectionState.Request timedOut = state.request();
+        check(state.fail(timedOut), "timeout settles its generation");
+        check(!state.completeTrack(timedOut, "Too late", "Too late"),
+                "timeout result cannot poison title or artist cache");
+        equal(null, state.getCachedTrack("40"));
+    }
+
+    private static void testLegacyTrackBackfill() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock title");
+        check(state.restoreTrack(state.snapshot(),
+                new TitleCorrectionState.TrackInfo("Cached title", "", false)), "partial disk hit");
+        equal("Cached title", state.correctedTitle(manager, "1", "10"));
+        check(!state.snapshot().completed && !state.snapshot().artistResolved,
+                "legacy disk hit displays the title without declaring the artist complete");
+        TitleCorrectionState.Request request = state.request();
+        check(request != null && state.snapshot().pending, "partial track queries the artist");
+        check(state.request() == null, "partial track has only one active query");
+        equal("Cached title", state.correctedTitle(manager, "1", "10"));
+        check(state.completeTrack(request, "Resolved title", "Resolved artist"), "backfill succeeds");
+        equal("Resolved artist", state.snapshot().correctedArtist);
+        state.begin(manager, "2", "10", "", "Replay");
+        check(state.request() == null, "backfilled track does not requery on replay");
+        equal("Resolved artist", state.snapshot().correctedArtist);
+
+        state.begin(manager, "3", "20", "", "Unknown artist");
+        request = state.request();
+        check(state.completeTrack(request, "Resolved without artist", ""),
+                "successful response may have no artist");
+        check(state.getCachedTrack("20").artistResolved, "empty artist is still resolved");
+        state.begin(manager, "4", "20", "", "Replay without artist");
+        check(state.request() == null, "missing artist in a new success does not loop");
+        equal(null, state.snapshot().correctedArtist);
+
+        state.putCachedTitle("30", "Old batch title");
+        check(!state.getCachedTrack("30").artistResolved, "legacy title batch remains partial");
+        state.begin(manager, "5", "30", "", "Stock title");
+        request = state.request();
+        check(request != null, "legacy memory hit also triggers one artist backfill");
+        equal("Old batch title", state.snapshot().correctedTitle);
+        check(state.fail(request), "failed backfill settles the current generation");
+        equal("Old batch title", state.snapshot().correctedTitle);
+        check(state.request() == null, "failed backfill does not repeat in the same generation");
+        state.begin(manager, "6", "30", "", "Stock title");
+        check(state.request() != null, "transient backfill failure may retry on a later play");
+    }
+
+    private static void testTrackRestoreGuards() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        TitleCorrectionState.TrackInfo track =
+                new TitleCorrectionState.TrackInfo("Disk title", "Disk artist");
+        TitleCorrectionState.Snapshot stale = state.snapshot();
+        state.begin(manager, "1", "10", "", "Another generation");
+        check(!state.restoreTrack(stale, track), "same catalog old disk generation rejected");
+        TitleCorrectionState.Snapshot current = state.snapshot();
+        TitleCorrectionState.Request request = state.request();
+        check(!state.restoreTrack(current, track), "disk cannot overtake current network result");
+        check(state.completeTrack(request, "Network title", "Network artist"), "network accepted");
+        check(!state.restoreTrack(current, track), "completed track cannot be replaced by disk");
+
+        state.begin(manager, "2", "20", "", "Other");
+        state.putCachedTrack("20", "Prefetch title", "Prefetch artist");
+        check(state.restoreTrack(state.snapshot(),
+                new TitleCorrectionState.TrackInfo("Old disk title", "", false)),
+                "existing complete memory result wins over partial disk");
+        equal("Prefetch title", state.snapshot().correctedTitle);
+        equal("Prefetch artist", state.snapshot().correctedArtist);
+        check(state.request() == null, "partial disk cannot downgrade a complete cache hit");
+        state.putCachedTitle("20", "Updated legacy title");
+        check(state.getCachedTrack("20").artistResolved,
+                "legacy title refresh cannot downgrade artist completion");
+        equal("Prefetch artist", state.getCachedArtist("20"));
+        state.begin(manager, "3", "20", "", "Replay");
+        check(state.restoreTrack(state.snapshot(),
+                new TitleCorrectionState.TrackInfo("Old full disk title", "Old full disk artist")),
+                "existing complete memory result also wins over complete disk restoration");
+        equal("Prefetch title", state.snapshot().correctedTitle);
+        equal("Prefetch artist", state.snapshot().correctedArtist);
+    }
+
+    private static void testTrackCacheBoundsAndNamespace() {
+        TitleCorrectionState state = new TitleCorrectionState(2);
+        state.putCachedTrack("10", "Ten", "Artist ten");
+        state.putCachedTrack("20", "Twenty", "Artist twenty");
+        state.putCachedTrack("30", "Thirty", "Artist thirty");
+        equal(null, state.getCachedTitle("10"));
+        equal(null, state.getCachedArtist("10"));
+        equal(null, state.getCachedTrack("10"));
+        equal("Artist twenty", state.getCachedArtist("20"));
+
+        Object manager = new Object();
+        state = started(manager, "1", "10", "Stock");
+        state.setCacheNamespace("en");
+        TitleCorrectionState.Request english = state.request();
+        state.setCacheNamespace("cn");
+        TitleCorrectionState.Request chinese = state.request();
+        check(!state.completeTrack(english, "English", "English artist"),
+                "late other-namespace track cannot apply");
+        equal(null, state.getCachedArtist("10"));
+        state.completeTrack(chinese, "Chinese", "Chinese artist");
+        equal("Chinese artist", state.getCachedArtist("10"));
+        equal("Chinese artist", state.snapshot().correctedArtist);
+        state.setCacheNamespace("en");
+        equal("English artist", state.getCachedArtist("10"));
+        check(state.request() == null, "complete result retained within its namespace");
+        equal("English artist", state.snapshot().correctedArtist);
+        state.setCacheNamespace("cn");
+        equal("Chinese artist", state.getCachedArtist("10"));
+
+        state.begin(manager, "2", "20", "", "Missing");
+        state.completeTrack(state.request(), "", "");
+        TitleCorrectionState.TrackInfo negative = state.getCachedTrack("20");
+        check(negative != null && negative.artistResolved, "negative cache is a complete track hit");
+        equal("", negative.title);
+        equal("", negative.artist);
+        state.begin(manager, "3", "20", "", "Missing replay");
+        check(state.request() == null && state.snapshot().completed,
+                "negative track replay does not start another request");
+    }
+
+    private static void testPrefetchRefreshPreservesRequest() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        check(state.restore(state.snapshot(), "Legacy settled title"), "legacy title-only API settles");
+        TitleCorrectionState.Snapshot settled = state.snapshot();
+        state.putCachedTrack("10", "Prefetched title", "Prefetched artist");
+        check(state.refreshCachedTrack(settled), "prefetch enriches an already-settled legacy title");
+        equal("Prefetched artist", state.snapshot().correctedArtist);
+        check(state.snapshot().completed && !state.snapshot().pending, "settled status preserved");
+
+        state.begin(manager, "2", "20", "", "Stock");
+        TitleCorrectionState.Request request = state.request();
+        TitleCorrectionState.Snapshot pending = state.snapshot();
+        state.putCachedTrack("20", "", "Artist-only prefetch");
+        check(state.refreshCachedTrack(pending), "prefetch can enrich an active single-track query");
+        equal("Artist-only prefetch", state.snapshot().correctedArtist);
+        check(state.snapshot().pending && !state.snapshot().completed,
+                "prefetch does not consume or settle the active request");
+        check(!state.acceptsResult(request), "newer full prefetch protects persistence from the older query");
+        check(state.completeTrack(request, "Network title", "Network artist"),
+                "same-generation network callback can still settle its active request");
+        equal("Artist-only prefetch", state.snapshot().correctedArtist);
+
+        state.begin(manager, "2", "20", "", "Another generation");
+        check(!state.refreshCachedTrack(pending), "old same-ID snapshot cannot refresh the new play");
+        pending = state.snapshot();
+        state.setCacheNamespace("Other");
+        check(!state.refreshCachedTrack(pending), "other namespace cannot refresh the active track");
+
+        state = new TitleCorrectionState(1);
+        state.begin(manager, "1", "10", "", "Stock");
+        TitleCorrectionState.Request old = state.request();
+        state.begin(manager, "2", "10", "", "New play");
+        request = state.request();
+        state.completeTrack(request, "Current title", "Current artist");
+        settled = state.snapshot();
+        state.putCachedTrack("20", "Evict title", "Evict artist");
+        check(!state.acceptsResult(old), "old callback stays rejected even after cache eviction");
+        check(!state.completeTrack(old, "Old title", "Old artist"),
+                "eviction does not let an old result replace the current resolved track");
+        equal(null, state.getCachedTrack("10"));
+        equal("Current artist", state.snapshot().correctedArtist);
+        state.putCachedTrack("10", new TitleCorrectionState.TrackInfo("Partial title", "", false));
+        check(!state.refreshCachedTrack(settled), "partial cache cannot downgrade the current full track");
+        equal("Current title", state.snapshot().correctedTitle);
+        equal("Current artist", state.snapshot().correctedArtist);
+    }
+
+    private static void testCacheRequestOrdering() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        TitleCorrectionState.CacheRequest oldBatch = state.beginCacheRequest(
+                java.util.Collections.singletonList("10"));
+        TitleCorrectionState.Request newerSingle = state.request();
+        check(state.completeTrack(newerSingle, "New single title", "New single artist"),
+                "newer single request completes");
+        check(state.putCachedTracks(oldBatch, trackMap("10", "Old batch title", "Old batch artist")).isEmpty(),
+                "late batch cannot overwrite a newer-started single request");
+        equal("New single artist", state.getCachedArtist("10"));
+        equal("New single artist", state.snapshot().correctedArtist);
+
+        TitleCorrectionState.CacheRequest first = state.beginCacheRequest(
+                java.util.Collections.singletonList("10"));
+        TitleCorrectionState.CacheRequest second = state.beginCacheRequest(
+                java.util.Collections.singletonList("10"));
+        equal(1, state.putCachedTracks(first, trackMap("10", "First title", "First artist")).size());
+        equal(1, state.putCachedTracks(second, trackMap("10", "Second title", "Second artist")).size());
+        check(state.refreshCachedTrack(state.snapshot()), "newer same-generation batch refreshes the UI");
+        equal("Second artist", state.snapshot().correctedArtist);
+
+        first = state.beginCacheRequest(java.util.Collections.singletonList("10"));
+        second = state.beginCacheRequest(java.util.Collections.singletonList("10"));
+        equal(1, state.putCachedTracks(second, trackMap("10", "Latest title", "Latest artist")).size());
+        check(state.putCachedTracks(first, trackMap("10", "Out-of-order title", "Out-of-order artist")).isEmpty(),
+                "out-of-order batch callbacks follow request starts, not response arrival");
+        equal("Latest artist", state.getCachedArtist("10"));
+
+        state.begin(manager, "2", "20", "", "Stock");
+        TitleCorrectionState.Request olderSingle = state.request();
+        TitleCorrectionState.CacheRequest newerBatch = state.beginCacheRequest(
+                java.util.Collections.singletonList("20"));
+        equal(1, state.putCachedTracks(newerBatch, trackMap("20", "Prefetch title", "Prefetch artist")).size());
+        check(state.refreshCachedTrack(state.snapshot()), "newer full prefetch applies while query is pending");
+        check(state.snapshot().pending, "prefetch retains the original active query token");
+        check(!state.acceptsResult(olderSingle), "older single cannot persist over a newer full batch result");
+        check(state.completeTrack(olderSingle, "Older single title", "Older single artist"),
+                "older single result still consumes and settles the active token");
+        check(state.snapshot().completed && !state.snapshot().pending, "active query is settled normally");
+        equal("Prefetch title", state.snapshot().correctedTitle);
+        equal("Prefetch artist", state.snapshot().correctedArtist);
+        equal("Prefetch artist", state.getCachedArtist("20"));
+    }
+
+    private static void testCacheDiskRestoreBarrier() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        TitleCorrectionState.Request network = state.request();
+        TitleCorrectionState.CacheRequest disk = state.beginCacheRestore(
+                java.util.Collections.singletonList("10"));
+        check(state.completeTrack(network, "Fresh title", "Fresh artist"), "network finishes during disk read");
+        check(state.putCachedTracks(disk, trackMap("10", "Old disk title", "Old disk artist")).isEmpty(),
+                "a later-started disk read cannot replace a network write that occurred during it");
+        equal("Fresh artist", state.getCachedArtist("10"));
+        disk = state.beginCacheRestore(java.util.Collections.singletonList("10"));
+        check(state.putCachedTracks(disk, trackMap("10", "Old disk title", "Old disk artist")).isEmpty(),
+                "complete in-memory data always takes priority over disk restoration");
+
+        state.begin(manager, "2", "20", "", "Stock");
+        disk = state.beginCacheRestore(java.util.Collections.singletonList("20"));
+        state.putCachedTitle("20", "New partial title");
+        java.util.Map<String, TitleCorrectionState.TrackInfo> oldPartial =
+                trackMap("20", new TitleCorrectionState.TrackInfo("Old partial title", "", false));
+        check(state.putCachedTracks(disk, oldPartial).isEmpty(),
+                "disk read barrier also protects newer partial writes");
+        equal("New partial title", state.getCachedTitle("20"));
+        disk = state.beginCacheRestore(java.util.Collections.singletonList("20"));
+        equal(1, state.putCachedTracks(disk, trackMap("20", "Disk full title", "Disk full artist")).size());
+        check(state.refreshCachedTrack(state.snapshot()), "fresh disk full entry may upgrade an unchanged partial");
+        equal("Disk full artist", state.snapshot().correctedArtist);
+    }
+
+    private static void testCacheTicketNamespaceAndTargets() {
+        Object manager = new Object();
+        TitleCorrectionState state = started(manager, "1", "10", "Stock");
+        state.setCacheNamespace("cn");
+        TitleCorrectionState.CacheRequest china = state.beginCacheRequest(
+                java.util.Arrays.asList("0010", "invalid"));
+        state.setCacheNamespace("other");
+        java.util.Map<String, TitleCorrectionState.TrackInfo> response =
+                trackMap("10", "China title", "China artist");
+        response.put("20", new TitleCorrectionState.TrackInfo("Unrequested title", "Unrequested artist"));
+        response.put("invalid", new TitleCorrectionState.TrackInfo("Invalid", "Invalid"));
+        equal(1, state.putCachedTracks(china, response).size());
+        equal(null, state.getCachedTrack("10"));
+        equal(null, state.getCachedTrack("20"));
+        equal(null, state.snapshot().correctedArtist);
+        state.setCacheNamespace("cn");
+        equal("China artist", state.getCachedArtist("10"));
+        equal(null, state.getCachedTrack("20"));
+        check(state.request() == null, "late batch safely warms only its captured namespace");
+        equal("China artist", state.snapshot().correctedArtist);
+
+        TitleCorrectionState foreign = started(manager, "1", "10", "Stock");
+        check(foreign.putCachedTracks(china, response).isEmpty(), "foreign cache ticket rejected");
+        equal(null, foreign.getCachedTrack("10"));
+        check(state.putCachedTracks(null, response).isEmpty(), "null cache ticket rejected");
+        check(state.putCachedTracks(china, null).isEmpty(), "null track map rejected");
+    }
+
+    private static void testCacheTicketEvictionAndNegativeHits() {
+        Object manager = new Object();
+        TitleCorrectionState state = new TitleCorrectionState(1);
+        state.begin(manager, "1", "10", "", "Stock");
+        TitleCorrectionState.CacheRequest oldBatch = state.beginCacheRequest(
+                java.util.Collections.singletonList("10"));
+        TitleCorrectionState.CacheRequest oldDisk = state.beginCacheRestore(
+                java.util.Collections.singletonList("10"));
+        TitleCorrectionState.Request newer = state.request();
+        state.completeTrack(newer, "Current title", "Current artist");
+        state.putCachedTrack("20", "Evict title", "Evict artist");
+        check(state.putCachedTracks(oldBatch, trackMap("10", "Old batch title", "Old batch artist")).isEmpty(),
+                "eviction does not let a late batch replace the current newer track");
+        check(state.putCachedTracks(oldDisk, trackMap("10", "Old disk title", "Old disk artist")).isEmpty(),
+                "eviction does not let a late disk read replace the current newer track");
+        equal(null, state.getCachedTrack("10"));
+        equal("Current artist", state.snapshot().correctedArtist);
+
+        state.begin(manager, "2", "30", "", "Missing");
+        TitleCorrectionState.CacheRequest miss = state.beginCacheRequest(
+                java.util.Collections.singletonList("30"));
+        java.util.Map<String, TitleCorrectionState.TrackInfo> empty =
+                trackMap("30", "", "");
+        empty.put("40", new TitleCorrectionState.TrackInfo("", ""));
+        equal(1, state.putCachedTracks(miss, empty).size());
+        check(state.getCachedTrack("30").artistResolved, "authorized miss is a complete negative cache entry");
+        equal(null, state.getCachedTrack("40"));
+        check(state.request() == null && state.snapshot().completed,
+                "a complete negative batch result suppresses a repeated single-track query");
+        state.begin(manager, "3", "30", "", "Missing replay");
+        check(state.request() == null, "negative batch cache also survives playback replay");
+    }
+
+    private static java.util.Map<String, TitleCorrectionState.TrackInfo> trackMap(
+            String id, String title, String artist) {
+        return trackMap(id, new TitleCorrectionState.TrackInfo(title, artist));
+    }
+
+    private static java.util.Map<String, TitleCorrectionState.TrackInfo> trackMap(
+            String id, TitleCorrectionState.TrackInfo info) {
+        java.util.Map<String, TitleCorrectionState.TrackInfo> result =
+                new java.util.LinkedHashMap<String, TitleCorrectionState.TrackInfo>();
+        result.put(id, info);
+        return result;
     }
 
     private static void testPersistentRestoreGuards() {

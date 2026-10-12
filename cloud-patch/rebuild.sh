@@ -79,9 +79,11 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/CatalogTitleResolver' \
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
-  'vivo-car-cn-title-r42-2026-10-10' \
+  'vivo-car-cn-track-r44-1609-2026-10-12' \
   'correctPlayerTitle' \
+  'correctPlayerArtist' \
   'resolveItemTitle' \
+  'resolveItemArtist' \
   'VivoCarTitle' \
   'onNativeMediaItem' \
   'music.media.extras.LYRIC' \
@@ -270,83 +272,15 @@ done
 sha256sum "$FINAL_HELPER_DEX" > out/report/final-helper-dex.sha256
 python3 "$PATCH_ROOT/verify_title_hook.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-title-hook.txt
+python3 "$PATCH_ROOT/verify_lyrics_hooks.py" "$FINAL_MANIFEST_DIR" \
+  > out/report/verified-lyrics-hooks.txt
 python3 "$PATCH_ROOT/patch_catalog_region.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-catalog-region-hook.txt
 python3 "$PATCH_ROOT/patch_item_title.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-item-title-hook.txt
-python3 - "$FINAL_MANIFEST_DIR" <<'PY'
-import glob
-import re
-import sys
-
-root = sys.argv[1]
-manager_paths = glob.glob(root + "/smali*/com/apple/android/music/player/S.smali")
-if len(manager_paths) != 1:
-    raise SystemExit("Expected exactly one final MediaPlaybackManager S.smali, found %d" % len(manager_paths))
-text = open(manager_paths[0], encoding="utf-8").read()
-connection_paths = glob.glob(root + "/smali*/com/apple/android/music/player/e0.smali")
-if len(connection_paths) != 1:
-    raise SystemExit("Expected exactly one final MediaSession callback c0.smali, found %d" % len(connection_paths))
-connection_text = open(connection_paths[0], encoding="utf-8").read()
-
-checks = (
-    (text,
-     "public final P(Lz3/v;I)V",
-     "Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
-    (text,
-     "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
-     "Lcom/apple/android/music/player/VivoCarLyrics;->onCurrentItemChanged(Ljava/lang/Object;Ljava/lang/Object;)V"),
-    (text,
-     "public final onMetadataUpdated(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
-     "Lcom/apple/android/music/player/VivoCarLyrics;->onMetadataUpdated(Ljava/lang/Object;Ljava/lang/Object;)V"),
-    (text,
-     "public final onPlaybackError(Lcom/apple/android/music/playback/controller/MediaPlayerController;Lcom/apple/android/music/playback/model/MediaPlayerException;)V",
-     "Lcom/apple/android/music/player/VivoCarLyrics;->onPlaybackError(Ljava/lang/Object;)V"),
-    (text,
-     "public final seekTo(J)V",
-     "Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V"),
-    (connection_text,
-     "public final o(LJ4/f2;LJ4/f2$e;)V",
-     "Lcom/apple/android/music/player/VivoCarLyrics;->onAtomicControllerConnected(Ljava/lang/String;)V"),
-)
-
-for source, signature, call in checks:
-    blocks = re.findall(
-        r"(?ms)^\.method " + re.escape(signature) + r"\n.*?^\.end method$",
-        source,
-    )
-    if len(blocks) != 1:
-        raise SystemExit("Expected exactly one final Smali method: %s (found %d)" %
-                         (signature, len(blocks)))
-    invocation = (r"^\s*invoke-static(?:/range)?\s+\{[^}]*\},\s*" +
-                  re.escape(call) + r"\s*$")
-    method_count = len(re.findall(invocation, blocks[0], re.M))
-    file_count = len(re.findall(invocation, source, re.M))
-    if method_count != 1 or file_count != 1:
-        raise SystemExit(
-            "Final hook must occur exactly once in %s: %s (method=%d, file=%d)" %
-            (signature, call, method_count, file_count)
-        )
-
-native_blocks = re.findall(
-    r"(?ms)^\.method public final P\(Lz3/v;I\)V\n.*?^\.end method$",
-    text,
-)
-if len(native_blocks) != 1:
-    raise SystemExit("Expected exactly one final native MediaItem publish method")
-native_block = native_blocks[0]
-native_order = (
-    native_block.find("if-nez p2, :cond_4"),
-    native_block.find("Lcom/apple/android/music/player/VivoCarLyrics;->onNativeMediaItem(Ljava/lang/Object;)V"),
-    native_block.find("invoke-virtual {p1}, Lz3/v;->hashCode()I"),
-    native_block.find("iput-object p1, p0, Lcom/apple/android/music/player/S;->j:Lz3/v;"),
-)
-if -1 in native_order or tuple(sorted(native_order)) != native_order:
-    raise SystemExit("Final native metadata hook is outside the guarded stock publish path")
-PY
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/S.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/e0.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/d0.smali' -print -quit)" \
   > out/report/final-connection-smali-path.txt
 unzip -Z1 out/apple-music-vivo-car-lyrics-debug.apk \
   | grep -E '^classes[0-9]*\.dex$' \

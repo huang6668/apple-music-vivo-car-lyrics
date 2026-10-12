@@ -29,12 +29,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-title-r42-2026-10-10";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r44-1609-2026-10-12";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     private static final String TITLE_PROFILE = "cn_v1";
     private static final String TITLE_LANGUAGE = "zh-CN";
@@ -107,6 +108,8 @@ public final class VivoCarLyrics {
     private static final long TITLE_TIMEOUT_MS = 15000L;
     private static long titleBindingGeneration = -1L;
     private static long titleRebindGeneration = -1L;
+    private static String reboundTitle = "";
+    private static String reboundArtist = "";
     private static WeakReference<Object> reboundTitleItem = new WeakReference<Object>(null);
     private static WeakReference<Object> reboundTitleBinding = new WeakReference<Object>(null);
     private static Object titleSourceQueue;
@@ -136,6 +139,7 @@ public final class VivoCarLyrics {
     private static final Method NO_SUCH_METHOD_MARKER;
     private static final Field NO_SUCH_FIELD_MARKER;
     static {
+        TITLE_STATE.setCacheNamespace(TITLE_PROFILE);
         Method dummyMethod = null;
         Field dummyField = null;
         try {
@@ -301,7 +305,7 @@ public final class VivoCarLyrics {
         }
     }
 
-    /** Substitutes only this view's title; q0(item) re-evaluates the same binding after a result. */
+    /** Substitutes only this view's title; r0(item) re-evaluates the same binding after a result. */
     public static CharSequence correctPlayerTitle(Object binding, Object item, CharSequence stock) {
         try {
             synchronized (TITLE_LOCK) {
@@ -324,6 +328,23 @@ public final class VivoCarLyrics {
                 currentTitleItem = new WeakReference<Object>(item);
                 titleBindingGeneration = state.generation;
                 return TITLE_STATE.currentTitle(state.manager, state.queueId, state.catalogId, stock);
+            }
+        } catch (Throwable ignored) {
+            return stock;
+        }
+    }
+
+    public static CharSequence correctPlayerArtist(Object binding, Object item, CharSequence stock) {
+        try {
+            synchronized (TITLE_LOCK) {
+                TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
+                if (!isCurrentTitle(state) || !titleItemMatches(state, item)) return stock;
+                if (Boolean.TRUE.equals(invokeOptional(item, "isShowComposer"))
+                        || intValue(invokeOptional(item, "getContentType"), 0) == 9) return stock;
+                currentTitleBinding = new WeakReference<Object>(binding);
+                currentTitleItem = new WeakReference<Object>(item);
+                titleBindingGeneration = state.generation;
+                return TITLE_STATE.currentArtist(state.manager, state.queueId, state.catalogId, stock);
             }
         } catch (Throwable ignored) {
             return stock;
@@ -464,8 +485,8 @@ public final class VivoCarLyrics {
                 return;
             }
             TITLE_STATE.restoreCached(state);
+            applyTitleCorrectionFromState(TITLE_STATE.snapshot());
             if (TITLE_STATE.snapshot().completed) {
-                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
                 return;
             }
             final Object api = findCatalogApi();
@@ -498,22 +519,14 @@ public final class VivoCarLyrics {
                     }
                 }
             }, TITLE_TIMEOUT_MS);
-            CatalogTitleResolver.query(api, request.catalogId, TITLE_LANGUAGE, "F",
-                    new CatalogTitleResolver.Callback() {
-                        @Override public void onTitle(final String rawTitle) {
+            CatalogTitleResolver.queryTrack(api, request.catalogId, TITLE_LANGUAGE, "F",
+                    new CatalogTitleResolver.TrackCallback() {
+                        @Override public void onTrack(final CatalogTitleResolver.TrackInfo track) {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
-                                    final String title = rawTitle == null ? null : ChineseConverter.toSimplified(rawTitle);
                                     synchronized (TITLE_LOCK) {
-                                        if (title != null && !title.trim().isEmpty()) {
-                                            boolean accepted = TITLE_STATE.acceptsResult(request);
-                                            if (TITLE_STATE.complete(request, title)) {
-                                                Log.w(TITLE_LOG_TAG, "catalog title=" + title);
-                                                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
-                                            }
-                                            if (accepted) {
-                                                persistTitle(request.catalogId, title);
-                                            }
+                                        if (track != null) {
+                                            completeTitleTrack(request, track);
                                         } else {
                                             fallbackRegionalTitle(request);
                                         }
@@ -543,34 +556,21 @@ public final class VivoCarLyrics {
     }
 
     private static void fallbackRegionalTitle(final TitleCorrectionState.Request request) {
+        synchronized (TITLE_LOCK) {
+            if (!TITLE_STATE.acceptsResult(request)) return;
+        }
         final Object api = findCatalogApi();
         if (api == null || request == null) {
-            synchronized (TITLE_LOCK) {
-                final String title = null;
-                TITLE_STATE.complete(request, title);
-            }
+            completeTitleTrack(request, null);
             return;
         }
-        CatalogTitleResolver.batchQuery(api, Collections.singletonList(request.catalogId),
-                TITLE_LANGUAGE, "F", new CatalogTitleResolver.BatchCallback() {
-                    @Override public void onTitles(final Map<String, String> titles) {
+        CatalogTitleResolver.batchQueryTracks(api, Collections.singletonList(request.catalogId),
+                TITLE_LANGUAGE, "F", new CatalogTitleResolver.BatchTrackCallback() {
+                    @Override public void onTracks(final Map<String, CatalogTitleResolver.TrackInfo> tracks) {
                         MAIN.post(new Runnable() {
                             @Override public void run() {
-                                final String raw = (titles != null && titles.containsKey(request.catalogId))
-                                        ? titles.get(request.catalogId) : null;
-                                final String title = raw == null ? null : ChineseConverter.toSimplified(raw);
-                                synchronized (TITLE_LOCK) {
-                                    boolean accepted = TITLE_STATE.acceptsResult(request);
-                                    if (TITLE_STATE.complete(request, title)) {
-                                        if (title != null) {
-                                            Log.w(TITLE_LOG_TAG, "catalog fallback title=" + title);
-                                        }
-                                        applyTitleCorrectionFromState(TITLE_STATE.snapshot());
-                                    }
-                                    if (accepted && title != null && !title.trim().isEmpty()) {
-                                        persistTitle(request.catalogId, title);
-                                    }
-                                }
+                                completeTitleTrack(request, tracks == null ? null
+                                        : tracks.get(request.catalogId));
                             }
                         });
                     }
@@ -586,10 +586,40 @@ public final class VivoCarLyrics {
                         });
                     }
                 }, new Executor() {
-                    @Override public void execute(Runnable task) {
-                        MAIN.post(task);
+                    @Override public void execute(final Runnable task) {
+                        MAIN.post(new Runnable() {
+                            @Override public void run() {
+                                synchronized (TITLE_LOCK) {
+                                    if (!TITLE_STATE.acceptsResult(request)) return;
+                                }
+                                task.run();
+                            }
+                        });
                     }
                 });
+    }
+
+    private static void completeTitleTrack(TitleCorrectionState.Request request,
+                                          CatalogTitleResolver.TrackInfo result) {
+        if (request == null) return;
+        synchronized (TITLE_LOCK) {
+            TitleCorrectionState.TrackInfo known = TITLE_STATE.getCachedTrack(request.catalogId);
+            String title = result == null ? (known == null ? null : known.title)
+                    : ChineseConverter.toSimplified(result.title);
+            String artist = result == null ? (known == null ? null : known.artist)
+                    : ChineseConverter.toSimplified(result.artist);
+            boolean accepted = TITLE_STATE.acceptsResult(request);
+            if (TITLE_STATE.completeTrack(request, title, artist)) {
+                Log.w(TITLE_LOG_TAG, "catalog track ready id=" + request.catalogId
+                        + " title=" + title + " artist=" + artist);
+                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+            }
+            if (accepted && (title != null && !title.isEmpty()
+                    || artist != null && !artist.isEmpty())) {
+                persistTrack(request.catalogId, new TitleCorrectionState.TrackInfo(title, artist));
+                triggerActiveControllersRefresh();
+            }
+        }
     }
 
     private static File titleCacheDirectory() {
@@ -629,11 +659,9 @@ public final class VivoCarLyrics {
                     @Override public void run() {
                         synchronized (TITLE_LOCK) {
                             if (!isCurrentTitle(state)) return;
-                            if (trackInfo != null && !trackInfo.title.isEmpty()) {
-                                TITLE_STATE.restore(state, trackInfo.title);
-                                if (!trackInfo.artist.isEmpty()) {
-                                    TITLE_STATE.putCachedTrack(state.catalogId, trackInfo.title, trackInfo.artist);
-                                }
+                            if (trackInfo != null) {
+                                TITLE_STATE.restoreTrack(state, trackInfo);
+                                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
                             }
                             startTitleQuery(state, 0);
                         }
@@ -643,21 +671,15 @@ public final class VivoCarLyrics {
         });
     }
 
-    private static void persistTitle(final String catalogId, final String title) {
+    private static void persistTrack(final String catalogId,
+                                     final TitleCorrectionState.TrackInfo track) {
         final File directory = titleCacheDirectory();
         if (directory == null) return;
         TITLE_IO.execute(new Runnable() {
             @Override public void run() {
                 try {
                     if (titleCacheStore == null) titleCacheStore = new TitleCacheStore(directory);
-                    String artist = TITLE_STATE.snapshot().correctedArtist;
-                    boolean ok;
-                    if (artist != null && !artist.isEmpty()) {
-                        ok = titleCacheStore.putTrack(catalogId, title, artist);
-                    } else {
-                        ok = titleCacheStore.put(catalogId, title);
-                    }
-                    if (!ok) {
+                    if (!titleCacheStore.putTrack(catalogId, track)) {
                         Log.w(TITLE_LOG_TAG, "title cache write failed");
                     }
                 } catch (Throwable error) {
@@ -672,11 +694,12 @@ public final class VivoCarLyrics {
         try {
             String catalogId = titleCatalogId(item);
             if (catalogId.isEmpty()) return stockTitle;
+            TitleCorrectionState.TrackInfo track = TITLE_STATE.getCachedTrack(catalogId);
+            if (track == null || !track.artistResolved) enqueuePrefetch(catalogId);
             String cached = TITLE_STATE.getCachedTitle(catalogId);
             if (cached != null && !cached.isEmpty()) {
                 return ChineseConverter.toSimplified(cached);
             }
-            enqueuePrefetch(catalogId);
             return stockTitle;
         } catch (Throwable ignored) {
             return stockTitle;
@@ -688,11 +711,12 @@ public final class VivoCarLyrics {
         try {
             String catalogId = titleCatalogId(item);
             if (!catalogId.isEmpty()) {
+                TitleCorrectionState.TrackInfo track = TITLE_STATE.getCachedTrack(catalogId);
+                if (track == null || !track.artistResolved) enqueuePrefetch(catalogId);
                 String cached = TITLE_STATE.getCachedArtist(catalogId);
                 if (cached != null && !cached.isEmpty()) {
                     return ChineseConverter.toSimplified(cached);
                 }
-                enqueuePrefetch(catalogId);
             }
             return ChineseConverter.toSimplified(stockArtist);
         } catch (Throwable ignored) {
@@ -701,7 +725,10 @@ public final class VivoCarLyrics {
     }
 
     public static void enqueuePrefetch(String catalogId) {
-        if (catalogId == null || catalogId.isEmpty()) return;
+        catalogId = TitleCorrectionState.normalizeCatalogId(catalogId);
+        if (catalogId.isEmpty()) return;
+        TitleCorrectionState.TrackInfo cached = TITLE_STATE.getCachedTrack(catalogId);
+        if (cached != null && cached.artistResolved) return;
         synchronized (PREFETCH_LOCK) {
             if (PREFETCH_SEEN.contains(catalogId)) return;
             if (PREFETCH_PENDING.size() >= 1000) return;
@@ -715,6 +742,12 @@ public final class VivoCarLyrics {
                     }
                 }, 150L);
             }
+        }
+    }
+
+    private static void releasePrefetch(List<String> catalogIds) {
+        synchronized (PREFETCH_LOCK) {
+            PREFETCH_SEEN.removeAll(catalogIds);
         }
     }
 
@@ -744,22 +777,17 @@ public final class VivoCarLyrics {
             if (!id.isEmpty()) {
                 String cachedTitle = TITLE_STATE.getCachedTitle(id);
                 String cachedArtist = TITLE_STATE.getCachedArtist(id);
-                if (cachedTitle != null && !cachedTitle.isEmpty()) {
-                    if (attrs != null) {
+                if (attrs != null) {
+                    if (cachedTitle != null && !cachedTitle.isEmpty()) {
                         invokeOptional(attrs, "setName", ChineseConverter.toSimplified(cachedTitle));
-                        if (cachedArtist != null && !cachedArtist.isEmpty()) {
-                            invokeOptional(attrs, "setArtistName", ChineseConverter.toSimplified(cachedArtist));
-                        }
                     }
-                } else {
-                    if (attrs != null) {
-                        String stockArtist = stringValue(invokeOptional(attrs, "getArtistName"));
-                        if (stockArtist != null && !stockArtist.isEmpty()) {
-                            invokeOptional(attrs, "setArtistName", ChineseConverter.toSimplified(stockArtist));
-                        }
+                    String artist = cachedArtist == null || cachedArtist.isEmpty()
+                            ? stringValue(invokeOptional(attrs, "getArtistName")) : cachedArtist;
+                    if (artist != null && !artist.isEmpty()) {
+                        invokeOptional(attrs, "setArtistName", ChineseConverter.toSimplified(artist));
                     }
-                    enqueuePrefetch(id);
                 }
+                enqueuePrefetch(id);
             } else if (attrs != null) {
                 String stockArtist = stringValue(invokeOptional(attrs, "getArtistName"));
                 if (stockArtist != null && !stockArtist.isEmpty()) {
@@ -822,6 +850,7 @@ public final class VivoCarLyrics {
         }
         if (batch.isEmpty()) return;
 
+        final TitleCorrectionState.CacheRequest diskRequest = TITLE_STATE.beginCacheRestore(batch);
         final File directory = titleCacheDirectory();
         if (directory != null) {
             TITLE_IO.execute(new Runnable() {
@@ -833,15 +862,23 @@ public final class VivoCarLyrics {
                         if (!diskHits.isEmpty()) {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
-                                    TITLE_STATE.putCachedTracks(diskHits);
-                                    triggerActiveControllersRefresh();
+                                    Map<String, TitleCorrectionState.TrackInfo> accepted =
+                                            TITLE_STATE.putCachedTracks(diskRequest, diskHits);
+                                    if (!accepted.isEmpty()) {
+                                        refreshCurrentCachedTrack();
+                                        triggerActiveControllersRefresh();
+                                    }
                                 }
                             });
                         }
                         final List<String> missing = new ArrayList<String>();
                         for (String id : batch) {
-                            if (!diskHits.containsKey(id)) missing.add(id);
+                            TitleCorrectionState.TrackInfo hit = diskHits.get(id);
+                            if (hit == null || !hit.artistResolved) missing.add(id);
                         }
+                        List<String> completeHits = new ArrayList<String>(batch);
+                        completeHits.removeAll(missing);
+                        releasePrefetch(completeHits);
                         if (!missing.isEmpty()) {
                             MAIN.post(new Runnable() {
                                 @Override public void run() {
@@ -865,29 +902,52 @@ public final class VivoCarLyrics {
 
     private static void queryCatalogBatch(final List<String> catalogIds) {
         final Object api = findCatalogApi();
-        if (api == null || catalogIds.isEmpty()) return;
+        if (api == null || catalogIds.isEmpty()) {
+            releasePrefetch(catalogIds);
+            return;
+        }
+        final TitleCorrectionState.CacheRequest cacheRequest = TITLE_STATE.beginCacheRequest(catalogIds);
+        final AtomicBoolean settled = new AtomicBoolean();
+        MAIN.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (settled.compareAndSet(false, true)) {
+                    releasePrefetch(catalogIds);
+                    Log.d(TITLE_LOG_TAG, "batch query timeout; allow later retry");
+                }
+            }
+        }, TITLE_TIMEOUT_MS);
         CatalogTitleResolver.batchQueryTracks(api, catalogIds, TITLE_LANGUAGE, "F",
                 new CatalogTitleResolver.BatchTrackCallback() {
                     @Override public void onTracks(final Map<String, CatalogTitleResolver.TrackInfo> rawTracks) {
-                        if (rawTracks == null || rawTracks.isEmpty()) return;
+                        if (settled.get()) return;
                         final Map<String, TitleCorrectionState.TrackInfo> tracks =
                                 new LinkedHashMap<String, TitleCorrectionState.TrackInfo>();
-                        for (Map.Entry<String, CatalogTitleResolver.TrackInfo> entry : rawTracks.entrySet()) {
-                            if (entry.getValue() != null) {
-                                tracks.put(entry.getKey(), new TitleCorrectionState.TrackInfo(
-                                        ChineseConverter.toSimplified(entry.getValue().title),
-                                        ChineseConverter.toSimplified(entry.getValue().artist)));
+                        if (rawTracks != null) {
+                            for (Map.Entry<String, CatalogTitleResolver.TrackInfo> entry : rawTracks.entrySet()) {
+                                if (entry.getValue() != null) {
+                                    tracks.put(entry.getKey(), new TitleCorrectionState.TrackInfo(
+                                            ChineseConverter.toSimplified(entry.getValue().title),
+                                            ChineseConverter.toSimplified(entry.getValue().artist)));
+                                }
                             }
                         }
                         MAIN.post(new Runnable() {
                             @Override public void run() {
-                                TITLE_STATE.putCachedTracks(tracks);
-                                persistBatchTracks(tracks);
-                                triggerActiveControllersRefresh();
+                                if (!settled.compareAndSet(false, true)) return;
+                                Map<String, TitleCorrectionState.TrackInfo> accepted =
+                                        TITLE_STATE.putCachedTracks(cacheRequest, tracks);
+                                releasePrefetch(catalogIds);
+                                persistBatchTracks(accepted);
+                                if (!accepted.isEmpty()) {
+                                    refreshCurrentCachedTrack();
+                                    triggerActiveControllersRefresh();
+                                }
                             }
                         });
                     }
                     @Override public void onError(Throwable error) {
+                        if (!settled.compareAndSet(false, true)) return;
+                        releasePrefetch(catalogIds);
                         Log.w(TITLE_LOG_TAG, "batch query failed for " + catalogIds.size() + " items", error);
                     }
                 }, new Executor() {
@@ -895,6 +955,15 @@ public final class VivoCarLyrics {
                         MAIN.post(task);
                     }
                 });
+    }
+
+    private static void refreshCurrentCachedTrack() {
+        synchronized (TITLE_LOCK) {
+            TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
+            if (isCurrentTitle(state) && TITLE_STATE.refreshCachedTrack(state)) {
+                applyTitleCorrectionFromState(TITLE_STATE.snapshot());
+            }
+        }
     }
 
     private static void persistBatchTracks(final Map<String, TitleCorrectionState.TrackInfo> tracks) {
@@ -927,8 +996,9 @@ public final class VivoCarLyrics {
     }
 
     private static void applyTitleCorrectionFromState(TitleCorrectionState.Snapshot state) {
-        if (!isCurrentTitle(state) || state.correctedTitle == null) return;
-        writeCorrectedTitle(invokeOptional(titleSourceQueue, "getItem"), state.correctedTitle);
+        if (!isCurrentTitle(state) || state.correctedTitle == null && state.correctedArtist == null) return;
+        writeCorrectedTrack(invokeOptional(titleSourceQueue, "getItem"),
+                state.correctedTitle, state.correctedArtist);
         try {
             if (applyTitleCorrection(currentMediaItem(state.manager))) {
                 refreshTitleNotification(state);
@@ -937,14 +1007,19 @@ public final class VivoCarLyrics {
         }
         Object binding = currentTitleBinding.get();
         Object item = currentTitleItem.get();
+        String title = state.correctedTitle == null ? "" : state.correctedTitle;
+        String artist = state.correctedArtist == null ? "" : state.correctedArtist;
         if (binding != null && titleBindingGeneration == state.generation
                 && titleItemMatches(state, item)
                 && (titleRebindGeneration != state.generation || reboundTitleItem.get() != item
-                    || reboundTitleBinding.get() != binding)) {
+                    || reboundTitleBinding.get() != binding
+                    || !reboundTitle.equals(title) || !reboundArtist.equals(artist))) {
             titleRebindGeneration = state.generation;
+            reboundTitle = title;
+            reboundArtist = artist;
             reboundTitleItem = new WeakReference<Object>(item);
             reboundTitleBinding = new WeakReference<Object>(binding);
-            invokeOptional(binding, "q0", item);
+            invokeOptional(binding, "r0", item);
         }
         Log.d(TITLE_LOG_TAG, "catalog title ready id=" + state.catalogId
                 + " generation=" + state.generation);
@@ -954,15 +1029,17 @@ public final class VivoCarLyrics {
         try {
             synchronized (TITLE_LOCK) {
                 TitleCorrectionState.Snapshot state = TITLE_STATE.snapshot();
-                if (mediaItem == null || !isCurrentTitle(state) || state.correctedTitle == null) return false;
+                if (mediaItem == null || !isCurrentTitle(state)
+                        || state.correctedTitle == null && state.correctedArtist == null) return false;
                 Object metadata = getFieldValue(mediaItem, "d");
                 Bundle extras = getMetadataExtras(metadata);
                 if (extras == null || !state.queueId.equals(TitleCorrectionState.normalizeCatalogId(
                         String.valueOf(extras.getLong(APPLE_QUEUE_ID, -1L))))
                         || !state.catalogId.equals(TitleCorrectionState.normalizeCatalogId(
                         extras.getString(APPLE_MEDIA_ID)))) return false;
-                boolean changed = writeCorrectedTitle(metadata, state.correctedTitle);
-                writeCorrectedTitle(invokeOptional(titleSourceQueue, "getItem"), state.correctedTitle);
+                boolean changed = writeCorrectedTrack(metadata, state.correctedTitle, state.correctedArtist);
+                writeCorrectedTrack(invokeOptional(titleSourceQueue, "getItem"),
+                        state.correctedTitle, state.correctedArtist);
                 return changed;
             }
         } catch (Throwable error) {
@@ -983,8 +1060,8 @@ public final class VivoCarLyrics {
             Method refresh = findCompatibleMethod(service.getClass(), "g",
                     new Object[]{session, Boolean.FALSE}, false);
             Class<?>[] parameters = refresh.getParameterTypes();
-            if (!"J4.Y2".equals(refresh.getDeclaringClass().getName())
-                    || !"J4.f2".equals(parameters[0].getName())
+            if (!"J4.Z2".equals(refresh.getDeclaringClass().getName())
+                    || !"J4.g2".equals(parameters[0].getName())
                     || parameters[1] != Boolean.TYPE || Modifier.isStatic(refresh.getModifiers())) return;
             refresh.invoke(service, session, Boolean.FALSE);
         } catch (Throwable error) {
@@ -992,36 +1069,28 @@ public final class VivoCarLyrics {
         }
     }
 
-    /** The only reflective writes: verified 1607 metadata title or StoreMediaItem.title. */
-    private static boolean writeCorrectedTitle(Object target, String title) {
-        if (target == null || title == null || title.isEmpty()) return false;
+    /** The only reflective writes: verified 1609 title/artist fields on these exact classes. */
+    private static boolean writeCorrectedTrack(Object target, String title, String artist) {
+        if (target == null) return false;
         try {
             String type = target.getClass().getName();
-            String name;
             Class<?> expected;
-            String artist = TITLE_STATE.snapshot().correctedArtist;
             String[][] specs;
-            if ("z3.x".equals(type)) {
-                name = "a";
+            if ("z3.y".equals(type)) {
                 expected = CharSequence.class;
-                specs = artist != null && !artist.isEmpty()
-                        ? new String[][]{{"a", "java.lang.CharSequence", title}, {"b", "java.lang.CharSequence", artist}}
-                        : new String[][]{{"a", "java.lang.CharSequence", title}};
+                specs = new String[][]{{"a", title}, {"b", artist}};
             } else if ("com.apple.android.music.playback.model.StoreMediaItem".equals(type)) {
-                name = "title";
                 expected = String.class;
-                specs = artist != null && !artist.isEmpty()
-                        ? new String[][]{{"title", "java.lang.String", title}, {"artistName", "java.lang.String", artist}}
-                        : new String[][]{{"title", "java.lang.String", title}};
+                specs = new String[][]{{"title", title}, {"artistName", artist}};
             } else {
                 return false;
             }
             boolean changed = false;
             for (String[] spec : specs) {
+                String val = spec[1];
+                if (val == null || val.isEmpty()) continue;
                 Field field = findField(target.getClass(), spec[0]);
-                expected = "java.lang.String".equals(spec[1]) ? String.class : CharSequence.class;
                 if (Modifier.isStatic(field.getModifiers()) || field.getType() != expected) continue;
-                Object val = spec[2];
                 if (!val.equals(field.get(target))) {
                     field.set(target, val);
                     changed = true;
@@ -2294,19 +2363,18 @@ public final class VivoCarLyrics {
             return null;
         }
         Object metadata = getFieldValue(mediaItem, "d");
-        Class<?> converter = null;
-        for (String name : new String[]{"com.apple.android.music.player.Q", "com.apple.android.music.player.P", "com.apple.android.music.player.O"}) {
+        if (metadata == null) return null;
+        for (String name : new String[]{"com.apple.android.music.player.Q",
+                "com.apple.android.music.player.P", "com.apple.android.music.player.O"}) {
             try {
-                converter = Class.forName(name);
-                break;
+                Class<?> converter = Class.forName(name);
+                Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
+                return method.invoke(null, metadata);
             } catch (ClassNotFoundException ignored) {
+            } catch (NoSuchMethodException ignored) {
             }
         }
-        if (converter == null) {
-            return null;
-        }
-        Method method = findCompatibleMethod(converter, "b", new Object[]{metadata}, true);
-        return method.invoke(null, metadata);
+        return null;
     }
 
     private static Object currentMediaItem(Object manager) throws Exception {

@@ -28,7 +28,118 @@ public final class TitleCacheStoreTest {
         testWriteFailureKeepsPreviousFile();
         testUnavailableDirectory();
         testBatchPutAndGet();
+        testLegacyArtistResolutionMigration();
+        testResolvedTrackRestart();
+        testTrackValidationAndPartialBatch();
         System.out.println("TitleCacheStore tests passed");
+    }
+
+    private static void testLegacyArtistResolutionMigration() throws Exception {
+        File directory = directory();
+        try {
+            FakeClock clock = new FakeClock();
+            Properties properties = fixture();
+            write(directory, properties);
+            TitleCacheStore store = store(directory, 4, 100, clock);
+            TitleCorrectionState.TrackInfo legacy = store.getTrack("123");
+            equal("Valid", legacy.title);
+            equal("", legacy.artist);
+            check(!legacy.artistResolved, "old title-only cache must request an artist backfill");
+
+            properties.setProperty("entry.0.artist", "Legacy artist");
+            write(directory, properties);
+            legacy = store(directory, 4, 100, clock).getTrack("123");
+            equal("Legacy artist", legacy.artist);
+            check(legacy.artistResolved, "old separate artist field is already resolved");
+
+            properties.remove("entry.0.artist");
+            properties.setProperty("entry.0.title", "Legacy title\tLegacy tab artist");
+            write(directory, properties);
+            legacy = store(directory, 4, 100, clock).getTrack("123");
+            equal("Legacy title", legacy.title);
+            equal("Legacy tab artist", legacy.artist);
+            check(legacy.artistResolved, "old composite title preserves its resolved artist");
+
+            properties.setProperty("entry.0.title", "Legacy title\t");
+            write(directory, properties);
+            legacy = store(directory, 4, 100, clock).getTrack("123");
+            check(legacy.artistResolved, "explicit old composite response may have no artist");
+
+            properties.setProperty("entry.0.title", "Old title");
+            properties.setProperty("entry.0.artistResolved", "false");
+            write(directory, properties);
+            store = store(directory, 4, 100, clock);
+            check(!store.getTrack("123").artistResolved, "explicit partial flag survives loading");
+            check(store.putTrack("123", "New title", "New artist"), "complete artist backfill persists");
+            TitleCorrectionState.TrackInfo migrated = store(directory, 4, 100, clock).getTrack("123");
+            equal("New title", migrated.title);
+            equal("New artist", migrated.artist);
+            check(migrated.artistResolved, "complete result survives process restart");
+            equal("1", read(directory).getProperty("schema"));
+            equal("true", read(directory).getProperty("entry.0.artistResolved"));
+        } finally {
+            delete(directory);
+        }
+    }
+
+    private static void testResolvedTrackRestart() throws Exception {
+        File directory = directory();
+        try {
+            FakeClock clock = new FakeClock();
+            TitleCacheStore store = store(directory, 4, 100, clock);
+            String title = "\u6a31\u82b1\u8349";
+            String artist = "\u5b59\u71d5\u59ff";
+            check(store.putTrack("123", new TitleCorrectionState.TrackInfo(title, artist)),
+                    "full track can be written using a captured immutable result");
+            check(store.putTrack("124", "Known title", ""), "resolved empty artist persists");
+            check(store.putTrack("125", "Title\twith a tab", ""),
+                    "structured results need not use the legacy tab delimiter");
+            TitleCacheStore reopened = store(directory, 4, 100, clock);
+            TitleCorrectionState.TrackInfo track = reopened.getTrack("123");
+            equal(title, track.title);
+            equal(artist, track.artist);
+            check(track.artistResolved, "unicode full track keeps its completion flag");
+            track = reopened.getTrack("124");
+            equal("", track.artist);
+            check(track.artistResolved, "successful empty artist is not mistaken for an old partial");
+            equal("Title\twith a tab", reopened.getTrack("125").title);
+            java.util.Map<String, TitleCorrectionState.TrackInfo> batch =
+                    reopened.getAllTracks(java.util.Arrays.asList("123", "124"));
+            check(batch.get("123").artistResolved && batch.get("124").artistResolved,
+                    "batch disk hits preserve completion flags");
+            check(!store.putTrack("126", "", ""), "negative catalog result is not persisted");
+            equal(null, reopened.getTrack("126"));
+        } finally {
+            delete(directory);
+        }
+    }
+
+    private static void testTrackValidationAndPartialBatch() throws Exception {
+        File directory = directory();
+        try {
+            FakeClock clock = new FakeClock();
+            TitleCacheStore store = store(directory, 4, 100, clock);
+            java.util.Map<String, TitleCorrectionState.TrackInfo> tracks =
+                    new java.util.LinkedHashMap<String, TitleCorrectionState.TrackInfo>();
+            tracks.put("123", new TitleCorrectionState.TrackInfo("Partial title", "", false));
+            tracks.put("124", new TitleCorrectionState.TrackInfo("Full title", "Full artist"));
+            tracks.put("125", new TitleCorrectionState.TrackInfo("", "Artist-only result"));
+            check(store.putAllTracks(tracks), "mixed full and partial track batch persists");
+            TitleCacheStore reopened = store(directory, 4, 100, clock);
+            check(!reopened.getTrack("123").artistResolved, "partial batch is not promoted to complete");
+            check(reopened.getTrack("124").artistResolved, "complete batch remains complete");
+            equal("Artist-only result", reopened.getTrack("125").artist);
+            char[] oversized = new char[2049];
+            java.util.Arrays.fill(oversized, 'a');
+            check(!store.putTrack("126", "Title", new String(oversized)), "oversized artist rejected");
+            check(!store.putTrack("126", (TitleCorrectionState.TrackInfo) null), "null track rejected");
+            Properties properties = fixture();
+            properties.setProperty("entry.0.artist", new String(oversized));
+            write(directory, properties);
+            equal(null, store(directory, 4, 100, clock).getTrack("123"));
+        } finally {
+            delete(directory);
+        }
     }
 
     private static void testRestartAndUnicode() throws Exception {

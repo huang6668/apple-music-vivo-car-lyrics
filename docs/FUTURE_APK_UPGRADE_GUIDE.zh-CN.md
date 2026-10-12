@@ -2,7 +2,9 @@
 
 > **适用场景**：当 Apple Music 官方发布新版本（如 Android 7.0+ 正式版或后续更新）时，指导开发者/AI 快速定位变更、移植车机歌词、原子随身听播控/歌词/进度条，以及全界面独立歌名汉化（含多区回退与繁简转换）的完整实操手册。
 >
-> **当前验证基准**：Apple Music 7.0.0-beta (versionCode: 1607)，CI Build #155 (Release `v1.0.0-build-155`) 已全绿通过并在 Samsung Galaxy Tab S7 实机部署验证。
+> **当前适配目标**：Apple Music 7.0.0-beta (versionCode: 1609)，双字段本地化与验证状态见
+> [1609 修复记录](ARTIST_LOCALIZATION_1609.zh-CN.md)。
+> 下文 1607 映射是历史定位示例；Build #155 的实机验证不代表 1609 歌手修复已验证。
 
 ---
 

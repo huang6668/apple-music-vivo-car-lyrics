@@ -28,10 +28,11 @@ capability = method_body("private static boolean advertiseAtomicLyricSupport(")
 line_publish = method_body(
     "private static void requestLinePublish(Object manager, String line, String clusterLine,"
 )
-title_write = method_body("private static boolean writeCorrectedTitle(")
+title_write = method_body("private static boolean writeCorrectedTrack(")
 native_title = method_body("private static boolean applyTitleCorrection(Object mediaItem)")
 title_refresh = method_body("private static void applyTitleCorrectionFromState(")
 title_binding = method_body("public static CharSequence correctPlayerTitle(")
+artist_binding = method_body("public static CharSequence correctPlayerArtist(")
 
 # The playback manager's MediaItem publish path rebuilds session MediaMetadata and resets the
 # native PlaybackState, which removes Atomic Player's progress bar and reloads cluster cover art.
@@ -55,33 +56,40 @@ assert "setFieldValue(" not in text, (
     "Mutating MediaItem/Metadata builder fields reintroduces MediaMetadata override"
 )
 assert not re.search(r'invoke(?:Required|Optional)\([^;\n]*,\s*"[PI]"\s*[,)]', text), (
-    "Never invoke an old or 1607 MediaItem publish method"
+    "Never invoke an old or 1609 MediaItem publish method"
 )
 
-# Title fields are the sole, type-checked exception. Do not relax Atomic or session code.
+# Display title/artist fields are the sole, type-checked exception.
 assert text.count("field.set(") == title_write.count("field.set(") == 1
-for required in ('"z3.x"', '"a"', "CharSequence.class",
+for required in ('"z3.y"', '"a"', '"b"', "CharSequence.class",
                  '"com.apple.android.music.playback.model.StoreMediaItem"',
-                 '"title"', "String.class", "Modifier.isStatic", "field.getType() != expected"):
+                 '"title"', '"artistName"', "String.class", "Modifier.isStatic",
+                 "field.getType() != expected"):
     assert required in title_write, f"Title write must remain narrowly typed: {required}"
+assert "TITLE_STATE.snapshot()" not in title_write, "Writes must use the captured result pair"
 for body in (metadata, capability, session_extras):
-    assert ".set(" not in body and "writeCorrectedTitle(" not in body
+    assert ".set(" not in body and "writeCorrectedTrack(" not in body
 for required in ("isCurrentTitle(state)", "APPLE_QUEUE_ID", "APPLE_MEDIA_ID"):
     assert required in native_title, f"Native title requires its own identity: {required}"
 for required in ("isCurrentTitle(state)", "titleBindingGeneration == state.generation",
-                 "titleItemMatches(state, item)"):
+                 "titleItemMatches(state, item)", "!reboundArtist.equals(artist)",
+                 'invokeOptional(binding, "r0", item)'):
     assert required in title_refresh
-assert "titleItemMatches(state, item)" in title_binding
-assert "return stock;" in title_binding
-assert "writeCorrectedTitle(" not in title_binding, "UI hook must substitute, not mutate a model"
+for body in (title_binding, artist_binding):
+    assert "titleItemMatches(state, item)" in body
+    assert "return stock;" in body
+    assert "writeCorrectedTrack(" not in body, "UI hook must substitute, not mutate a model"
+assert "TITLE_STATE.currentArtist(" in artist_binding
 notification = method_body("private static void refreshTitleNotification(")
 for required in ("isCurrentTitle(state)", 'getFieldValue(service, "y") != session',
-                 'invokeOptional(session, "c") != state.manager', '"J4.Y2"', '"J4.f2"'):
+                 'invokeOptional(session, "c") != state.manager', '"J4.Z2"', '"J4.g2"'):
     assert required in notification, "Notification refresh must validate its exact owner: " + required
-assert "writeCorrectedTitle(" not in notification
+assert "writeCorrectedTrack(" not in notification
 assert "getPersistentId" not in method_body("private static String titleCatalogId(")
 assert '"getId"' not in method_body("private static String titleCatalogId(")
-assert "TITLE_STATE.complete(request, title)" in text
+assert "TITLE_STATE.completeTrack(request, title, artist)" in text
+assert "CatalogTitleResolver.queryTrack(" in method_body("private static void startTitleQuery(")
+assert "TITLE_STATE.restoreTrack(state, trackInfo)" in method_body("private static void loadPersistedTitle(")
 assert "TITLE_STATE.fail(request)" in text
 assert "public static String resolveItemTitle(Object item, String stockTitle)" in text
 assert "TITLE_STATE.getCachedTitle(catalogId)" in text
@@ -90,7 +98,9 @@ assert 'private static final String TITLE_PROFILE = "cn_v1";' in text
 assert 'private static final String TITLE_LANGUAGE = "zh-CN";' in text
 for body in (
     title_binding,
+    artist_binding,
     method_body("public static String resolveItemTitle("),
+    method_body("public static String resolveItemArtist("),
     method_body("private static void beginTitleCorrection("),
     method_body("private static boolean isCurrentTitle("),
     method_body("private static void requestTitleCorrection("),
@@ -98,7 +108,21 @@ for body in (
 ):
     assert "Locale.getDefault()" not in body, "Fixed mainland titles must not follow system locale"
 assert "TITLE_IO.execute(" in method_body("private static void loadPersistedTitle(")
-assert "TITLE_IO.execute(" in method_body("private static void persistTitle(")
+persist = method_body("private static void persistTrack(")
+assert "TITLE_IO.execute(" in persist
+assert "titleCacheStore.putTrack(catalogId, track)" in persist
+assert "TITLE_STATE.snapshot()" not in persist, "Disk writes must not borrow the next track's artist"
+prefetch = method_body("private static void drainPrefetchQueue(")
+assert "hit == null || !hit.artistResolved" in prefetch, "Legacy disk hits must still fetch artist"
+assert "refreshCurrentCachedTrack()" in method_body("private static void queryCatalogBatch(")
+batch_query = method_body("private static void queryCatalogBatch(")
+assert "TITLE_STATE.beginCacheRequest(catalogIds)" in batch_query
+assert "TITLE_STATE.putCachedTracks(cacheRequest, tracks)" in batch_query
+assert "persistBatchTracks(accepted)" in batch_query, "Do not persist rejected stale batches"
+assert "settled.compareAndSet(false, true)" in batch_query, "Timed-out batches must reject late updates"
+assert "TITLE_STATE.beginCacheRestore(batch)" in prefetch
+assert "TITLE_STATE.putCachedTracks(diskRequest, diskHits)" in prefetch
+assert "TITLE_STATE.refreshCachedTrack(state)" in method_body("private static void refreshCurrentCachedTrack(")
 
 # Atomic capability mutation remains in-place and independent of title correction.
 assert "ATOMIC_SUPPORT_EVENTS" in capability

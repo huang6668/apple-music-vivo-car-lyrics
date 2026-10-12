@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the 1607 final HTTP seam; only resolver-owned lookups are localized."""
+"""Pin the 1609 final HTTP seam; only resolver-owned lookups are localized."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -10,8 +10,8 @@ METHOD = (
     "public final a(Ljava/lang/String;Ljava/lang/String;ZLjava/util/LinkedHashMap;"
     "Ljava/util/Map;Lkk/C;Lhi/c;)Ljava/lang/Object;"
 )
-STOCK_SHA256 = "b194d5647e9a24959e86e868ae2b584e902ebb2c1173a09458909c42173fecd5"
-STOCK_CODE_SHA256 = "01389e07801b07e514a8639951bc42e31030e886462e44d17a1b416dbd505768"
+STOCK_SHA256 = "8699ecb73eb533a55adfc10c04785637d7a9aebed3b990d28f8c44c5c5ed8952"
+STOCK_CODE_SHA256 = "b4134a827c7ddb63a921d90c4c342b7a424581355cdaa56e3baedd1944bd8cea"
 HOOK = (
     "    # Fixed mainland localization is restricted to resolver-owned request tokens.\n"
     "    invoke-static {p1, p4, p5}, "
@@ -52,7 +52,7 @@ def verify_text(text, patched=False):
     else:
         assert SEAM in block, "HTTP entry registers or seam drifted"
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == STOCK_SHA256, (
-            "1607 HTTP source drifted; re-analyze rather than patching an unknown method"
+            "1609 HTTP source drifted; re-analyze rather than patching an unknown method"
         )
 
 

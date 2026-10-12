@@ -1,5 +1,12 @@
 # 交接文档：Apple Music 歌手名称本地化未生效排查与修复指南
 
+> **1609 修复进度（2026-10-12）**：已改为基于用户提供的 Apple Music
+> 7.0.0-beta / versionCode 1609，新增播放页歌手绑定、单曲双字段查询、
+> 旧缓存补查和异步请求顺序保护。云端打包与最终 APK 校验正在进行，
+> 设备显示效果尚未验证。详见 [1609 修复记录](ARTIST_LOCALIZATION_1609.zh-CN.md)。
+> 下方 `100a059`、Build #159 及 `e1` / `z3.x` 映射均为 1607 历史排查记录，
+> 不能直接用于新版 APK。
+
 > **更新时间**：2026-10-12  
 > **当前基线**：Commit [`100a059`](https://github.com/huang6668/apple-music-vivo-car-lyrics/commit/100a059)  
 > **最新构建**：GitHub Actions [Build #159](https://github.com/huang6668/apple-music-vivo-car-lyrics/releases/tag/v1.0.0-build-159)（Run ID: 38185528827）  

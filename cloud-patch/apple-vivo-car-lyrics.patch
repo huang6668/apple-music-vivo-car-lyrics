@@ -1,5 +1,5 @@
---- a/smali_classes2/com/apple/android/music/player/S.smali
-+++ b/smali_classes2/com/apple/android/music/player/S.smali
+--- a/smali_classes2/com/apple/android/music/player/P.smali
++++ b/smali_classes2/com/apple/android/music/player/P.smali
 @@ -585,6 +585,8 @@
      .line 5
      .line 6
@@ -43,25 +43,25 @@
 +    invoke-static {p0, p1, p2}, Lcom/apple/android/music/player/VivoCarLyrics;->onSeek(Ljava/lang/Object;J)V
 +
      .line 4
-     new-instance p1, Lcom/apple/android/music/player/S$w;
+     new-instance p1, Lcom/apple/android/music/player/P$w;
  
---- a/smali_classes2/com/apple/android/music/player/e0.smali
-+++ b/smali_classes2/com/apple/android/music/player/e0.smali
-@@ -4394,7 +4394,7 @@
+--- a/smali_classes2/com/apple/android/music/player/d0.smali
++++ b/smali_classes2/com/apple/android/music/player/d0.smali
+@@ -4317,7 +4317,7 @@
  .end method
  
- .method public final o(LJ4/f2;LJ4/f2$e;)V
+ .method public final o(LJ4/g2;LJ4/g2$e;)V
 -    .locals 0
 +    .locals 1
  
      .line 1
      const-string p0, "session"
-@@ -4411,6 +4411,14 @@
+@@ -4334,6 +4334,14 @@
      .line 7
      .line 8
-     iget-object p0, p0, LJ4/v2;->i:Ljava/lang/String;
+     iget-object p0, p0, LJ4/w2;->i:Ljava/lang/String;
 +
-+    iget-object v0, p2, LJ4/f2$e;->a:LK4/B$b;
++    iget-object v0, p2, LJ4/g2$e;->a:LK4/B$b;
 +
 +    iget-object v0, v0, LK4/B$b;->a:LK4/B$c;
 +
@@ -79,7 +79,7 @@
      move-result-object v39
 -
 +
-+    # 1607 l()V: binding v1, item v8, stock title v39; v40/v41 are dead here.
++    # 1609 l()V: binding v1, item v8, stock title v39; v40/v41 are dead here.
 +    move-object/16 v41, v39
 +    move-object/from16 v39, v1
 +    move-object/from16 v40, v8
@@ -95,3 +95,25 @@
      .line 406
      .line 407
      move-object/from16 v42, v39
+@@ -3193,10 +3202,19 @@
+     .line 659
+     .line 660
+     move-result-object v52
+-
++
++    # 1609 subtitle binding: v53/v54 are dead until the stock copy and and-long.
++    move-object/16 v54, v52
++    move-object/from16 v52, v1
++    move-object/from16 v53, v8
++
++    invoke-static/range {v52 .. v54}, Lcom/apple/android/music/player/VivoCarLyrics;->correctPlayerArtist(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/CharSequence;)Ljava/lang/CharSequence;
++
++    move-result-object v52
++
+     .line 661
+     move-object/from16 v54, v52
+-
++
+     .line 662
+     .line 663
+     goto :goto_27

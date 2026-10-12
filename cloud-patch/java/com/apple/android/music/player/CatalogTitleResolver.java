@@ -49,6 +49,11 @@ public final class CatalogTitleResolver {
         void onError(Throwable error);
     }
 
+    public interface TrackCallback {
+        void onTrack(TrackInfo track);
+        void onError(Throwable error);
+    }
+
     public interface BatchCallback {
         void onTitles(Map<String, String> titles);
         void onError(Throwable error);
@@ -128,7 +133,26 @@ public final class CatalogTitleResolver {
     }
 
     public static boolean query(final Object catalog, String catalogId, String language,
-                                String preferredName, Callback callback, final Executor hostExecutor) {
+                                String preferredName, final Callback callback, final Executor hostExecutor) {
+        if (callback == null) return false;
+        return queryTrack(catalog, catalogId, language, preferredName, new TrackCallback() {
+            public void onTrack(TrackInfo track) {
+                callback.onTitle(track == null ? null : track.title);
+            }
+            public void onError(Throwable error) { callback.onError(error); }
+        }, hostExecutor);
+    }
+
+    public static boolean queryTrack(Object catalog, String catalogId, String language,
+                                     String preferredName, TrackCallback callback) {
+        return queryTrack(catalog, catalogId, language, preferredName, callback, new Executor() {
+            public void execute(Runnable task) { task.run(); }
+        });
+    }
+
+    public static boolean queryTrack(final Object catalog, String catalogId, String language,
+                                     String preferredName, TrackCallback callback,
+                                     final Executor hostExecutor) {
         if (callback == null) return false;
         final Once once = new Once(callback);
         try {
@@ -144,8 +168,8 @@ public final class CatalogTitleResolver {
                         if (hasResponseErrors(response) && !isNotFound(response)) {
                             throw new IllegalStateException("Catalog response contains errors");
                         }
-                        String title = hasResponseErrors(response) ? null : extractTitle(response, id);
-                        if (title != null) once.success(title);
+                        TrackInfo track = hasResponseErrors(response) ? null : extractTrack(response, id);
+                        if (track != null) once.success(track);
                         else resolveByIsrc(catalog, method, id, once, hostExecutor);
                     } catch (Throwable error) {
                         once.failure(unwrap(error));
@@ -307,7 +331,7 @@ public final class CatalogTitleResolver {
                                     throw new IllegalStateException("Catalog ISRC contains errors");
                                 }
                                 once.success(hasResponseErrors(regionalResponse)
-                                        ? null : extractIsrcTitle(regionalResponse, isrc));
+                                        ? null : extractIsrcTrack(regionalResponse, isrc));
                             } catch (Throwable error) {
                                 once.failure(unwrap(error));
                             }
@@ -597,9 +621,14 @@ public final class CatalogTitleResolver {
 
     /** MediaApiResponse.getData() is MediaEntity[]; accept only an exact requested song identity. */
     public static String extractTitle(Object response, String catalogId) {
+        TrackInfo track = extractTrack(response, catalogId);
+        return track == null ? null : track.title;
+    }
+
+    public static TrackInfo extractTrack(Object response, String catalogId) {
         String id = normalizeId(catalogId);
         if (id.isEmpty() || response == null) return null;
-        String title = null;
+        TrackInfo track = null;
         boolean matched = false;
         for (Object entity : values(member(response, "getData", "data"))) {
             Object entityId = member(entity, "getId", "id");
@@ -607,14 +636,9 @@ public final class CatalogTitleResolver {
                     || !isSong(entity)) continue;
             if (matched) return null;
             matched = true;
-            Object attributes = member(entity, "getAttributes", "attributes");
-            Object value = member(attributes, "getName", "name");
-            if (value instanceof String) {
-                String text = ((String) value).trim();
-                if (!text.isEmpty()) title = text;
-            }
+            track = extractSongTrack(entity);
         }
-        return ChineseConverter.toSimplified(title);
+        return track;
     }
 
     public static Map<String, TrackInfo> extractTracks(Object response) {
@@ -627,8 +651,8 @@ public final class CatalogTitleResolver {
             String id = normalizeId((String) entityId);
             if (id.isEmpty()) continue;
             Object attributes = member(entity, "getAttributes", "attributes");
-            Object value = member(attributes, "getName", "name");
-            Object artistValue = member(attributes, "getArtistName", "artistName");
+            Object value = rawAttribute(attributes, "name");
+            Object artistValue = rawAttribute(attributes, "artistName");
             String title = (value instanceof String) ? ((String) value).trim() : "";
             String artist = (artistValue instanceof String) ? ((String) artistValue).trim() : "";
             if (!title.isEmpty() || !artist.isEmpty()) {
@@ -665,8 +689,8 @@ public final class CatalogTitleResolver {
         return result;
     }
 
-    private static String extractIsrcTitle(Object response, String isrc) {
-        String title = null;
+    private static TrackInfo extractIsrcTrack(Object response, String isrc) {
+        TrackInfo track = null;
         boolean matched = false;
         for (Object entity : values(member(response, "getData", "data"))) {
             Object entityId = member(entity, "getId", "id");
@@ -676,12 +700,19 @@ public final class CatalogTitleResolver {
             if (!isrc.equals(normalizeIsrc(member(attributes, "getIsrc", "isrc")))) continue;
             if (matched) return null;
             matched = true;
-            Object name = member(attributes, "getName", "name");
-            if (name instanceof String && !((String) name).trim().isEmpty()) {
-                title = ((String) name).trim();
-            }
+            track = extractSongTrack(entity);
         }
-        return ChineseConverter.toSimplified(title);
+        return track;
+    }
+
+    private static TrackInfo extractSongTrack(Object entity) {
+        Object attributes = member(entity, "getAttributes", "attributes");
+        Object name = rawAttribute(attributes, "name");
+        if (!(name instanceof String) || ((String) name).trim().isEmpty()) return null;
+        Object artist = rawAttribute(attributes, "artistName");
+        String artistName = artist instanceof String ? ((String) artist).trim() : "";
+        return new TrackInfo(ChineseConverter.toSimplified(((String) name).trim()),
+                ChineseConverter.toSimplified(artistName));
     }
 
     private static String normalizeIsrc(Object candidate) {
@@ -724,6 +755,24 @@ public final class CatalogTitleResolver {
         }
     }
 
+    /** Display getters are hooked and may replace/write cached text into Catalog attributes. */
+    private static Object rawAttribute(Object attributes, String key) {
+        if (attributes == null) return null;
+        if (attributes instanceof Map) return ((Map<?, ?>) attributes).get(key);
+        for (Class<?> type = attributes.getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                Field field = type.getDeclaredField(key);
+                if (Modifier.isStatic(field.getModifiers())) return null;
+                field.setAccessible(true);
+                return field.get(attributes);
+            } catch (NoSuchFieldException ignored) {
+            } catch (ReflectiveOperationException | SecurityException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
     private static String normalizeId(String candidate) {
         String value = candidate == null ? "" : candidate.trim();
         int first = -1;
@@ -747,10 +796,10 @@ public final class CatalogTitleResolver {
     }
 
     private static final class Once implements Chain {
-        private final Callback callback;
+        private final TrackCallback callback;
         private final AtomicBoolean done = new AtomicBoolean();
         private final long deadlineNanos = System.nanoTime() + QUERY_LIFETIME_NANOS;
-        Once(Callback callback) { this.callback = callback; }
+        Once(TrackCallback callback) { this.callback = callback; }
         public boolean active() {
             if (done.get()) return false;
             if (System.nanoTime() - deadlineNanos < 0L) return true;
@@ -758,11 +807,11 @@ public final class CatalogTitleResolver {
             return false;
         }
         public long deadlineNanos() { return deadlineNanos; }
-        void success(String title) {
+        void success(TrackInfo track) {
             if (!active()) return;
             if (done.compareAndSet(false, true)) {
                 finishChain(this);
-                callback.onTitle(title);
+                callback.onTrack(track);
             }
         }
         public void failure(Throwable error) {

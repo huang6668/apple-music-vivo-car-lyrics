@@ -32,16 +32,14 @@ public final class TitleCacheStore {
     private static final class Entry {
         final String title;
         final String artist;
+        final boolean artistResolved;
         final long writtenAt;
 
-        Entry(String title, String artist, long writtenAt) {
+        Entry(String title, String artist, boolean artistResolved, long writtenAt) {
             this.title = title == null ? "" : title;
             this.artist = artist == null ? "" : artist;
+            this.artistResolved = artistResolved;
             this.writtenAt = writtenAt;
-        }
-
-        Entry(String title, long writtenAt) {
-            this(title, "", writtenAt);
         }
     }
 
@@ -95,7 +93,7 @@ public final class TitleCacheStore {
             entries.remove(id);
             return null;
         }
-        return new TitleCorrectionState.TrackInfo(entry.title, entry.artist);
+        return trackInfo(entry);
     }
 
     public synchronized Map<String, String> getAll(Collection<String> catalogIds) {
@@ -130,36 +128,26 @@ public final class TitleCacheStore {
                 entries.remove(id);
                 continue;
             }
-            result.put(id, new TitleCorrectionState.TrackInfo(entry.title, entry.artist));
+            result.put(id, trackInfo(entry));
         }
         return Collections.unmodifiableMap(result);
     }
 
     /** Rejects invalid results; valid titles remain in memory even if the disk write fails. */
     public synchronized boolean put(String catalogId, String title) {
-        String id = catalogId(catalogId);
-        String normalizedTitle = title == null ? "" : title.trim();
-        if (id.isEmpty() || normalizedTitle.isEmpty()
-                || normalizedTitle.length() > MAX_TITLE_LENGTH) {
-            return false;
-        }
-        String artist = "";
-        int tab = normalizedTitle.indexOf('\t');
-        if (tab >= 0) {
-            artist = normalizedTitle.substring(tab + 1).trim();
-            normalizedTitle = normalizedTitle.substring(0, tab).trim();
-        }
-        long now = clock.now();
-        prune(now);
-        entries.put(id, new Entry(normalizedTitle, artist, now));
-        trim();
-        return persist();
+        TitleCorrectionState.TrackInfo info = legacyTrack(title);
+        return !info.title.isEmpty() && putTrack(catalogId, info);
     }
 
     public synchronized boolean putTrack(String catalogId, String title, String artist) {
+        return putTrack(catalogId, new TitleCorrectionState.TrackInfo(title, artist));
+    }
+
+    public synchronized boolean putTrack(String catalogId, TitleCorrectionState.TrackInfo info) {
+        if (info == null) return false;
         String id = catalogId(catalogId);
-        String normalizedTitle = title == null ? "" : title.trim();
-        String normalizedArtist = artist == null ? "" : artist.trim();
+        String normalizedTitle = info.title.trim();
+        String normalizedArtist = info.artist.trim();
         if (id.isEmpty() || (normalizedTitle.isEmpty() && normalizedArtist.isEmpty())
                 || normalizedTitle.length() > MAX_TITLE_LENGTH
                 || normalizedArtist.length() > MAX_TITLE_LENGTH) {
@@ -167,7 +155,7 @@ public final class TitleCacheStore {
         }
         long now = clock.now();
         prune(now);
-        entries.put(id, new Entry(normalizedTitle, normalizedArtist, now));
+        entries.put(id, new Entry(normalizedTitle, normalizedArtist, info.artistResolved, now));
         trim();
         return persist();
     }
@@ -179,17 +167,12 @@ public final class TitleCacheStore {
         boolean any = false;
         for (Map.Entry<String, String> item : titles.entrySet()) {
             String id = catalogId(item.getKey());
-            String title = item.getValue() == null ? "" : item.getValue().trim();
-            if (id.isEmpty() || title.isEmpty() || title.length() > MAX_TITLE_LENGTH) {
+            TitleCorrectionState.TrackInfo info = legacyTrack(item.getValue());
+            if (id.isEmpty() || info.title.isEmpty() || info.title.length() > MAX_TITLE_LENGTH
+                    || info.artist.length() > MAX_TITLE_LENGTH) {
                 continue;
             }
-            String artist = "";
-            int tab = title.indexOf('\t');
-            if (tab >= 0) {
-                artist = title.substring(tab + 1).trim();
-                title = title.substring(0, tab).trim();
-            }
-            entries.put(id, new Entry(title, artist, now));
+            entries.put(id, new Entry(info.title, info.artist, info.artistResolved, now));
             any = true;
         }
         if (!any) return false;
@@ -212,7 +195,7 @@ public final class TitleCacheStore {
                     || title.length() > MAX_TITLE_LENGTH || artist.length() > MAX_TITLE_LENGTH) {
                 continue;
             }
-            entries.put(id, new Entry(title, artist, now));
+            entries.put(id, new Entry(title, artist, info.artistResolved, now));
             any = true;
         }
         if (!any) return false;
@@ -239,18 +222,24 @@ public final class TitleCacheStore {
             for (int index = 0; index < count; index++) {
                 String prefix = "entry." + index + ".";
                 String id = catalogId(properties.getProperty(prefix + "id"));
-                String title = properties.getProperty(prefix + "title", "").trim();
+                String rawTitle = properties.getProperty(prefix + "title", "");
+                String title = rawTitle.trim();
                 String artist = properties.getProperty(prefix + "artist", "").trim();
-                if (artist.isEmpty() && title.contains("\t")) {
-                    int tab = title.indexOf('\t');
-                    artist = title.substring(tab + 1).trim();
-                    title = title.substring(0, tab).trim();
+                String resolved = properties.getProperty(prefix + "artistResolved");
+                boolean legacyComposite = resolved == null && rawTitle.indexOf('\t') >= 0;
+                if (artist.isEmpty() && legacyComposite) {
+                    TitleCorrectionState.TrackInfo legacy = legacyTrack(rawTitle);
+                    title = legacy.title;
+                    artist = legacy.artist;
                 }
-                if (id.isEmpty() || title.isEmpty() || title.length() > MAX_TITLE_LENGTH) {
+                if (id.isEmpty() || (title.isEmpty() && artist.isEmpty())
+                        || title.length() > MAX_TITLE_LENGTH || artist.length() > MAX_TITLE_LENGTH) {
                     continue;
                 }
+                boolean artistResolved = resolved == null
+                        ? legacyComposite || !artist.isEmpty() : "true".equals(resolved);
                 try {
-                    Entry entry = new Entry(title, artist,
+                    Entry entry = new Entry(title, artist, artistResolved,
                             Long.parseLong(properties.getProperty(prefix + "writtenAt", "")));
                     if (fresh(entry, now)) entries.put(id, entry);
                 } catch (NumberFormatException ignored) {
@@ -281,6 +270,8 @@ public final class TitleCacheStore {
                 if (!item.getValue().artist.isEmpty()) {
                     properties.setProperty(prefix + "artist", item.getValue().artist);
                 }
+                properties.setProperty(prefix + "artistResolved",
+                        Boolean.toString(item.getValue().artistResolved));
                 properties.setProperty(prefix + "writtenAt",
                         Long.toString(item.getValue().writtenAt));
             }
@@ -323,5 +314,17 @@ public final class TitleCacheStore {
     private static String catalogId(String value) {
         String id = TitleCorrectionState.normalizeCatalogId(value);
         return id.length() <= 64 ? id : "";
+    }
+
+    private static TitleCorrectionState.TrackInfo trackInfo(Entry entry) {
+        return new TitleCorrectionState.TrackInfo(entry.title, entry.artist, entry.artistResolved);
+    }
+
+    private static TitleCorrectionState.TrackInfo legacyTrack(String value) {
+        if (value == null) return new TitleCorrectionState.TrackInfo("", "", false);
+        int tab = value.indexOf('\t');
+        return tab < 0 ? new TitleCorrectionState.TrackInfo(value.trim(), "", false)
+                : new TitleCorrectionState.TrackInfo(
+                        value.substring(0, tab).trim(), value.substring(tab + 1).trim(), true);
     }
 }
