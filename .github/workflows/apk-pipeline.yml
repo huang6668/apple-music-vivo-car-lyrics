@@ -284,7 +284,7 @@ jobs:
             fi
           done
           for root in work/apktool/smali*; do
-            for relative in w9/Q.smali w9/a.smali z3/x.smali z3/v.smali; do
+            for relative in w9/Q.smali w9/a.smali z3/y.smali z3/w.smali; do
               [[ ! -f "$root/$relative" ]] || printf '%s\n' "$root/$relative" \
                 >> "$report/title-correction-paths.txt"
             done
@@ -317,19 +317,29 @@ jobs:
           # Export full generated binders and coroutine/notification implementations:
           # obfuscated calls often no longer contain the searchable source method name.
           for root in work/apktool/smali*; do
-            for package in q8 J4 w9 x9 y9 kk fi gi bi kotlin/coroutines; do
+            for package in q8 J4 w9 x9 y9 kk fi gi bi kotlin/coroutines \
+              com/apple/android/music/player; do
               [[ ! -d "$root/$package" ]] || find "$root/$package" -type f \
                 >> "$report/focused-paths.txt"
             done
             for relative in \
               com/apple/android/music/model/BaseContentItem.smali \
+              com/apple/android/music/model/BaseCollectionItemView.smali \
               com/apple/android/music/model/BasePlaybackItem.smali \
               com/apple/android/music/model/CollectionItemView.smali \
+              com/apple/android/music/model/PlaybackItem.smali \
+              com/apple/android/music/model/Song.smali \
+              com/apple/android/music/mediaapi/models/Song.smali \
+              com/apple/android/music/ui/playlist/PlaylistPageController.smali \
+              com/apple/android/music/ui/album/AlbumPageController.smali \
               com/apple/android/music/playback/model/PlayerQueueItem.smali \
               com/apple/android/music/playback/model/PlayerMediaItem.smali; do
               [[ ! -f "$root/$relative" ]] || printf '%s\n' "$root/$relative" \
                 >> "$report/focused-paths.txt"
             done
+            find "$root/com/apple/android/music" -type f \
+              \( -name 'PlaylistPageController.smali' -o -name 'AlbumPageController.smali' \) \
+              >> "$report/focused-paths.txt"
           done
 
           LC_ALL=C sort -u "$report/focused-paths.txt" -o "$report/focused-paths.txt"
