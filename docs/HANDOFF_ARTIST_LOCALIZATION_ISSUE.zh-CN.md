@@ -122,6 +122,9 @@
 
 ## 5. 常用验证与构建指令
 
+> 以下命令为 1607 时期的历史记录（`py -3`、直接推 main 等做法已不适用）。
+> AM++ 路线已于 2026-10-13 废弃，workflow 不再有 `embed_ampp` / `standalone_module` 输入。
+
 ```bash
 # 1. 本地代码契约检查
 py -3 cloud-patch/tests/verify_source_contract.py
@@ -136,7 +139,5 @@ git push origin main:feat/full-surface-title-correction
 
 # 3. 触发 GitHub Actions 打包流水线
 gh workflow run apk-pipeline.yml --ref feat/full-surface-title-correction \
-  -f rebuild=true \
-  -f embed_ampp=false \
-  -f standalone_module=false
+  -f rebuild=true
 ```

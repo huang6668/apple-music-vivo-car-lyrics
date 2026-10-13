@@ -19,6 +19,10 @@ public final class ChineseConverterTest {
         equal("Jay Chou", ChineseConverter.toSimplified("Jay Chou"));
         equal("我怎么哭了", ChineseConverter.toSimplified("我怎么哭了"));
         equal("晴天", ChineseConverter.toSimplified("晴天"));
+        for (String unchanged : new String[]{"Cheers!", "晴天", "稻香 (周杰伦)", "\ud83c\udfb5 にほんご"}) {
+            check(ChineseConverter.toSimplified(unchanged) == unchanged,
+                    "unchanged text returns the same instance");
+        }
     }
 
     private static void testTraditionalToSimplified() {
@@ -39,6 +43,7 @@ public final class ChineseConverterTest {
         String simp1 = ChineseConverter.toSimplified(trad);
         String simp2 = ChineseConverter.toSimplified(simp1);
         equal(simp1, simp2);
+        check(simp1 != trad && simp2 == simp1, "only the first pass allocates");
     }
 
     private static void equal(String expected, String actual) {

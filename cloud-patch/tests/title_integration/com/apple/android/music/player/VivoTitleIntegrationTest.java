@@ -161,7 +161,7 @@ public final class VivoTitleIntegrationTest {
         fixture.settleDirectly("UI corrected");
         call("applyTitleCorrectionFromState", state().snapshot());
         equal(1, binding.rebinds);
-        check(binding.item == fixture.item, "same bound item supplied to r0");
+        check(binding.item == fixture.item, "same bound item supplied to q0");
         equal("UI corrected", binding.title);
         equal("UI corrected", VivoCarLyrics.correctPlayerTitle(binding, fixture.item, stock));
         equal("Stale", VivoCarLyrics.correctPlayerTitle(new Binding(), wrongQueue, "Stale"));
@@ -1002,7 +1002,7 @@ public final class VivoTitleIntegrationTest {
         Object item;
         CharSequence title;
         CharSequence artist;
-        public void r0(Object value) {
+        public void q0(Object value) {
             rebinds++;
             item = value;
             title = VivoCarLyrics.correctPlayerTitle(this, value,

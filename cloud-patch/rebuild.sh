@@ -79,7 +79,7 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/CatalogTitleResolver' \
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
-  'vivo-car-cn-track-r44-1609-2026-10-12' \
+  'vivo-car-cn-track-r45-1609-2026-10-13' \
   'correctPlayerTitle' \
   'correctPlayerArtist' \
   'resolveItemTitle' \
@@ -239,7 +239,8 @@ app = root.find("./application")
 if app is not None:
     for meta in app.findall("meta-data"):
         m_name = meta.get(name_attr, "")
-        if "split" in m_name.lower():
+        # Same exact list as apply.sh.
+        if m_name in ("com.android.vending.splits.required", "com.android.vending.splits"):
             raise SystemExit("Final manifest still contains split meta-data: %s" % m_name)
 PY
 printf '%s\n' "$ATOMIC_SERVICE_ACTION" > out/report/verified-atomic-player-action.txt
@@ -278,6 +279,8 @@ python3 "$PATCH_ROOT/patch_catalog_region.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-catalog-region-hook.txt
 python3 "$PATCH_ROOT/patch_item_title.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-item-title-hook.txt
+python3 "$PATCH_ROOT/verify_reflection_names.py" "$FINAL_MANIFEST_DIR" \
+  > out/report/verified-reflection-names.txt
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/d0.smali' -print -quit)" \

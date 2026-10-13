@@ -29,20 +29,20 @@ public final class ChineseConverter {
 
     private ChineseConverter() {}
 
+    /** Returns the same instance, without allocating, when nothing needs converting. */
     public static String toSimplified(String text) {
         if (text == null || text.isEmpty()) return text;
-        char[] chars = text.toCharArray();
-        boolean changed = false;
-        for (int i = 0; i < chars.length; i++) {
-            char c = chars[i];
+        char[] chars = null;
+        for (int i = 0, length = text.length(); i < length; i++) {
+            char c = text.charAt(i);
             if ((c >= 0x3400 && c <= 0x4DBF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF)) {
                 int idx = Arrays.binarySearch(TRAD, c);
                 if (idx >= 0) {
+                    if (chars == null) chars = text.toCharArray();
                     chars[i] = SIMP[idx];
-                    changed = true;
                 }
             }
         }
-        return changed ? new String(chars) : text;
+        return chars == null ? text : new String(chars);
     }
 }

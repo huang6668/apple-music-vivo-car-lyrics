@@ -23,10 +23,13 @@ atomic_service_action='com.vivo.musicwidgetmix.support.service'
 [[ -f "$lyrics_verifier" ]] || { echo "Lyrics hook verifier missing: $lyrics_verifier" >&2; exit 1; }
 item_title_patcher="$patch_root/patch_item_title.py"
 [[ -f "$item_title_patcher" ]] || { echo "Item title patcher missing: $item_title_patcher" >&2; exit 1; }
+reflection_verifier="$patch_root/verify_reflection_names.py"
+[[ -f "$reflection_verifier" ]] || { echo "Reflection name verifier missing: $reflection_verifier" >&2; exit 1; }
 
 python3 "$title_verifier" work/apktool --unpatched
 python3 "$lyrics_verifier" work/apktool --unpatched
 python3 "$item_title_patcher" work/apktool --unpatched
+python3 "$patch_root/verify_reflection_names.py" work/apktool --preflight
 echo "Applying vivo car and Atomic Player lyrics hooks"
 patch --batch --forward --fuzz=0 --strip=1 --directory=work/apktool < "$patch_file"
 python3 "$title_verifier" work/apktool
@@ -90,14 +93,21 @@ for attr in split_attrs:
         del root.attrib[attr]
         manifest_modified = True
 
-# Remove split meta-data from <application> (e.g. com.android.vending.splits.required)
+# Remove only the Play split-delivery meta-data. Keep this list identical to rebuild.sh;
+# unrelated meta-data whose name merely contains "split" must survive.
+split_meta_names = (
+    "com.android.vending.splits.required",
+    "com.android.vending.splits",
+)
 app = root.find("./application")
 if app is not None:
     for meta in list(app.findall("meta-data")):
         m_name = meta.get(name_attr, "")
-        if m_name in ("com.android.vending.splits.required", "com.android.vending.splits") or "split" in m_name.lower():
+        if m_name in split_meta_names:
             app.remove(meta)
             manifest_modified = True
+        elif "split" in m_name.lower():
+            print("Keeping non-delivery meta-data that mentions split: %s" % m_name)
 
 existing = [action for action in root.findall(".//action")
             if action.get(name_attr) == action_name]
@@ -145,12 +155,13 @@ PY
 
 mkdir -p out/report
 sha256sum "$patch_file" "$helper_source" "$paginator_source" "$title_verifier" "$lyrics_verifier" \
-  "$item_title_patcher" \
+  "$item_title_patcher" "$reflection_verifier" \
   "$patch_root/patch_catalog_region.py" \
   "$patch_root/java/com/apple/android/music/player/TitleCorrectionState.java" \
   "$patch_root/java/com/apple/android/music/player/TitleCacheStore.java" \
   "$patch_root/java/com/apple/android/music/player/CatalogQueryMethod.java" \
   "$patch_root/java/com/apple/android/music/player/CatalogTitleResolver.java" \
+  "$patch_root/java/com/apple/android/music/player/ChineseConverter.java" \
   > out/report/vivo-car-lyrics-patch-sha256.txt
 printf '%s\n' "$atomic_service_action" > out/report/atomic-player-service-action.txt
 echo "Vivo car lyrics hooks applied"

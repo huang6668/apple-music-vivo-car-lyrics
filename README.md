@@ -13,8 +13,8 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see `docs/KNOWN_ISSUES.zh-CN.md`).
 - Instrument-cluster (`ucar.media.metadata.*`) publishing was removed in r37; `ClusterLyricsPaginator` is kept compiled but unused.
 - Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Head-unit lyrics, Atomic Player lyrics and the Atomic progress bar are all confirmed working in the car (2026-09-04); r38 is the frozen baseline for future ports.
-- The default phone build uses `embed_ampp=false`, with no AM++ or NPatch dependency. The current port targets Apple Music 7.0.0-beta 1609 and corrects both title and artist display, with mainland-first StoreFront fallback (`cn` -> `tw` -> `hk`) and Simplified Chinese conversion. Its bounded persistent cache is isolated as `cn_v1`; ordinary account, playback, and lyrics requests remain untouched. Build #155's device validation applied to the previous 1607 title port, not this artist fix. See [1609 artist fix and verification](docs/ARTIST_LOCALIZATION_1609.zh-CN.md).
-- `embed_ampp=true` remains a historical experiment. AM++ 1.6.4 lacks a 1607 host profile; bypassing its feature/version gates does not repair that missing mapping.
+- The build is self-contained: title/artist correction lives in the helper DEX and needs no Xposed-style module or wrapper shell. The current port targets Apple Music 7.0.0-beta 1609 and corrects both title and artist display, with mainland-first StoreFront fallback (`cn` -> `tw` -> `hk`) and Simplified Chinese conversion. Its bounded persistent cache is isolated as `cn_v1`; ordinary account, playback, and lyrics requests remain untouched. Build #155's device validation applied to the previous 1607 title port, not this artist fix. See [1609 artist fix and verification](docs/ARTIST_LOCALIZATION_1609.zh-CN.md).
+- The AM++ / NPatch route was abandoned on 2026-10-13; its scripts, workflow inputs and artifacts were removed.
 
 ## KuWo bridge prototype
 
@@ -50,7 +50,7 @@ third-party proxy session must be verified on the target vehicle.
 1. The original APKM is unzipped locally into `payload.tar` (`input/splits/base.apk` and `split_config.*.apk`), then stored as `payload.tar.part.*`; GitHub Actions merges the splits with APKEditor.
 2. Run **Actions -> APK analysis and rebuild** with `rebuild=false` and review the `apk-results-<run>-report` artifact.
 3. Run again with `rebuild=true` once `cloud-patch/` is ready; a successful run publishes Release `v1.0.0-build-<run>`.
-4. For the phone build, use `embed_ampp=false` and `standalone_module=false`, verify the normal APK's checksum and pinned signature, then update with `adb install -r`. The optional AM++ artifact is not required.
+4. Verify the APK's checksum and pinned signature, then update with `adb install -r`.
 5. **Actions -> Decompile vivo APK** decompiles a vivo-side APK stored as a GitHub Release (`atomic-apk-6.2.5.6` for Atomic Player, `carnetworking-apk-6.0.8.3` for the car app) when the vivo side needs to be inspected.
 
 All workflows are `workflow_dispatch` only and must exist on `main` to be triggered by name.

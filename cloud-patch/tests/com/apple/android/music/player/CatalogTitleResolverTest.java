@@ -132,11 +132,15 @@ public final class CatalogTitleResolverTest {
         }
     }
 
-    static final class Recorder implements CatalogTitleResolver.Callback {
+    /** Title-only view of a track result. */
+    static final class Recorder implements CatalogTitleResolver.TrackCallback {
         int calls;
         String title;
         Throwable error;
-        public void onTitle(String value) { calls++; title = value; }
+        public void onTrack(CatalogTitleResolver.TrackInfo value) {
+            calls++;
+            title = value == null ? null : value.title;
+        }
         public void onError(Throwable value) { calls++; error = value; }
     }
 
@@ -152,7 +156,12 @@ public final class CatalogTitleResolverTest {
         int calls;
         Map<String, CatalogTitleResolver.TrackInfo> tracks;
         Throwable error;
+        Boolean complete;
         public void onTracks(Map<String, CatalogTitleResolver.TrackInfo> value) { calls++; tracks = value; }
+        public void onTracks(Map<String, CatalogTitleResolver.TrackInfo> value, boolean finished) {
+            complete = Boolean.valueOf(finished);
+            onTracks(value);
+        }
         public void onError(Throwable value) { calls++; error = value; }
     }
 
@@ -172,6 +181,9 @@ public final class CatalogTitleResolverTest {
         testTrackLocalizationFailsClosed();
         testSharedDeadline();
         testTrackLateArtist();
+        testBatchRegionalFallback();
+        testBatchCompleteness();
+        testRegionalFallbackSkipsMainland();
         check(CatalogTitleResolver.emptyContext(fi.e.class) == fi.f.a,
                 "obfuscated empty context singleton");
         try {
@@ -180,6 +192,148 @@ public final class CatalogTitleResolverTest {
         } catch (ClassNotFoundException expected) {
         }
         System.out.println("CatalogTitleResolver tests passed");
+    }
+
+    /** Replays one scripted response per stage and records the storefront each stage was sent to. */
+    public static final class RegionalCatalog {
+        final Object[] responses;
+        final java.util.List<String> storefronts = new java.util.ArrayList<String>();
+        final java.util.List<String> ids = new java.util.ArrayList<String>();
+        final java.util.List<LinkedHashMap<String, String>> headers =
+                new java.util.ArrayList<LinkedHashMap<String, String>>();
+        RegionalCatalog(Object... responses) { this.responses = responses; }
+        public Object F(String path, Map<?, ?> parameters, Continuation continuation) {
+            equal("songs", path);
+            int step = storefronts.size();
+            LinkedHashMap<String, Object> fresh = new LinkedHashMap<String, Object>();
+            for (Map.Entry<?, ?> entry : parameters.entrySet()) {
+                fresh.put((String) entry.getKey(), entry.getValue());
+            }
+            fresh.put("l", "en-US");
+            LinkedHashMap<String, String> sent = new LinkedHashMap<String, String>();
+            sent.put("X-Apple-Store-Front", "143441-1,29");
+            String localized = CatalogTitleResolver.correctCatalogRequest(
+                    "/v1/catalog/us/songs", sent, fresh);
+            String storefront = localized.substring("/v1/catalog/".length(),
+                    localized.length() - "/songs".length());
+            equal(parameters.get("l"), fresh.get("l"));
+            storefronts.add(storefront);
+            ids.add((String) parameters.get("ids"));
+            headers.add(sent);
+            Object response = responses[step];
+            if (response instanceof RuntimeException) throw (RuntimeException) response;
+            return response;
+        }
+    }
+
+    private static Object song(String id, String name, String artist) {
+        return map("id", id, "type", "songs",
+                "attributes", map("name", name, "artistName", artist));
+    }
+
+    private static void testBatchRegionalFallback() {
+        RegionalCatalog catalog = new RegionalCatalog(
+                map("data", Arrays.asList(song("1", "Mainland", "CN artist"))),
+                map("data", Arrays.asList(song("2", "\u8056\u8a95\u661f", "\u5468\u6770\u502b"))),
+                map("data", Arrays.asList(song("3", "Hong Kong", "HK artist"))));
+        BatchTrackRecorder batch = new BatchTrackRecorder();
+        check(CatalogTitleResolver.batchQueryTracks(catalog, Arrays.asList("1", "2", "3", "4"),
+                "zh-CN", "F", batch), "three-stage batch dispatch");
+        equal(Arrays.asList("cn", "tw", "hk"), catalog.storefronts);
+        equal(Arrays.asList("1,2,3,4", "2,3,4", "3,4"), catalog.ids);
+        equal("143465-1,29", catalog.headers.get(0).get("X-Apple-Store-Front"));
+        equal("zh-Hans", catalog.headers.get(0).get("Accept-Language"));
+        equal("143470-1,29", catalog.headers.get(1).get("X-Apple-Store-Front"));
+        equal("zh-Hant-TW", catalog.headers.get(1).get("Accept-Language"));
+        equal("143463-1,29", catalog.headers.get(2).get("X-Apple-Store-Front"));
+        equal("zh-Hant-HK", catalog.headers.get(2).get("Accept-Language"));
+        equal(1, batch.calls);
+        equal(null, batch.error);
+        equal(Boolean.TRUE, batch.complete);
+        equal(3, batch.tracks.size());
+        trackEquals("Mainland", "CN artist", batch.tracks.get("1"));
+        trackEquals("\u5723\u8bde\u661f", "\u5468\u6770\u4f26", batch.tracks.get("2"));
+        trackEquals("Hong Kong", "HK artist", batch.tracks.get("3"));
+        check(!batch.tracks.containsKey("4"), "an ID missing everywhere stays a miss");
+    }
+
+    private static void testBatchCompleteness() {
+        Object mainland = map("data", Arrays.asList(song("1", "Mainland", "CN artist")));
+        Object denied = map("errors", Arrays.asList(map("status", 403)));
+        Object missing = map("errors", Arrays.asList(map("status", 404)));
+        for (Object failure : new Object[]{denied, new RuntimeException("tw transport failed")}) {
+            RegionalCatalog catalog = new RegionalCatalog(mainland, failure);
+            BatchTrackRecorder batch = new BatchTrackRecorder();
+            CatalogTitleResolver.batchQueryTracks(catalog, Arrays.asList("1", "2"),
+                    "zh-CN", "F", batch);
+            equal(Arrays.asList("cn", "tw"), catalog.storefronts);
+            equal(1, batch.calls);
+            equal(null, batch.error);
+            equal(Boolean.FALSE, batch.complete);
+            equal(1, batch.tracks.size());
+            trackEquals("Mainland", "CN artist", batch.tracks.get("1"));
+        }
+
+        RegionalCatalog hongKong = new RegionalCatalog(mainland, missing, denied);
+        BatchTrackRecorder batch = new BatchTrackRecorder();
+        CatalogTitleResolver.batchQueryTracks(hongKong, Arrays.asList("1", "2"), "zh-CN", "F", batch);
+        equal(Arrays.asList("cn", "tw", "hk"), hongKong.storefronts);
+        equal(Boolean.FALSE, batch.complete);
+        equal(1, batch.tracks.size());
+
+        RegionalCatalog absent = new RegionalCatalog(mainland, missing, new Response());
+        batch = new BatchTrackRecorder();
+        CatalogTitleResolver.batchQueryTracks(absent, Arrays.asList("1", "2"), "zh-CN", "F", batch);
+        equal(Arrays.asList("cn", "tw", "hk"), absent.storefronts);
+        equal(Boolean.TRUE, batch.complete);
+        equal(1, batch.tracks.size());
+
+        RegionalCatalog mainlandDenied = new RegionalCatalog(denied);
+        batch = new BatchTrackRecorder();
+        CatalogTitleResolver.batchQueryTracks(mainlandDenied, Arrays.asList("1"), "zh-CN", "F", batch);
+        equal(1, batch.calls);
+        equal(null, batch.tracks);
+        equal(null, batch.complete);
+        check(batch.error instanceof IllegalStateException, "mainland failure is an error, not a miss");
+    }
+
+    private static void testRegionalFallbackSkipsMainland() {
+        java.util.concurrent.Executor direct = new java.util.concurrent.Executor() {
+            public void execute(Runnable task) { task.run(); }
+        };
+        RegionalCatalog catalog = new RegionalCatalog(
+                new Response(), map("data", Arrays.asList(song("7", "Hong Kong", "HK artist"))));
+        BatchTrackRecorder batch = new BatchTrackRecorder();
+        check(CatalogTitleResolver.regionalFallbackTracks(catalog, Arrays.asList("007"),
+                "zh-CN", "F", batch, direct), "regional fallback dispatch");
+        equal(Arrays.asList("tw", "hk"), catalog.storefronts);
+        equal(Arrays.asList("7", "7"), catalog.ids);
+        equal(1, batch.calls);
+        equal(Boolean.TRUE, batch.complete);
+        trackEquals("Hong Kong", "HK artist", batch.tracks.get("7"));
+
+        catalog = new RegionalCatalog(map("data", Arrays.asList(song("7", "Taiwan", "TW artist"))));
+        batch = new BatchTrackRecorder();
+        CatalogTitleResolver.regionalFallbackTracks(catalog, Arrays.asList("7"), "zh-CN", "F", batch, direct);
+        equal(Arrays.asList("tw"), catalog.storefronts);
+        equal(Boolean.TRUE, batch.complete);
+
+        catalog = new RegionalCatalog(map("errors", Arrays.asList(map("status", 500))));
+        batch = new BatchTrackRecorder();
+        CatalogTitleResolver.regionalFallbackTracks(catalog, Arrays.asList("7"), "zh-CN", "F", batch, direct);
+        equal(Arrays.asList("tw"), catalog.storefronts);
+        equal(1, batch.calls);
+        equal(null, batch.error);
+        equal(Boolean.FALSE, batch.complete);
+        equal(0, batch.tracks.size());
+
+        check(!CatalogTitleResolver.regionalFallbackTracks(catalog, Arrays.asList("7"),
+                "zh-CN", "F", null, direct), "null fallback callback declines dispatch");
+        batch = new BatchTrackRecorder();
+        check(!CatalogTitleResolver.regionalFallbackTracks(catalog, Arrays.asList("i.7"),
+                "zh-CN", "F", batch, direct), "library IDs are never sent to a storefront");
+        equal(1, batch.calls);
+        check(batch.error instanceof IllegalArgumentException, "invalid fallback IDs fail");
     }
 
     private static void testMissingLocalizationFailsClosed() {
@@ -240,7 +394,7 @@ public final class CatalogTitleResolverTest {
                 map("errors", Arrays.asList(map("status", 404)))}) {
             ScriptedCatalog catalog = new ScriptedCatalog(miss, identity, regional);
             Recorder result = new Recorder();
-            check(CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result),
+            check(CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result),
                     "ISRC fallback dispatch");
             equal(1, result.calls);
             equal("Mainland result", result.title);
@@ -268,7 +422,7 @@ public final class CatalogTitleResolverTest {
                                 "attributes", map("name", "Two", "isrc", isrc))))}) {
             ScriptedCatalog catalog = new ScriptedCatalog(new Response(), identity, invalidRegional);
             Recorder result = new Recorder();
-            CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result);
+            CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result);
             equal(1, result.calls);
             equal(null, result.error);
             equal(null, result.title);
@@ -281,7 +435,7 @@ public final class CatalogTitleResolverTest {
                         "attributes", map("isrc", "invalid"))))}) {
             ScriptedCatalog catalog = new ScriptedCatalog(new Response(), invalidIdentity);
             Recorder result = new Recorder();
-            CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result);
+            CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result);
             equal(2, catalog.calls.size());
             equal(null, result.title);
             equal(null, result.error);
@@ -290,7 +444,7 @@ public final class CatalogTitleResolverTest {
         ScriptedCatalog failure = new ScriptedCatalog(new Response(), identity,
                 map("errors", Arrays.asList(map("status", 403))));
         Recorder failed = new Recorder();
-        CatalogTitleResolver.query(failure, "123", "zh-CN", "F", failed);
+        CatalogTitleResolver.queryTrack(failure, "123", "zh-CN", "F", failed);
         equal(1, failed.calls);
         check(failed.error instanceof IllegalStateException, "regional auth error not cached as miss");
 
@@ -301,7 +455,7 @@ public final class CatalogTitleResolverTest {
         ScriptedCatalog async = new ScriptedCatalog();
         async.suspended = true;
         Recorder result = new Recorder();
-        CatalogTitleResolver.query(async, "123", "zh-CN", "F", result, hostExecutor);
+        CatalogTitleResolver.queryTrack(async, "123", "zh-CN", "F", result, hostExecutor);
         equal(0, async.calls.size());
         tasks.remove(0).run();
         Continuation first = async.pending;
@@ -444,7 +598,7 @@ public final class CatalogTitleResolverTest {
             ScriptedCatalog catalog = new ScriptedCatalog();
             catalog.suspended = true;
             Recorder result = new Recorder();
-            check(CatalogTitleResolver.query(catalog, "123", "zh-CN", "F", result, executor),
+            check(CatalogTitleResolver.queryTrack(catalog, "123", "zh-CN", "F", result, executor),
                     "queued chain accepted");
             Object latest = null;
             for (Object request : pendingRequests().values()) latest = request;
@@ -712,7 +866,7 @@ public final class CatalogTitleResolverTest {
         equal(null, parse(new Response(new Entity("123", "songs", null))));
         equal(null, parse(new Response()));
         equal(null, parse(null));
-        equal(null, CatalogTitleResolver.extractTitle(new Response(wanted), ""));
+        equal(null, CatalogTitleResolver.extractTrack(new Response(wanted), ""));
         Map<String, Object> attributes = map("name", "Mapped");
         Map<String, Object> entity = map("id", "123", "type", "songs", "attributes", attributes);
         equal("Mapped", parse(map("data", Arrays.asList(entity))));
@@ -771,6 +925,7 @@ public final class CatalogTitleResolverTest {
         check(CatalogTitleResolver.batchQueryTracks(catalog, Arrays.asList("123"),
                 "zh-CN", "F", batch), "raw batch metadata dispatch");
         equal(1, batch.calls);
+        equal(Boolean.TRUE, batch.complete);
         equal(null, batch.error);
         trackEquals("\u7a3b\u9999", "\u5468\u6770\u4f26", batch.tracks.get("123"));
         equal(0, direct.displayGetterCalls);
@@ -902,11 +1057,11 @@ public final class CatalogTitleResolverTest {
         equal(1, result.calls);
         equal("Early", result.title);
         result = new Recorder();
-        check(!CatalogTitleResolver.query(null, "123", "zh-Hans-CN", "F", result),
+        check(!CatalogTitleResolver.queryTrack(null, "123", "zh-Hans-CN", "F", result),
                 "missing instance fails");
         equal(1, result.calls);
         result = new Recorder();
-        check(!CatalogTitleResolver.query(new Object(), "123", "zh-Hans-CN", "F", result),
+        check(!CatalogTitleResolver.queryTrack(new Object(), "123", "zh-Hans-CN", "F", result),
                 "missing method fails");
         equal(1, result.calls);
         final Recorder raced = new Recorder();
@@ -933,7 +1088,7 @@ public final class CatalogTitleResolverTest {
     }
 
     private static boolean query(Catalog catalog, Recorder result) {
-        return CatalogTitleResolver.query(catalog, "123", "zh-Hans-CN", "F", result);
+        return CatalogTitleResolver.queryTrack(catalog, "123", "zh-Hans-CN", "F", result);
     }
     private static boolean queryTrack(Catalog catalog, TrackRecorder result) {
         return CatalogTitleResolver.queryTrack(catalog, "123", "zh-Hans-CN", "F", result);
@@ -944,7 +1099,8 @@ public final class CatalogTitleResolverTest {
         equal(artist, track.artist);
     }
     private static String parse(Object response) {
-        return CatalogTitleResolver.extractTitle(response, "123");
+        CatalogTitleResolver.TrackInfo track = CatalogTitleResolver.extractTrack(response, "123");
+        return track == null ? null : track.title;
     }
     private static Map<String, Object> map(Object... pairs) {
         Map<String, Object> result = new LinkedHashMap<String, Object>();

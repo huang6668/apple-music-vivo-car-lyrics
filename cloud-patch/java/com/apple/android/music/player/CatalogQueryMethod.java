@@ -5,12 +5,50 @@ import java.lang.reflect.Modifier;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
-/** Resolves Apple's obfuscated direct catalog query without depending on AM++. */
+/** Resolves Apple's obfuscated direct catalog query, independent of any hook framework. */
 public final class CatalogQueryMethod {
+    private static final Object MISSING = new Object();
+    private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Object>> RESOLVED =
+            new ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Object>>();
+
     private CatalogQueryMethod() {}
 
+    /** Hits and misses are cached per (class, preferredName); a cached miss still throws. */
     public static Method resolve(Class<?> clazz, String preferredName)
+            throws NoSuchMethodException {
+        String key = String.valueOf(preferredName);
+        ConcurrentHashMap<String, Object> byName = RESOLVED.get(clazz);
+        if (byName == null) {
+            RESOLVED.putIfAbsent(clazz, new ConcurrentHashMap<String, Object>());
+            byName = RESOLVED.get(clazz);
+        }
+        Object cached = byName.get(key);
+        if (cached instanceof Method) return (Method) cached;
+        if (cached == MISSING) throw missing(clazz, preferredName);
+        Method method;
+        try {
+            method = lookup(clazz, preferredName);
+        } catch (NoSuchMethodException ambiguous) {
+            byName.put(key, MISSING);
+            throw ambiguous;
+        }
+        if (method == null) {
+            byName.put(key, MISSING);
+            throw missing(clazz, preferredName);
+        }
+        method.setAccessible(true);
+        byName.put(key, method);
+        return method;
+    }
+
+    private static NoSuchMethodException missing(Class<?> clazz, String preferredName) {
+        return new NoSuchMethodException(clazz.getName() + "#" + preferredName
+                + "(String,Map,Continuation)");
+    }
+
+    private static Method lookup(Class<?> clazz, String preferredName)
             throws NoSuchMethodException {
         Method method = find(clazz, preferredName);
         if (method == null) {
@@ -20,13 +58,7 @@ public final class CatalogQueryMethod {
                     : ("w9.Q".equals(name) || "w9.a".equals(name)) ? "F" : null;
             if (renamed != null) method = find(clazz, renamed);
         }
-        if (method == null) method = findUnique(clazz);
-        if (method == null) {
-            throw new NoSuchMethodException(clazz.getName() + "#" + preferredName
-                    + "(String,Map,Continuation)");
-        }
-        method.setAccessible(true);
-        return method;
+        return method == null ? findUnique(clazz) : method;
     }
 
     private static boolean compatible(Method method) {

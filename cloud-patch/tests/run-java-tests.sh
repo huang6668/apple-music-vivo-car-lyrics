@@ -14,7 +14,6 @@ javac --release 8 -d "$classes/unit" \
   cloud-patch/java/com/apple/android/music/player/CatalogQueryMethod.java \
   cloud-patch/java/com/apple/android/music/player/ChineseConverter.java \
   cloud-patch/java/com/apple/android/music/player/CatalogTitleResolver.java \
-  cloud-patch/ampp/java/dev/amenhancer/compat/CatalogQueryMethod.java \
   cloud-patch/tests/com/apple/android/music/player/ClusterLyricsPaginatorTest.java \
   cloud-patch/tests/com/apple/android/music/player/TitleCorrectionStateTest.java \
   cloud-patch/tests/com/apple/android/music/player/TitleCacheStoreTest.java \
@@ -28,8 +27,7 @@ for test in \
   com.apple.android.music.player.TitleCacheStoreTest \
   com.apple.android.music.player.ChineseConverterTest \
   com.apple.android.music.player.CatalogTitleResolverTest \
-  com.apple.android.music.player.StandaloneCatalogQueryMethodTest \
-  CatalogQueryMethodTest; do
+  com.apple.android.music.player.StandaloneCatalogQueryMethodTest; do
   java -cp "$classes/unit" "$test"
 done
 

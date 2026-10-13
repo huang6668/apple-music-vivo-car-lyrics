@@ -19,9 +19,10 @@ class P0ClassesTest(unittest.TestCase):
     def test_catalog_title_resolver_batch_methods(self):
         ctr = (ROOT / 'cloud-patch/java/com/apple/android/music/player/CatalogTitleResolver.java').read_text(encoding='utf-8')
         self.assertIn('batchSongRequest(', ctr)
-        self.assertIn('batchQuery(', ctr)
-        self.assertIn('extractTitles(', ctr)
-        self.assertIn('BatchCallback', ctr)
+        self.assertIn('batchQueryTracks(', ctr)
+        self.assertIn('regionalFallbackTracks(', ctr)
+        self.assertIn('extractTracks(', ctr)
+        self.assertIn('BatchTrackCallback', ctr)
         self.assertIn('BatchOnce', ctr)
 
     def test_title_cache_store_batch_methods(self):

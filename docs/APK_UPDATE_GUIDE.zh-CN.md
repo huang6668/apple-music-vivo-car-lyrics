@@ -7,9 +7,10 @@
 > 该文档汇总了解耦架构、5 大核心注入点、多区回退链（`cn` -> `tw` -> `hk`）与 100% 繁简转换引擎设计。
 
 > 2026-10-11 更新：已完成全界面独立歌名汉化（正在播放、歌单、专辑、资料库列表）、StoreFront 多区级联回退（`cn` -> `tw` -> `hk`）及纯 Java 零堆分配繁简转换引擎（`ChineseConverter.java`）。
-> CI Build #155 已全绿构建成功并完成设备端（Samsung Galaxy Tab S7）部署与运行验证。普通构建 `embed_ampp=false` 完全自包含，不依赖任何第三方插件（AM++ / NPatch / LSPosed）。
+> CI Build #155 已全绿构建成功并完成设备端（Samsung Galaxy Tab S7）部署与运行验证。构建完全自包含，不依赖任何第三方插件。
+> AM++ 路线已于 2026-10-13 废弃，相关脚本、workflow 输入与产物均已删除。
 
-本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：移植车机歌词、原子随身听歌词、进度条和独立标题修正，在 GitHub Actions 构建测试 APK。默认 `embed_ampp=false`，普通 APK 即包含独立实现；AM++ 嵌入仅保留为历史实验。
+本文档是给"拿到新版 Apple Music APKM 的下一个 AI"看的移植手册。目标：移植车机歌词、原子随身听歌词、进度条和独立标题修正，在 GitHub Actions 构建测试 APK。APK 即包含独立实现。
 
 **读本文档时的三条铁律：**
 
@@ -28,7 +29,7 @@
 | C | 重新找出 6 个歌词 Hook、1 个标题 UI Hook 和全部反射目标 | 一张"旧名 → 新名"对照表 |
 | D | 改 `VivoCarLyrics.java` 的反射目标；改 `apple-vivo-car-lyrics.patch`、`apply.sh`、`rebuild.sh` 中的类路径 / 方法签名 / marker | 本地 `python3 cloud-patch/tests/verify_source_contract.py` 通过 |
 | E | 提交、推送（需代理），确认 `HEAD == origin/<branch>` 后先构建普通歌词 APK | Release `v1.0.0-build-N` 含 APK 与 sha256 |
-| F | 检查普通构建的独立标题测试、UI Hook 与通知刷新路径 | `embed_ampp=false`，不依赖 AM++ / NPatch |
+| F | 检查普通构建的独立标题测试、UI Hook 与通知刷新路径 | 单一 APK，无第三方模块依赖 |
 | G | 交给用户实车测试（第 9 节清单），未实测的项目标"待实车验证" | 更新第 13 节变更记录、`docs/KNOWN_ISSUES.zh-CN.md` |
 
 ---
@@ -358,7 +359,7 @@ legacy-bridge-*.txt / session-class-*.txt                Media3 legacy 桥接与
 
 ```bash
 gh workflow run "APK analysis and rebuild" --ref <branch> \
-  -f rebuild=true -f embed_ampp=false -f standalone_module=false
+  -f rebuild=true
 ```
 
 CI 验证源码/patch 契约、Java 状态机与 catalog 测试、固定大陆模块请求隔离与持久缓存测试、
@@ -371,46 +372,11 @@ CI 验证源码/patch 契约、Java 状态机与 catalog 测试、固定大陆�
 gh release download v1.0.0-build-<N> -p '*.apk' -p '*.sha256' -D downloads/
 ```
 
-### 7.7 历史 AM++ 嵌入实验（非默认安装目标）
+### 7.7 AM++ 嵌入（已废弃）
 
-仅在明确需要复现旧方案时运行。普通 `embed_ampp=false` 构建已包含独立标题修正，
-不得把嵌入成功当成普通构建前提。1607 的 AM++ 1.6.4
-`AppleMusicHostProfiles.find(1607)` 返回 null，随后 host factory 抛出
-`Required value was null`；强制开关或绕过版本检查不能补齐 profile。
-下述流程保留为旧版历史记录，不表示支持 1607：
-
-```bash
-gh workflow run "APK analysis and rebuild" --ref <branch> \
-  -f rebuild=true -f embed_ampp=true -f standalone_module=false
-gh run watch <run-id> --exit-status
-```
-
-显式测试历史嵌入版时对应 artifact 为：
-
-```text
-apple-music-vivo-car-lyrics-ampp-npatched
-├── apple-music-vivo-car-lyrics-ampp-npatched.apk
-└── apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
-```
-
-不要混淆普通 APK 和历史嵌入版。当前独立实现不需要 root、LSPosed 或 NPatch；
-`combined-lsp-module` 仍是实验性方案，不用于日常安装。
-
-内嵌版包含：
-
-- r38 歌词补丁：车机歌词、原子随身听歌词、原子随身听进度条。
-- AM++ v1.6.2 的目录查询兼容修复，包括 6.5.3 的 `u8.E#B` → `u8.E#v`。
-- AM++ 功能层被裁剪为只安装“修正歌曲名”；液态玻璃默认关闭。
-- AM++ 设置界面未裁剪，所以旧设置项仍会显示。显示相同不代表包相同，应以
-  `dumpsys package com.apple.android.music` 的 `lastUpdateTime` 和 APK SHA-256 判断。
-
-安装命令只允许覆盖安装：
-
-```bash
-shasum -a 256 -c apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
-adb install -r apple-music-vivo-car-lyrics-ampp-npatched.apk
-adb shell dumpsys package com.apple.android.music | grep -E 'versionName|versionCode|lastUpdateTime'
-```
+AM++ 路线已于 2026-10-13 废弃：`embed_ampp` / `standalone_module` 两个 workflow 输入、
+`cloud-patch/ampp/**`、`cloud-patch/embed-ampp.sh` 及对应产物均已删除。
+歌名/歌手修正由 helper DEX 独立实现，workflow 只产出一个 APK。
 
 ## 8. 安装与签名限制
 
@@ -470,8 +436,6 @@ cloud-patch/java/.../CatalogQueryMethod.java / CatalogTitleResolver.java  独立
 cloud-patch/java/.../ClusterLyricsPaginator.java  仪表分页（r37 起不再发布，保留编译与测试）
 cloud-patch/tests/verify_source_contract.py       源码契约：禁止重发 MediaItem、要求能力位 8 与 16
 cloud-patch/tests/.../ClusterLyricsPaginatorTest.java
-cloud-patch/embed-ampp.sh                把已打歌词补丁的 APK 包进 NPatch，并嵌入裁剪版 AM++
-cloud-patch/ampp/prepare-module.sh       AM++ 原生库 / 查询兼容修复与功能裁剪
 config/signing-cert-sha256.txt           固定签名证书 pin
 docs/KNOWN_ISSUES.zh-CN.md               未解决问题与已验证死路
 docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
@@ -510,7 +474,7 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 
 ### 2026-10-10 - 1607 固定大陆标题修正 r42（历史记录）
 
-- 普通构建 `embed_ampp=false` 包含独立实现，不加载 AM++ / NPatch。
+- 普通构建包含独立实现，不加载 AM++ / NPatch。
 - 保留六个歌词 Hook；新增 `q8.na.l()` 字符串 Hook，通过同一 binding 刷新播放页。
 - 标题专用路径原位更新标题，宿主通知服务独立刷新，不重建或重新发布 metadata。
 - 用户确认永久固定中国大陆 `cn` / `zh-CN`，无需模式选择、设置或原地区算法。
@@ -519,7 +483,7 @@ docs/AI_HANDOFF_PROMPT.zh-CN.md          交给下一个 AI 的提示词模板
 - build #146 的系统 locale + 内存 LRU 方案是已废弃的历史实验，手机标题修正未确认成功。
 - AM++ 1607 profile 失败作为历史实验记录保留；静态映射已确认，设备与实车运行效果待验证。
 
-### 2026-09-28 - 标准化 APKM 更新与内嵌 AM++ 构建流程
+### 2026-09-28 - 标准化 APKM 更新与内嵌 AM++ 构建流程（历史记录，AM++ 路线已于 2026-10-13 废弃）
 
 - 更新入口改为接收 `.apkm`，在本地只用 `unzip` 解出 `input/splits/base.apk` 与 `split_config.*.apk`；APKEditor 合并仍在 GitHub Actions 的 `reconstruct.sh` 中完成。
 - 新版本移植仍必须重新定位六个歌词 Hook 与全部反射目标，不允许盲套 6.5.2 / 6.5.3 混淆名。

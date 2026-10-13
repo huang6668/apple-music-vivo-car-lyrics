@@ -73,7 +73,7 @@ for required in ("isCurrentTitle(state)", "APPLE_QUEUE_ID", "APPLE_MEDIA_ID"):
     assert required in native_title, f"Native title requires its own identity: {required}"
 for required in ("isCurrentTitle(state)", "titleBindingGeneration == state.generation",
                  "titleItemMatches(state, item)", "!reboundArtist.equals(artist)",
-                 'invokeOptional(binding, "r0", item)'):
+                 'invokeOptional(binding, "q0", item)'):
     assert required in title_refresh
 for body in (title_binding, artist_binding):
     assert "titleItemMatches(state, item)" in body
@@ -92,7 +92,10 @@ assert "CatalogTitleResolver.queryTrack(" in method_body("private static void st
 assert "TITLE_STATE.restoreTrack(state, trackInfo)" in method_body("private static void loadPersistedTitle(")
 assert "TITLE_STATE.fail(request)" in text
 assert "public static String resolveItemTitle(Object item, String stockTitle)" in text
-assert "TITLE_STATE.getCachedTitle(catalogId)" in text
+assert "TITLE_STATE.getCachedTrack(catalogId)" in text
+assert "ChineseConverter.toSimplified(" not in method_body(
+    "public static String resolveItemTitle(Object item, String stockTitle)"
+), "Cached titles are already simplified; the getter must not convert again"
 assert "WeakReference<Object>" in text
 assert 'private static final String TITLE_PROFILE = "cn_v1";' in text
 assert 'private static final String TITLE_LANGUAGE = "zh-CN";' in text
@@ -108,9 +111,12 @@ for body in (
 ):
     assert "Locale.getDefault()" not in body, "Fixed mainland titles must not follow system locale"
 assert "TITLE_IO.execute(" in method_body("private static void loadPersistedTitle(")
-persist = method_body("private static void persistTrack(")
+assert "persistTracks(Collections.singletonMap(catalogId, track))" in method_body(
+    "private static void persistTrack(")
+persist = method_body("private static void persistTracks(")
 assert "TITLE_IO.execute(" in persist
-assert "titleCacheStore.putTrack(catalogId, track)" in persist
+assert "flushTrackWrites(directory)" in persist, "The queued write must drain the pending batch"
+assert "PENDING_TRACK_WRITES.putAll(tracks)" in persist
 assert "TITLE_STATE.snapshot()" not in persist, "Disk writes must not borrow the next track's artist"
 prefetch = method_body("private static void drainPrefetchQueue(")
 assert "hit == null || !hit.artistResolved" in prefetch, "Legacy disk hits must still fetch artist"

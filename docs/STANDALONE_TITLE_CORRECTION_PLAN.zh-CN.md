@@ -1,5 +1,10 @@
 # 独立歌名修正（不依赖 AM++）实施计划
 
+> **历史文档**：AM++ 路线已于 2026-10-13 废弃，`cloud-patch/ampp/**`、`embed-ampp.sh`、
+> `docs/AMPP_INTEGRATION.zh-CN.md` 与 workflow 的 `embed_ampp` 输入均已删除。
+> 下文对 AM++ 的引用只是当时的分析证据。当前实现见
+> [FUTURE_APK_UPGRADE_GUIDE.zh-CN.md](FUTURE_APK_UPGRADE_GUIDE.zh-CN.md)。
+
 > 状态：**按用户确认的“永久固定中国大陆”范围实施 r42，尚未完成云端 Java / APK 与设备验证**（2026-10-10）。不提供模式选择或设置。build #146 是已废弃的系统 locale 实验，只通过此前定义下的云端检查，手机上未确认标题修正成功。下文的 1607 映射保留为分析证据，不代表功能已完成。
 
 ## 0. AM++ 源码核对与方案纠正
@@ -91,7 +96,7 @@ TitleCorrectionFeature.install
 | 版本 profile 关卡拒绝 1607 | `patch_force_embedded_profile.py`（3ebc33c）强制让 `supports()` 返回 true | 通过 |
 | `AppleMusicHostProfiles.find` 对 1607 返回 null | — | `AppleMusicHostFactory.appleMusic` 抛出 `IllegalStateException: Required value was null` |
 
-结论：缺的是整套 host profile（类名、方法名映射），绕过关卡只会把失败往后推，这条路不可维护。上面两个 patch 视为死路，只作为可选实验保留（`embed_ampp`）。
+结论：缺的是整套 host profile（类名、方法名映射），绕过关卡只会把失败往后推，这条路不可维护。上面两个 patch 视为死路（已随 AM++ 路线一并删除）。
 
 ### 1.2 新方向
 
@@ -120,7 +125,7 @@ TitleCorrectionFeature.install
 | 通知刷新 | `MediaPlaybackService` 继承的 `J4.Y2.g(J4.f2, boolean)` | 主线程调用 `g(session,false)`，检查 service/session/manager 的归属；不发布 metadata |
 | 协程符号 | `fi.f.a`（空上下文）、`bi.q$a`（失败）、`gi.a.COROUTINE_SUSPENDED` | 使用宿主真实符号，不伪造上下文 |
 
-Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat/CatalogQueryMethod.java`：首选名 → 重命名映射 → 唯一签名兜底，有歧义时拒绝，不猜。
+Catalog 方法的匹配规则见 `cloud-patch/java/com/apple/android/music/player/CatalogQueryMethod.java`：首选名 → 重命名映射 → 唯一签名兜底，有歧义时拒绝，不猜。
 
 独立实现仅从明确的 `getSubscriptionStoreId()` 取得 catalog ID，不将任意
 `persistentId/getId` 发往 Catalog。队列身份要求正十进制 queue ID，并同时校验 catalog ID。
@@ -202,14 +207,14 @@ Catalog 方法的匹配规则沿用 `cloud-patch/ampp/java/dev/amenhancer/compat
 
 ### 第 6 步：与 AM++ 嵌入隔离，更新文档
 
-- 普通构建（`embed_ampp=false`）即包含独立实现，不下载、不初始化 AM++/NPatch。
-- 现有的 AM++ 嵌入脚本/产物作为单独的历史实验保留，不作为普通构建或测试的前提。
-- 更新 `docs/AMPP_INTEGRATION.zh-CN.md` 和 `docs/APK_UPDATE_GUIDE.zh-CN.md`：1607 的 profile 失败原因、新的独立架构、标题显示范围、1607 映射，以及“标题修正不重新发布歌词/Atomic metadata”这一不变约束。
+- 构建即包含独立实现，不下载、不初始化 AM++/NPatch。
+- AM++ 嵌入脚本/产物已删除。
+- 更新 `docs/APK_UPDATE_GUIDE.zh-CN.md`：1607 的 profile 失败原因、新的独立架构、标题显示范围、1607 映射，以及“标题修正不重新发布歌词/Atomic metadata”这一不变约束。
 
 ## 4. 验证
 
 1. 在 GitHub Actions 中跑 Python 源码/patch 契约测试，以及 Java 分页、catalog 反射、标题状态测试（不在本机安装 Android 构建工具）。
-2. 触发普通构建：`rebuild=true`、`embed_ampp=false`；在报告中检查 helper 标记字符串、最终 dex/回编译结果、smali hook 位置、固定签名证书、Atomic 服务 manifest action。
+2. 触发构建：`rebuild=true`；在报告中检查 helper 标记字符串、最终 dex/回编译结果、smali hook 位置、固定签名证书、Atomic 服务 manifest action。
 3. 在设备上安装签名后的 APK，强制停止并重启 Apple Music，抓应用进程的 logcat，确认 catalog 解析和标题写入没有反射错误。
 4. 测三类曲目：需要修正的英文标题、已本地化的标题、无匹配/非歌曲项。确认结果返回前显示原标题，返回后只在匹配的曲目上显示修正标题（正在播放页 + 通知）。
 5. 在请求进行中快速切歌，确认旧结果不会出现在新歌上。

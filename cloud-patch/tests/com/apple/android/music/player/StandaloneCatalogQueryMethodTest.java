@@ -47,7 +47,22 @@ public final class StandaloneCatalogQueryMethodTest {
             } catch (NoSuchMethodException expected) {
             }
         }
+        check(CatalogQueryMethod.resolve(Preferred.class, "B")
+                == CatalogQueryMethod.resolve(Preferred.class, "B"), "resolved method is cached");
+        check(CatalogQueryMethod.resolve(Inherited.class, "B")
+                .equals(CatalogQueryMethod.resolve(Preferred.class, "B")), "cache is per class");
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                CatalogQueryMethod.resolve(Ambiguous.class, "unknown");
+                throw new AssertionError("cached miss must still throw");
+            } catch (NoSuchMethodException expected) {
+            }
+        }
+        equal("x", CatalogQueryMethod.resolve(Ambiguous.class, "x").getName());
         System.out.println("StandaloneCatalogQueryMethod tests passed");
+    }
+    private static void check(boolean condition, String message) {
+        if (!condition) throw new AssertionError(message);
     }
     private static void equal(Object expected, Object actual) {
         if (!expected.equals(actual)) throw new AssertionError(expected + " != " + actual);

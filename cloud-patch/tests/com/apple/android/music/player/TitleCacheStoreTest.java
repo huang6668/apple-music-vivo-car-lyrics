@@ -31,6 +31,7 @@ public final class TitleCacheStoreTest {
         testLegacyArtistResolutionMigration();
         testResolvedTrackRestart();
         testTrackValidationAndPartialBatch();
+        testLoadSimplifiesLegacyEntries();
         System.out.println("TitleCacheStore tests passed");
     }
 
@@ -77,6 +78,34 @@ public final class TitleCacheStoreTest {
             check(migrated.artistResolved, "complete result survives process restart");
             equal("1", read(directory).getProperty("schema"));
             equal("true", read(directory).getProperty("entry.0.artistResolved"));
+        } finally {
+            delete(directory);
+        }
+    }
+
+    private static void testLoadSimplifiesLegacyEntries() throws Exception {
+        File directory = directory();
+        try {
+            FakeClock clock = new FakeClock();
+            Properties properties = fixture();
+            properties.setProperty("entry.0.title", "\u8056\u8a95\u661f");
+            properties.setProperty("entry.0.artist", "\u5468\u6770\u502b");
+            properties.setProperty("entry.0.artistResolved", "true");
+            write(directory, properties);
+            TitleCacheStore store = store(directory, 4, 100, clock);
+            TitleCorrectionState.TrackInfo track = store.getTrack("123");
+            equal("\u5723\u8bde\u661f", track.title);
+            equal("\u5468\u6770\u4f26", track.artist);
+            check(track.artistResolved, "conversion keeps the completion flag");
+            equal("\u5723\u8bde\u661f", store.get("123"));
+
+            properties.remove("entry.0.artist");
+            properties.remove("entry.0.artistResolved");
+            properties.setProperty("entry.0.title", "\u8056\u8a95\u661f\t\u5468\u6770\u502b");
+            write(directory, properties);
+            track = store(directory, 4, 100, clock).getTrack("123");
+            equal("\u5723\u8bde\u661f", track.title);
+            equal("\u5468\u6770\u4f26", track.artist);
         } finally {
             delete(directory);
         }

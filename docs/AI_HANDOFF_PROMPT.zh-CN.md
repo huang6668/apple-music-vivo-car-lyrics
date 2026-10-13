@@ -4,7 +4,7 @@ Apple Music 出新版本时，把下面这段话、新版 APK 和本仓库一起
 
 ```text
 我要把新版 Apple Music Android APK 移植本仓库已有的 vivo 车机歌词 + 原子随身听歌词/进度条功能。
-最终安装目标是内嵌 AM++ 的“修正歌曲名”版本；我的手机没有 root / LSPosed。
+歌名/歌手修正已内置在 helper DEX 中，只产出一个普通 APK；我的手机没有 root。
 
 输入：
 - 新版 APKM：<APKM 路径或上传文件名>
@@ -29,8 +29,8 @@ C. 用指南第 4 节表格逐条重新定位辅助类的反射目标，用第 5
    - onAtomicControllerConnected：Media3 onPostConnect，从 ControllerInfo 取包名
    给我一张"6.5.2 旧名 → 新版名"对照表，说明每条是怎么确认的。
 D. 修改 VivoCarLyrics.java 反射目标、apple-vivo-car-lyrics.patch、apply.sh、rebuild.sh 的路径/签名/marker；更新 BUILD_MARKER；本地 python3 cloud-patch/tests/verify_source_contract.py 必须通过。
-E. 推送后先跑 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true -f embed_ampp=false -f standalone_module=false，确认普通歌词 APK 构建成功。
-F. 再跑 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true -f embed_ampp=true -f standalone_module=false，下载 apple-music-vivo-car-lyrics-ampp-npatched artifact；不要安装 combined-lsp-module。
+E. 推送后先跑 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true，确认 APK 构建成功，并检查报告中的 helper 标记与全部 verify 结果。
+F. 按 docs/FUTURE_APK_UPGRADE_GUIDE.zh-CN.md 第 4 节逐项核对歌名/歌手修正的反射名（CI 的 verify_reflection_names.py 只覆盖其中一部分）。
 G. 在指南第 13 节追加变更记录；如有新的未解决问题写入 KNOWN_ISSUES。
 
 必须保持不变的协议（指南第 3 节）：

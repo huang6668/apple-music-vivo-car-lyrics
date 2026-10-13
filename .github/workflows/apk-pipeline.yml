@@ -8,16 +8,6 @@ on:
         required: true
         default: true
         type: boolean
-      embed_ampp:
-        description: Also wrap the rebuilt APK in an NPatch shell with the AM++ module embedded
-        required: true
-        default: false
-        type: boolean
-      standalone_module:
-        description: Build the combined lyrics and title-correction LSPosed module
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -40,14 +30,6 @@ jobs:
       # Android 16+ packages expose ZIP layouts not handled by the V1.4.9 release. Pin
       # the upstream snapshot that includes the newer ARSCLib support until a release is cut.
       APKEDITOR_COMMIT: '5621fe6750b828ce0bfd99ec7f42ee8b5fe75497'
-      # Pinned by content hash, not by tag: both artifacts are third-party release assets and a
-      # re-upload under an unchanged tag would otherwise silently change the opt-in build.
-      # Use the author's framework family; this pin is not the same framework build as
-      # the author's 902 embed. Runtime feature compatibility still needs device testing.
-      NPATCH_URL: 'https://github.com/7723mod/NPatch/releases/download/v1.0.7/jar-v1.0.7-741-release.jar'
-      NPATCH_SHA256: '855c6499ac871663ae6c02dcb3a32cbbdfa88d67a312094249cc54e7f3ec8252'
-      AMPP_URL: 'https://github.com/Zennmn/AM-plus-plus/releases/download/v1.6.4/AM-plus-plus-v1.6.4.apk'
-      AMPP_SHA256: '982c42fbabf5028c57a5f7f5ba16b40c3e0b19657f3798b5bfb3eddd2437f42d'
 
     steps:
       - uses: actions/checkout@v4
@@ -410,109 +392,6 @@ jobs:
         run: bash ../cloud-patch/rebuild.sh
         working-directory: payload
 
-      # NPatch's jar targets class file version 65, so it needs a Java 21 runtime; the pipeline's
-      # own 17 is left as the default for everything else. Installing it here rather than at job
-      # level keeps the main path unchanged when embed_ampp is off.
-      - name: Set up Java 21 for NPatch
-        if: ${{ inputs.rebuild && inputs.embed_ampp }}
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      # continue-on-error, and gated on nothing but the input: the embedded build is a side
-      # experiment on top of the real one, and it must never be able to cost the main APK its
-      # Release or its artifact.
-      - name: Embed AM++ module with NPatch
-        id: embed_ampp
-        if: ${{ inputs.rebuild && inputs.embed_ampp }}
-        continue-on-error: true
-        shell: bash
-        working-directory: payload
-        env:
-          SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
-          SIGNING_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
-        run: |
-          set -Eeuo pipefail
-          tools="$RUNNER_TEMP/tools"
-          mkdir -p "$tools"
-
-          curl --fail --location --retry 3 "$NPATCH_URL" -o "$tools/npatch.jar"
-          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.4.apk"
-
-          npatch_actual="$(sha256sum "$tools/npatch.jar" | awk '{print $1}')"
-          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.4.apk" | awk '{print $1}')"
-          [[ "${NPATCH_SHA256,,}" == "$npatch_actual" ]] || {
-            echo "npatch.jar SHA-256 mismatch" >&2
-            exit 1
-          }
-          [[ "${AMPP_SHA256,,}" == "$ampp_actual" ]] || {
-            echo "AM++ module SHA-256 mismatch" >&2
-            exit 1
-          }
-
-          NPATCH_JAR="$tools/npatch.jar" \
-          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.4.apk" \
-            bash ../cloud-patch/embed-ampp.sh
-
-      # continue-on-error above keeps a broken wrapper from costing the main build its Release,
-      # but it also paints the step green in the step list. Say plainly which way it went, in the
-      # job summary, so a failed embed cannot be read as a successful one.
-      - name: Report AM++ embedding outcome
-        if: ${{ inputs.rebuild && inputs.embed_ampp }}
-        shell: bash
-        env:
-          EMBED_OUTCOME: ${{ steps.embed_ampp.outcome }}
-        run: |
-          set -Eeuo pipefail
-          embedded=payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk
-          if [[ "$EMBED_OUTCOME" == success && -f "$embedded" && -f "$embedded.sha256" ]]; then
-              printf '### AM++ embedded APK built (NPatch)\n\n`%s`\n\n```\n%s\n```\n\nPackaging success is not runtime verification. Check `adb logcat` for module health and catalog query errors; the NPatch file log may contain only bootstrap messages. `title_correction: ACTIVE` alone does not prove that song titles are corrected.\n' \
-              "$(basename "$embedded")" "$(cat "$embedded.sha256")" >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '### AM++ embedding FAILED\n\nThe main APK and its Release are unaffected. See the "Embed AM++ module with NPatch" step log.\n' \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::AM++ embedding did not produce an APK; the main build is unaffected"
-          fi
-
-      - name: Build combined LSPosed module
-        id: standalone_module
-        if: ${{ inputs.rebuild && inputs.standalone_module }}
-        shell: bash
-        working-directory: payload
-        env:
-          SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
-          SIGNING_PASSWORD: ${{ secrets.ANDROID_SIGNING_PASSWORD }}
-        run: |
-          set -Eeuo pipefail
-          tools="$RUNNER_TEMP/tools"
-          mkdir -p "$tools" out/standalone-module
-          curl --fail --location --retry 3 "$AMPP_URL" -o "$tools/AM-plus-plus-v1.6.4.apk"
-          ampp_actual="$(sha256sum "$tools/AM-plus-plus-v1.6.4.apk" | awk '{print $1}')"
-          [[ "${AMPP_SHA256,,}" == "$ampp_actual" ]] || {
-            echo "AM++ module SHA-256 mismatch" >&2
-            exit 1
-          }
-          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/apple-music-vivo-car-lyrics-signing.p12"
-          AMPP_MODULE_APK="$tools/AM-plus-plus-v1.6.4.apk" \
-            bash ../cloud-patch/ampp/build-standalone.sh \
-              "$tools/AM-plus-plus-v1.6.4.apk" \
-              out/standalone-module/combined-lsp-module.apk \
-              out/standalone-module/report
-
-      - name: Upload combined LSPosed module
-        if: ${{ inputs.rebuild && inputs.standalone_module && steps.standalone_module.outcome == 'success' && hashFiles('payload/out/standalone-module/combined-lsp-module.apk') != '' && hashFiles('payload/out/standalone-module/combined-lsp-module.apk.sha256') != '' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-lsp-module
-          path: |
-            payload/out/standalone-module/combined-lsp-module.apk
-            payload/out/standalone-module/combined-lsp-module.apk.sha256
-          retention-days: 7
-          if-no-files-found: error
-          compression-level: 0
-
       - name: Create GitHub Release
         if: ${{ inputs.rebuild && success() }}
         env:
@@ -539,22 +418,6 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-      # Deliberately a separate artifact, and deliberately not attached to the main Release: it is
-      # the same r38 build inside a different shell, and the two must never be confused when
-      # flashing or comparing in the car.
-      - name: Upload AM++-embedded APK
-        if: ${{ inputs.rebuild && inputs.embed_ampp && steps.embed_ampp.outcome == 'success' && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk') != '' && hashFiles('payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256') != '' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: apple-music-vivo-car-lyrics-ampp-npatched
-          path: |
-            payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk
-            payload/out/embed-ampp/apple-music-vivo-car-lyrics-ampp-npatched.apk.sha256
-          retention-days: 7
-          if-no-files-found: error
-          compression-level: 0
-
       - name: Upload analysis reports
         if: always()
         continue-on-error: true
@@ -563,8 +426,6 @@ jobs:
           name: apk-results-${{ github.run_number }}-report
           path: |
             payload/out/report/
-            payload/out/embed-ampp/report/
-            payload/out/standalone-module/report/
           retention-days: 7
           if-no-files-found: warn
           compression-level: 0

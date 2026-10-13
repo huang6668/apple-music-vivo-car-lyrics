@@ -301,10 +301,6 @@ public final class TitleCorrectionState {
         return true;
     }
 
-    public synchronized String correctedTitle(Object candidateManager, String candidateQueueId) {
-        return matchesQueue(candidateManager, candidateQueueId) ? correction() : null;
-    }
-
     public synchronized String correctedTitle(Object candidateManager, String candidateQueueId,
                                                String candidateCatalogId) {
         return matchesIdentity(candidateManager, candidateQueueId, candidateCatalogId)
@@ -391,16 +387,11 @@ public final class TitleCorrectionState {
         return info == null || info.artist.isEmpty() ? null : info.artist;
     }
 
+    /** Lock-free for UI getters: cacheTrack and LRU eviction keep fastTrackCache in step with cache. */
     public TrackInfo getCachedTrack(String candidateCatalogId) {
         String id = normalizeCatalogId(candidateCatalogId);
         if (id.isEmpty()) return null;
-        String namespace = cacheNamespace;
-        TrackInfo info = fastTrackCache.get(new CacheKey(namespace, id));
-        if (info != null && namespace.equals(cacheNamespace)) return info;
-        synchronized (this) {
-            CachedTrack cached = cache.get(new CacheKey(cacheNamespace, id));
-            return cached == null ? null : cached.info;
-        }
+        return fastTrackCache.get(new CacheKey(cacheNamespace, id));
     }
 
     public synchronized void putCachedTrack(String candidateCatalogId, String title, String artist) {
@@ -432,22 +423,6 @@ public final class TitleCorrectionState {
         if (titles == null || titles.isEmpty()) return;
         for (Map.Entry<String, String> entry : titles.entrySet()) {
             putCachedTitle(entry.getKey(), entry.getValue());
-        }
-    }
-
-    public synchronized void putCachedTracks(Map<String, ?> tracks) {
-        if (tracks == null || tracks.isEmpty()) return;
-        for (Map.Entry<String, ?> entry : tracks.entrySet()) {
-            Object val = entry.getValue();
-            if (val instanceof TrackInfo) {
-                TrackInfo ti = (TrackInfo) val;
-                putCachedTrack(entry.getKey(), ti);
-            } else if (val instanceof CatalogTitleResolver.TrackInfo) {
-                CatalogTitleResolver.TrackInfo ti = (CatalogTitleResolver.TrackInfo) val;
-                putCachedTrack(entry.getKey(), ti.title, ti.artist);
-            } else if (val instanceof String) {
-                putCachedTitle(entry.getKey(), (String) val);
-            }
         }
     }
 

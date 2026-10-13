@@ -238,6 +238,9 @@ public final class TitleCacheStore {
                 }
                 boolean artistResolved = resolved == null
                         ? legacyComposite || !artist.isEmpty() : "true".equals(resolved);
+                // Entries written before conversion moved to ingest may still be traditional.
+                title = ChineseConverter.toSimplified(title);
+                artist = ChineseConverter.toSimplified(artist);
                 try {
                     Entry entry = new Entry(title, artist, artistResolved,
                             Long.parseLong(properties.getProperty(prefix + "writtenAt", "")));

@@ -1,330 +1,444 @@
-# Apple Music 新版本 APK 适配与升级指南 (Future Upgrade Guide)
+# Apple Music 新版本 APK 适配与升级指南
 
-> **适用场景**：当 Apple Music 官方发布新版本（如 Android 7.0+ 正式版或后续更新）时，指导开发者/AI 快速定位变更、移植车机歌词、原子随身听播控/歌词/进度条，以及全界面独立歌名汉化（含多区回退与繁简转换）的完整实操手册。
+> **适用场景**：Apple Music 发布新版本后，把车机歌词、原子随身听播控/歌词/进度条，
+> 以及歌名/歌手本地化（cn → tw → hk 缺失回退 + 繁转简）移植到新 APK。
 >
-> **当前适配目标**：Apple Music 7.0.0-beta (versionCode: 1609)，双字段本地化与验证状态见
-> [1609 修复记录](ARTIST_LOCALIZATION_1609.zh-CN.md)。
-> 下文 1607 映射是历史定位示例；Build #155 的实机验证不代表 1609 歌手修复已验证。
+> **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1609**。
+> 修复内容与验证状态见 [1609 歌手显示修复记录](ARTIST_LOCALIZATION_1609.zh-CN.md)。
+>
+> **验证状态**：Build #155 的实机验证只覆盖 1607 的**歌名**移植。
+> 1609 的歌手修复（helper 标记 `vivo-car-cn-track-r44-1609-2026-10-12`）
+> 只通过了 CI 静态校验，**尚未实机验证**。CI 成功不等于实机验证。
+>
+> **AM++ 路线已废弃（2026-10-13）**：仓库里已**删除** `cloud-patch/ampp/**`、
+> `embed-ampp.sh`、`test_embed_build.py`、`docs/AMPP_INTEGRATION.zh-CN.md`，
+> 以及 workflow 的 `embed_ampp` / `standalone_module` 输入和 NPatch 步骤。
+> 现行流程只有一个 `rebuild` 输入（见 §5）。
 
 ---
 
-## 1. 架构核心与设计原则
+## 1. 架构与设计原则
 
-本项目采用**纯净轻量、独立解耦**的架构设计，完全摆脱对任何第三方 Hook 框架（如 Xposed / LSPosed / NPatch / AM++）的依赖：
+只做静态 smali 注入，再追加一个独立的 helper DEX，不依赖任何 Hook 框架。
 
 ```mermaid
 flowchart TD
-    subgraph OfficialAPK["官方原始 APK（每个版本混淆变化）"]
+    subgraph Stock["官方 APK（每版混淆名会变）"]
         Manifest["AndroidManifest.xml"]
-        PlayerCore["播放器核心 (S.smali / e0.smali)"]
-        NowPlayingUI["正在播放 ViewBinding (q8/na.smali)"]
-        ListModels["列表模型 (BaseContentItem / Attributes)"]
-        PageControllers["页面控制器 (Playlist / AlbumPageController)"]
-        HttpSeam["底层 HTTP 引擎 (y9/k.smali)"]
+        Player["播放管理器 / Session 回调\n(1609: player/P, player/d0)"]
+        Binding["正在播放绑定\n(1609: q8/na.l()V)"]
+        Models["列表模型（未混淆）\nBaseContentItem / Attributes /\nBasePlaybackItem / Song"]
+        Pages["页面控制器（未混淆）\nPlaylist / AlbumPageController"]
+        Http["Catalog HTTP 分发\n(1609: y9/k.a)"]
     end
 
-    subgraph Patches["静态注入层（仅需适配这层）"]
-        P1["apply.sh: 追加 Atomic action & 移除 splits"]
-        P2["apple-vivo-car-lyrics.patch: 6 个生命周期 Hook"]
-        P3["verify_title_hook.py: 播放页 TextView 赋值接缝"]
-        P4["patch_item_title.py: 列表 getTitle & 预取 Hook"]
-        P5["patch_catalog_region.py: 目录请求 StoreFront 重定向"]
+    subgraph Seams["注入层（每版只需重新定位这层）"]
+        A["apply.sh：Atomic action + 去 split"]
+        B["apple-vivo-car-lyrics.patch：6 个歌词 Hook\n+ na.smali 歌名/歌手接缝"]
+        C["patch_item_title.py：getter 与列表预取 Hook"]
+        D["patch_catalog_region.py：StoreFront 改写接缝"]
+        V["verify_lyrics_hooks.py / verify_title_hook.py：\nstock sha256 + 寄存器 pin"]
     end
 
-    subgraph HelperDEX["独立辅助 DEX (classesN.dex - 跨版本零改动或极少改动)"]
-        VivoCarLyrics["VivoCarLyrics.java\n(核心状态机 / Extras 发布 / 原子能力位)"]
-        TitleCorrection["TitleCorrectionState.java\n(内存 LRU / 异步状态流)"]
-        TitleCache["TitleCacheStore.java\n(私有目录原子持久化缓存)"]
-        CatalogResolver["CatalogTitleResolver.java\n(cn->tw->hk 批量请求与跨区回退)"]
-        ChineseConverter["ChineseConverter.java\n(2965字二分查找 100% 繁转简)"]
+    subgraph Helper["helper DEX（classesN.dex，跨版本基本复用）"]
+        L["VivoCarLyrics：歌词状态机 / Extras / 能力位 /\n歌名歌手调度 / 反射写回"]
+        S["TitleCorrectionState：LRU 4096 + 无锁快表 + 顺序保护"]
+        T["TitleCacheStore：cn_v1 磁盘缓存"]
+        R["CatalogTitleResolver：单曲 / 批量 / ISRC 查询"]
+        Q["CatalogQueryMethod：宿主 catalog 方法定位"]
+        Z["ChineseConverter：字符级繁转简"]
     end
 
-    Manifest --> P1
-    PlayerCore --> P2
-    NowPlayingUI --> P3
-    ListModels --> P4
-    PageControllers --> P4
-    HttpSeam --> P5
-
-    P2 --> VivoCarLyrics
-    P3 --> VivoCarLyrics
-    P4 --> VivoCarLyrics
-    P5 --> CatalogResolver
-    VivoCarLyrics --> TitleCorrection
-    TitleCorrection --> TitleCache
-    TitleCorrection --> CatalogResolver
-    CatalogResolver --> ChineseConverter
+    Manifest --> A
+    Player --> B
+    Binding --> B
+    Models --> C
+    Pages --> C
+    Http --> D
+    B --> L
+    C --> L
+    D --> R
+    L --> S --> T
+    L --> R --> Q
+    L --> Z
 ```
 
-### 1.1 为什么升级极其轻松？
-- **Helper 逻辑独立存在于末尾 DEX**：所有 Java 源码（`VivoCarLyrics`, `CatalogTitleResolver`, `ChineseConverter`, `TitleCacheStore`, `TitleCorrectionState`）在构建时被独立编译为 `classesN.dex` 追加到 APK 末尾。
-- **业务代码跨版本复用率 > 90%**：繁简转换算法、多区 StoreFront 批量回退链、持久缓存机制、原子随身听状态机均为纯 Java/Android 框架代码，**新版 APK 发布时完全无需重写这些核心逻辑**。
-- **升级工作仅集中在“5 个关键注入点”**：新版 APK 只需要重新定位官方混淆后的 5 个注入点，并生成对应的 Smali 钩子即可完成全量适配。
+### 1.1 升级工作量在哪里
+
+- helper 源码在 `cloud-patch/java/com/apple/android/music/player/`，由 `rebuild.sh` 用
+  `javac --release 8` + `d8` 编译成新的 `classesN.dex` 追加进 APK。它是纯 Java 代码，
+  通常不需要重写。
+- **但 helper 里有大量按版本硬编码的反射名**（见 §4）。它们不会被 smali 校验脚本覆盖，
+  名字变了也只会静默失效。每个新版本都要逐项核对。
+- 需要重新定位的 smali 注入点分 5 类（§2）。
+
+### 1.2 r38 冻结基线（不可破坏）
+
+- 6 个歌词 Hook 保持原语义。车机走 `music.media.extras.*`，原子随身听走
+  `vivomusicmix.extra.lrc_change` 会话 extras 事件。
+- 在原生 MediaItem 的 metadata extras 上**原位 OR** `support_event |= 7|8|16`。
+- `publishMetadata()` 保持 no-op。歌名/歌手修正**永远不重发** MediaItem、
+  MediaMetadata、PlaybackState 或封面。
+- 不做 LRC 分页、不发布 `ucar.*`、不改车联。仪表盘截断和封面重载是车联侧问题。
 
 ---
 
-## 2. 必须适配的 5 个关键注入点
+## 2. 必须重新定位的注入点
 
-在官方推出新版 APK（如 7.1 或 7.0 正式版）时，由于 ProGuard / R8 混淆，类名和方法名通常会变动。以下是必须重新定位的 5 大注入点：
+所有目标都断言位于 `smali_classes2`，并用 stock sha256、寄存器、locals 数固定。
+**新版本里 sha256 一定会变**：确认语义一致后再更新 pin，不要为了让 CI 变绿而放宽断言。
 
----
+### 注入点 1：`AndroidManifest.xml`（`apply.sh` 内联 Python）
 
-### 注入点 1：`AndroidManifest.xml`（原子随身听协作声明与去 Split 化）
-* **目的**：
-  1. 向 `MediaPlaybackService` 声明 `com.vivo.musicwidgetmix.support.service`，确保原子随身听加载“合作控制器（`c0`）”，处理整首 LRC 与时间轴。
-  2. 移除 APKM 解包后残留的 Split 分包属性（`isSplitRequired`、`requiredSplitTypes` 及对应 `meta-data`），使 APK 变成合法的 Android Standalone 单包，防止出现 `-28` 安装错误。
-* **脚本位置**：`cloud-patch/apply.sh`（内部内置 Python XML 解析器，自动处理）。
-* **新版本排查要点**：
-  - 确认服务名仍为 `com.apple.android.music.player.MediaPlaybackService`。
-  - 确认该服务包含 `android.media.browse.MediaBrowserService` 的 `intent-filter` 并且 `android:exported="true"`。
+- 给 `com.apple.android.music.player.MediaPlaybackService` 的 intent-filter 追加
+  `com.vivo.musicwidgetmix.support.service`，让原子随身听加载合作控制器 `c0`。
+- 要求该服务为 `exported="true"`，且 Atomic action 与
+  `android.media.browse.MediaBrowserService`、`androidx.media3.session.MediaSessionService`、
+  `android.intent.action.MEDIA_BUTTON` 在**同一个** filter 里，全 manifest 只出现一次
+  （`rebuild.sh` 会对最终 APK 再验一次）。
+- 删除 `isSplitRequired` / `requiredSplitTypes` / `splitTypes` 以及名字含 `split` 的
+  meta-data，同时从 `split_config.*` 注入 `lib/`，生成单包，避免 `-28` 安装错误。
 
----
+### 注入点 2：播放器生命周期，6 个歌词 Hook
 
-### 注入点 2：播放器核心与生命周期 Hook（6 个歌词/播控钩子）
-* **涉及文件**：`cloud-patch/apple-vivo-car-lyrics.patch`
-* **宿主类特征（1607 中为 `S.smali` 与 `e0.smali`）**：
-  - **播放管理器（1607: `S.smali`）**：实现了 `MediaPlayerController.Listener`（包含 `onCurrentItemChanged`、`onMetadataUpdated`、`onPlaybackError`），并持有调用 `seekToPosition(long)` 的 `seekTo(J)` 方法。
-  - **MediaSession 回调类（1607: `e0.smali`）**：继承自 Media3 `MediaSession.Callback`，包含 `onPostConnect`（1607 中混淆为 `o(LJ4/f2;LJ4/f2$e;)V`）。
-* **6 个 Hook 语义与调用说明**：
-  1. `VivoCarLyrics.onNativeMediaItem(Object mediaItem)`:
-     - **位置**：官方原生发布 MediaItem 的方法（1607 为 `S.P(Lz3/v;I)V`）内，在参数判断（`if-nez p2`）之后、`hashCode()` 之前。
-     - **作用**：原位向 MediaItem 的 `extras` 写入原子随身听能力位 `7 | 8 | 16 = 31`。
-  2. `VivoCarLyrics.onCurrentItemChanged(Object manager, Object newQueueItem)`:
-     - **位置**：`onCurrentItemChanged` 回调入口，空检查后。
-     - **作用**：换歌事件，重置歌词状态、发空歌词事件清空原子随身听上一首缓存。
-  3. `VivoCarLyrics.onMetadataUpdated(Object manager, Object queueItem)`:
-     - **位置**：`onMetadataUpdated` 回调入口。
-     - **作用**：元数据变更时重新加载歌词。
-  4. `VivoCarLyrics.onPlaybackError(Object manager)`:
-     - **位置**：`onPlaybackError` 回调入口。
-     - **作用**：清空歌词，派发错误状态。
-  5. `VivoCarLyrics.onSeek(Object manager, long targetPositionMs)`:
-     - **位置**：`seekTo(J)` 方法中，紧跟 `invoke-interface ... seekToPosition(J)` 之后。
-     - **作用**：进度拖动时立即计算并跳转对应歌词行。
-  6. `VivoCarLyrics.onAtomicControllerConnected(String controllerPackageName)`:
-     - **位置**：`onPostConnect` 内部，从 `ControllerInfo` 获取包名处。
-     - **作用**：当连接者为 `com.vivo.musicwidgetmix` 时，短延迟补发当前歌词与进度状态。
+涉及 `apple-vivo-car-lyrics.patch` 与 `verify_lyrics_hooks.py`（`SPECS` 记录签名、
+寄存器、stock hash 和前后锚点指令）。
 
----
+| Hook | 1609 位置 | 1607（历史） |
+| --- | --- | --- |
+| `onNativeMediaItem(p1)` | `P.P(Lz3/w;I)V`，`if-nez p2, :cond_4` 之后 | `S.P(Lz3/v;I)V` |
+| `onCurrentItemChanged(p0, p3)` | `P.onCurrentItemChanged`，空检查之后 | `S` |
+| `onMetadataUpdated(p0, p2)` | `P.onMetadataUpdated`，空检查之后 | `S` |
+| `onPlaybackError(p0)` | `P.onPlaybackError`，空检查之后 | `S` |
+| `onSeek(p0, p1, p2)` | `P.seekTo(J)V`，`seekToPosition(J)` 之后 | `S` |
+| `onAtomicControllerConnected(v0)` | `d0.o(LJ4/g2;LJ4/g2$e;)V`，`.locals 0→1`，从 `g2$e.a:K4/B$b → .a:K4/B$c → K4/B$d.a:String` 取包名 | `e0.o(LJ4/f2;LJ4/f2$e;)V` |
 
-### 注入点 3：正在播放界面标题 UI Hook（ViewBinding 接缝）
-* **目的**：正在播放全屏界面的歌名 TextView 不走普通列表 Adapter，而是通过 ViewBinding 直接渲染。需要拦截其 `getTitle()` 并替换为已汉化的标题。
-* **涉及文件**：`cloud-patch/verify_title_hook.py`（负责前后接缝验证）与 `apple-vivo-car-lyrics.patch`。
-* **宿主类特征（1607: `q8/na.smali` 方法 `l()V`）**：
-  - 该类是当前播放界面的 ViewBinding 逻辑持有类。
-  - 搜索特征：调用 `CollectionItemView->getTitle()Ljava/lang/String;`，随后将结果赋给 `CustomTextView`。
-* **注入代码**：
-  ```smali
-  invoke-static/range {v39 .. v41}, Lcom/apple/android/music/player/VivoCarLyrics;->correctPlayerTitle(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/CharSequence;)Ljava/lang/CharSequence;
-  move-result-object v39
-  ```
-* **注意**：保持原始 `.locals`（1607 为 58）不变，复用已确认失活的空闲寄存器。
+定位方法：
+- **播放管理器**：实现了 `MediaPlayerController.Listener`，并且有一个调用
+  `seekToPosition(J)` 的 `seekTo(J)V`。
+- **Session 回调**：Media3 `onPostConnect` 的混淆实现，第二个参数是 `…$e`
+  （ControllerInfo）。分析报告里的 `controller-info-candidates.txt` 会列出候选。
 
----
+### 注入点 3：正在播放页的歌名与歌手接缝（`q8/na.l()V`）
 
-### 注入点 4：全界面歌名汉化与歌单预取 Hook（列表/专辑/控制器）
-* **目的**：实现歌单列表、专辑详情页、资料库全部显示简体中文，且在歌单或专辑滑入视图时自动批量预取汉化歌名。
-* **涉及文件**：`cloud-patch/patch_item_title.py`
-* **宿主类与方法特征（在官方未混淆的业务架构中，极其稳定）**：
-  1. `com/apple/android/music/model/BaseContentItem.smali`:
-     - 方法：`getTitle()Ljava/lang/String;`
-     - 注入：调用 `VivoCarLyrics.resolveItemTitle(p0, v0)`。覆盖绝大多数列表模型展示。
-  2. `com/apple/android/music/mediaapi/models/internals/Attributes.smali`:
-     - 方法：`getName()Ljava/lang/String;`
-     - 注入：调用 `VivoCarLyrics.resolveItemTitle(p0, v0)` 并原位 `iput-object` 赋回 `name`。
-  3. `com/apple/android/music/collection/mediaapi/controller/PlaylistPageController.smali`:
-     - 方法：`addTrackModel(MediaEntity;I)Lcom/airbnb/epoxy/w;`
-     - 注入：调用 `VivoCarLyrics.onPlaylistTrack(p0, p1)`，实现歌单批量预取。
-  4. `com/apple/android/music/collection/mediaapi/controller/AlbumPageController.smali`:
-     - 方法：`getItemTitle(MediaEntity;)Ljava/lang/String;`
-     - 注入：调用 `VivoCarLyrics.onPlaylistTrack(p0, p1)`，实现专辑批量预取。
-* **脚本执行**：
-  - `python3 cloud-patch/patch_item_title.py work/apktool --apply`
+正在播放页通过生成的 binding 直接给 TextView 赋值。`verify_title_hook.py` 固定：
+- `.locals 58` 不变，整个方法的 stock code sha256 不变
+- 标题控件 `Lq8/ma;->o0`、歌手控件 `Lq8/ma;->n0`
+- `LI2/e;->a` 赋值和 `Lq8/T1;->b` 的显式赋值
 
----
+```smali
+# 歌名：复用已确认失活的 v39..v41
+move-object/16 v41, v39
+move-object/from16 v39, v1
+move-object/from16 v40, v8
+invoke-static/range {v39 .. v41}, Lcom/apple/android/music/player/VivoCarLyrics;->correctPlayerTitle(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/CharSequence;)Ljava/lang/CharSequence;
+move-result-object v39
+# 歌手：同一模式，作用于 a1.y0(PlaybackItem) 的结果，使用 v52..v54
+invoke-static/range {v52 .. v54}, …->correctPlayerArtist(…)
+```
 
-### 注入点 5：Catalog 目录网络请求拦截与 StoreFront 注入
-* **目的**：将我们发起的汉化歌名查询定向到 Apple Music 的 StoreFront API，并具备注入语言、地区、请求头的能力。
-* **涉及文件**：`cloud-patch/patch_catalog_region.py`
-* **宿主类特征（1607: `y9/k.smali`）**：
-  - 负责 Apple Music 底层 RESTful API 请求发送的单例类（包含 URL、参数、Headers 组装）。
-  - 方法签名（1607 为 `a(Ljava/lang/String;Ljava/lang/String;ZLjava/util/LinkedHashMap;Ljava/util/Map;Lkk/C;Lhi/c;)Ljava/lang/Object;`）。
-* **注入代码**：
+- 歌手来自 `player.a1.y0(PlaybackItem)`（1607 为 `e1.y0`），它走的是
+  `getNowPlayingSubtitle()` / `getSubTitle()`，**不会**调用 `getArtistName()`。
+  所以只 Hook `getArtistName()` 时，播放页歌手不会变。
+- 借用寄存器前必须确认它的下一次使用是写入：v40 的下一次使用是
+  `cmp-long v40, v43, v22`，v52/v53 是 `and-long v52, v35, v28`。这两个锚点由脚本断言。
+  新版本必须重新做这个活性分析。
+- `correctPlayerArtist` 遇到 `isShowComposer()` 或 `getContentType()==9` 时保留宿主值。
+
+### 注入点 4：模型 getter 与列表预取（`patch_item_title.py`）
+
+这些类未被混淆，跨版本通常稳定，但方法体的 sha256 仍然需要重新确认。
+
+| 类 | 方法 | 注入 |
+| --- | --- | --- |
+| `model/BaseContentItem` | `getTitle()` / `getArtistName()` | `resolveItemTitle` / `resolveItemArtist(p0, value)`，`.locals 0→1` |
+| `mediaapi/models/internals/Attributes` | `getName()` / `getArtistName()` | 同上，并用 `iput-object` 写回 `name` / `artistName` |
+| `model/BasePlaybackItem` | `getArtistName()`（字段属主为 `BaseContentItem->artistName`） | `resolveItemArtist` |
+| `model/BasePlaybackItem` | `getNowPlayingSubtitle()` | `.locals 2→3`，receiver 存入 v2，在返回处调用 `resolveItemArtist` |
+| `model/Song` | `getSubTitle()` | `.locals 1→2`，receiver 存入 v1，**只修正** `artistName` 回退分支，显式副标题与专辑名不动 |
+| `collection/mediaapi/controller/PlaylistPageController` | `addTrackModel(MediaEntity;I)` | 入口调用 `onPlaylistTrack(p0, p1)` |
+| `collection/mediaapi/controller/AlbumPageController` | `getItemTitle(MediaEntity;)` | 入口调用 `onPlaylistTrack(p0, p1)` |
+
+### 注入点 5：Catalog 请求 StoreFront 改写（`patch_catalog_region.py`）
+
+- 1609 位置：`y9/k.smali` 中的
+  `a(String;String;ZLjava/util/LinkedHashMap;Ljava/util/Map;Lkk/C;Lhi/c;)Object`。
+  同时固定整个文件和方法代码的 sha256。
+- 在 `.locals 2` 之后注入：
   ```smali
   invoke-static {p1, p4, p5}, Lcom/apple/android/music/player/CatalogTitleResolver;->correctCatalogRequest(Ljava/lang/String;Ljava/util/LinkedHashMap;Ljava/util/Map;)Ljava/lang/String;
   move-result-object p1
   ```
-* **行为保证**：
-  - 仅拦截我们模块发出的请求（通过唯一的请求 token 标识），普通用户的账号请求、播放流鉴权、歌词下载请求**绝不拦截**，保证原生账号与流媒体安全。
+- 只改写携带 resolver 自有 token 参数 `vivo_title_catalog_request` 的请求，而且 token
+  必须仍在 live 表中、path 与 selector 必须完全匹配。改写内容是 path
+  `/v1/catalog/<sf>/songs`、`l`、`Accept-Language`，以及
+  `X-Apple-Store-Front` / `X-Apple-Request-Store-Front` 的前缀。
+  账号、播放鉴权、歌词请求原样通过。
+- 定位方法：找组装 URL、query 参数和 header 并调用 `kk.C`（OkHttp 客户端）的
+  suspend 分发方法。新版本中 `y9/k`、`kk/C`、`hi/c` 都可能改名。
 
 ---
 
-## 3. 多区回退与繁简转换引擎设计
+## 3. 歌名/歌手本地化的数据流
 
-我们集成的 `CatalogTitleResolver` 与 `ChineseConverter` 解决了两个最核心的中文显示痛点：
-1. **中文歌名跨区缺失**（例如某些歌曲大陆区下架或未提供官方中文译名，但在港台区有中文译名，如《我怎么哭了》等）。
-2. **繁体与异体字体验不佳**（港台区返回繁体“我怎麼哭了”，需要统一转换为标准的 100% 简体中文）。
+### 3.1 查询与回退
 
 ```mermaid
 sequenceDiagram
-    participant UI as 界面 (歌单/播放页)
-    participant State as TitleCorrectionState / Cache
-    participant Resolver as CatalogTitleResolver
-    participant Converter as ChineseConverter
-    participant AppleAPI as Apple Music StoreFront
+    participant UI as 界面 getter / 播放页
+    participant St as TitleCorrectionState
+    participant Disk as TitleCacheStore (cn_v1)
+    participant R as CatalogTitleResolver
+    participant API as Apple catalog
 
-    UI->>State: 获取歌曲标题 (CatalogID)
-    alt 缓存命中
-        State-->>UI: 返回已持久化的简体歌名 (毫秒级响应)
-    else 缓存未命中 (首次加载)
-        State-->>UI: 立即返回 Stock 原始标题 (UI 不卡顿)
-        State->>Resolver: 触发后台异步解析 (单曲或批量)
-        Resolver->>AppleAPI: Stage 1: 请求大陆区 cn (143465)
-        alt cn 区包含中文译名
-            AppleAPI-->>Resolver: 返回 cn 标题
-        else cn 区无结果或未汉化
-            Resolver->>AppleAPI: Stage 2: 回退请求台湾区 tw (143470)
-            alt tw 区命中
-                AppleAPI-->>Resolver: 返回繁体标题
-            else tw 区无结果
-                Resolver->>AppleAPI: Stage 3: 回退请求香港区 hk (143463)
-                AppleAPI-->>Resolver: 返回繁体标题
-            end
-        end
-        Resolver->>Converter: toSimplified(title) 繁简字符映射
-        Converter-->>Resolver: 100% 纯正简体中文
-        Resolver->>State: 写入内存 LRU 与私有磁盘持久缓存
-        State->>UI: 触发 UI 重新求值 (播放页重新绑定 / 列表刷新)
+    UI->>St: getCachedTrack(catalogId)
+    alt 命中且 artistResolved
+        St-->>UI: 缓存的标题/歌手
+    else 未命中或旧纯标题缓存
+        St-->>UI: 立即返回宿主值
+        UI->>Disk: 后台读盘（TITLE_IO）
+        Disk-->>St: 命中则按 revision 写回内存
+        UI->>R: 批量（≤100）或单曲查询
+        R->>API: Stage cn 143465（zh-CN）
+        R->>API: 只对 cn 响应里缺失的 ID：Stage tw 143470
+        R->>API: 仍缺失：Stage hk 143463
+        API-->>R: name / artistName（读响应原始字段）
+        R-->>St: toSimplified 后按 generation/revision 写入
+        St->>Disk: 持久化非空结果
+        St->>UI: 列表 requestModelBuild（300ms 防抖）/ 播放页 q0 重绑定 / 通知刷新
     end
 ```
 
-### 3.1 三级 StoreFront 回退链
-- **第一级**：中国大陆 StoreFront `cn`（StoreFront ID: `143465`，语言 `zh-CN`, `zh-Hans`）。
-- **第二级**：中国台湾 StoreFront `tw`（StoreFront ID: `143470`，语言 `zh-TW`）。
-- **第三级**：中国香港 StoreFront `hk`（StoreFront ID: `143463`，语言 `zh-HK`）。
+- 回退条件是**某个 ID 不在 cn 响应里**，不是“cn 返回了英文名”。cn 只要返回了，
+  即使是原名也被采用。tw/hk 阶段出错时，返回已累积的部分结果。
+- 单曲路径：`queryTrack` 先按 cn ID 查，失败再走 ISRC：用账号 StoreFront 做一次
+  无 token 的身份探测，然后在 cn 上做 `filter[isrc]`。账号区的结果只用于身份，
+  不作为本地化结果。返回 null 时，再走 `batchQueryTracks` 的三区回退。
+- 查询缺失或失败：**歌名**保留宿主显示。**歌手**目前会把宿主原值做一次繁转简
+  （`resolveItemArtist` / `onPlaylistTrack`），与歌名行为不一致，见 review 待办 #4。
+- 列表预取只对歌曲类型发请求（`getContentType()` 为 1 或 36；或 `PlayParams.getKind()`
+  是 `songs`/`song`）。类型未知的对象按老行为处理。**失败缓存**：只有 cn/tw/hk 三区都
+  正常应答、且结果里确实没有该 ID 时，才把它记入 6 小时冷却表（上限 4096）；部分结果
+  不记录。解析器通过 `BatchTrackCallback.onTracks(tracks, complete)` 的 `complete`
+  参数告知是否为完整结果。
+- 单曲回退**不再重复查 cn**（cn 已经失败过），只走 tw → hk。
+  请求超时后迟到的结果只写入内存与磁盘缓存，不改界面、不重建列表。
+- 歌手名使用目录返回的 `artistName`，不做机器翻译。
 
-### 3.2 高性能内存二分查找繁简转换器 (`ChineseConverter.java`)
-- 内置 **2965 个高频 BMP 繁简对应字符**，字符数组经过精确 Unicode 升序排序。
-- 采用二分查找（Binary Search），查找复杂度为 $O(\log N)$。
-- **零额外堆内存分配**：纯基本类型数组，不依赖任何第三方臃肿库（如外部 OpenCC jar 或 so 文件），极度节省 Android 内存。
+### 3.2 缓存
+
+- 内存：access-order LRU，**4096** 项；另有 `ConcurrentHashMap fastTrackCache`
+  作为主线程无锁快表。`artistResolved` 用来区分旧纯标题缓存和完整查询结果。
+- 磁盘：应用 `getFilesDir()/vivo-car-title-cn-v1.properties`，命名空间 `cn_v1`、
+  schema 1、最多 4096 项、TTL 30 天、单值最长 2048、文件上限 4 MB。
+  写入时先写临时文件，再用 `ATOMIC_MOVE` 替换；兼容旧的 `\t` 复合格式。
+  空标题且空歌手的结果不落盘。
+- 顺序保护：单曲结果比对 generation / queueId / catalogId，批量和读盘结果比对
+  revision。旧批次或旧磁盘回读不能覆盖较新的完整结果。
+
+### 3.3 繁转简（`ChineseConverter`）
+
+- 字符级映射：2965 个 BMP 繁→简字符对，有序数组 + 二分查找，不依赖 OpenCC。
+- **局限**：只做单字映射，没有词组和异体字上下文，所以不能保证“100% 简体”或
+  地区用词转换。每次调用会 `toCharArray()`，并非零分配。
 
 ---
 
-## 4. 新版本升级实操全流程（逐步执行手册）
+## 4. 按版本硬编码的反射名清单（每版必须逐项核对）
 
-当拿到新版 Apple Music APKM 时，按以下 7 个步骤推进：
+这些名字**不在** smali 校验脚本的覆盖范围内，失效时只会静默回退到宿主显示。
+请用 CI 分析报告里的 jadx/smali 逐项核对，并在本表补充新版本一列。
+
+| 用途 | 位置 | 1609 | 1607 |
+| --- | --- | --- | --- |
+| 元数据 / MediaItem 类 | `writeCorrectedTrack` | `z3.y`（标题 `a`、歌手 `b`，CharSequence）/ `z3.w` | `z3.x` / `z3.v` |
+| 元数据 Extras 字段 | `getMetadataExtras` | `J`（回退 `I`） | 同 |
+| MediaItem → 元数据字段 | `applyTitleCorrection` / `currentPlaybackItem` | `d` | 同 |
+| 管理器当前 MediaItem | `currentMediaItem` | `c()`（回退 `a()`） | 同 |
+| 元数据 → PlaybackItem 转换器 | `currentPlaybackItem` 依次探测 `player.Q` / `P` / `O` 的 static `b(metadata)` | `O.b(Lz3/y;)` | `Q` 或 `P` |
+| 通知刷新链 | `refreshTitleNotification` | `manager.a.b` → session，`session.a.f` → service，`service.y == session`，`session.c() == manager`，`J4.Z2.g(J4.g2, boolean)` | `J4.Y2` / `J4.f2` |
+| 播放页重绑定 | `applyTitleCorrectionFromState` | `q8.ma.q0(PlaybackItem)`（回退 `setItem`） | 同 |
+| 正在播放绑定自持的播放器引用 | `q8.ma.r0(Lcom/apple/android/music/player/a1;)V` | **不是** PlaybackItem setter，别拿它重绑定 | — |
+| 会话 extras 发布 | `publishSessionExtras` | `invokeRequired(sessionManager, "j", extras)` | 同 |
+| Application 获取 | `appleApplication` | `AppleMusicApplication$a.c()` / `a()` | 同 |
+| Catalog API 实例 | `findCatalogApi` | `MediaApiRepositoryHolder.Companion.getMediaApi()` | 同 |
+| Catalog 方法 | `CatalogQueryMethod` | 非 static `Object m(String, Map, Continuation)`，候选名 `F`，失败时 `findUnique` | 改名表 `s8.F→x`、`u8.E→v`、`w9.Q/w9.a→F` |
+| Continuation 上下文 | `CatalogTitleResolver.emptyContext` | `kotlin.coroutines.EmptyCoroutineContext` | 回退 `fi.f` |
+| Result 失败类型 | `CatalogTitleResolver.failureOf` | `kotlin.Result$Failure` | 回退 `bi.q$a` |
+| 正在播放 StoreMediaItem | `writeCorrectedTrack` | `playback.model.StoreMediaItem`（`title` / `artistName`） | 同 |
+
+> 注意：1609 中 `player.P` 是**播放管理器**。转换器探测会先试 `Q`、`P`，只要它们
+> 恰好也有一个参数兼容的 static `b(...)`，就会拿错对象。新版本要确认探测顺序，
+> 并校验返回类型是 `PlaybackItem`（helper 已强制这一点）。
+>
+> 上表里能静态确认的条目已由 `cloud-patch/verify_reflection_names.py` 覆盖：
+> `apply.sh` 在打补丁前预检，`rebuild.sh` 在最终 APK 上再验一次，结果写入
+> `out/report/verified-reflection-names.txt`。名字变了 CI 会直接失败，而不是静默失效。
+> 新增硬编码反射名时，同步往这个脚本加一条断言。
+> `AppleMusicApplication$a` 不在分析产物里，脚本只提示、不阻塞。
+
+---
+
+## 5. 升级步骤
 
 ```mermaid
 flowchart LR
-    S1["1. 获取新版 APKM\n解包至 splits"] --> S2["2. CI 静态分析\n(rebuild=false)"]
-    S2 --> S3["3. 定位 5 大注入点\n更新映射表"]
-    S3 --> S4["4. 更新补丁与脚本\n(apply/rebuild)"]
-    S4 --> S5["5. 本地契约测试\n(Python/Java)"]
-    S5 --> S6["6. CI 重建发布\n(rebuild=true)"]
-    S6 --> S7["7. 真机测试\n(功能回归)"]
+    S1["1. 更新 payload"] --> S2["2. CI 分析\nrebuild=false"]
+    S2 --> S3["3. 定位注入点\n+ 反射名清单"]
+    S3 --> S4["4. 更新补丁/脚本/pin"]
+    S4 --> S5["5. 契约测试\n(CI 跑 Java)"]
+    S5 --> S6["6. CI 重建\nrebuild=true"]
+    S6 --> S7["7. 实机回归"]
 ```
 
-### 步骤 1：解包 APKM 并更新 payload
-1. 解压下载的 `.apkm` 文件，提取 `base.apk` 与所有的 `split_config.*.apk`。
-2. 放入 `payload.tar/input/splits/` 目录。
-3. 重新切片并计算 SHA-256：
+> 本机（Mac）**不安装**任何构建工具（apktool / jadx / Java / Android SDK / pip 包）。
+> 解包、编译、签名、Java 测试都在 GitHub Actions 里完成。本地只用系统自带的
+> `python3`、`unzip`、`grep`、`tar` 做只读检查。
+
+### 步骤 1：更新 payload
+
+1. 把 APKM 中的 `base.apk` 和全部 `split_config.*.apk` 放进 payload 的 `input/splits/`。
+2. 重新打包并切片：
    ```bash
    ( cd /tmp/payload && tar -cf /tmp/payload.tar . )
    split -b 20m -d -a 3 /tmp/payload.tar payload.tar.part.
    shasum -a 256 /tmp/payload.tar | sed 's#  .*#  payload.tar#' > payload.sha256
    ```
-4. 记录新版本号并更新 `.github/workflows/apk-pipeline.yml` 中的 `APK_NAME`。
+3. 更新 `.github/workflows/apk-pipeline.yml` 中的 `APK_NAME`。
 
-### 步骤 2：触发 CI 静态分析
-提交切片并触发只分析工作流（本地不需要安装 apktool/jadx）：
+### 步骤 2：CI 分析
+
 ```bash
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897
 git push origin <branch>
+# 确认推送已经落地，再触发构建
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/<branch>)" ] || echo "push 未生效"
 gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=false
 gh run watch <run-id>
-gh run download <run-id> -n apk-results-<run>-report -D /tmp/report
+gh run download <run-id> -n apple-music-analysis -D /tmp/report
 ```
-解压下载报告中的 `focused-sources.tar.gz`，获得新版反编译后的 Smali 与 Java 源码。
 
-### 步骤 3：重新定位 5 个注入点
-在反编译产物中重新查找并核对：
-1. **播放管理器**：grep `seekToPosition` 或 `onCurrentItemChanged`，确认新类名（如 `S.smali` 是否变成了其他字母）。
-2. **MediaItem 发布入口**：检查原生 `P(Lz3/v;I)V` 方法名与参数类型是否变动。
-3. **MediaSession 连接回调**：grep `ControllerInfo` 或 `onPostConnect`，确认连接方法签名。
-4. **ViewBinding 标题 Hook**：grep `CollectionItemView` 与 `getTitle`，定位新的 `na.smali` 等价类。
-5. **HTTP 客户端类**：grep `/v1/catalog/` 或底层网络分发方法，定位新的 `y9/k.smali`。
-6. **未混淆列表类**：确认 `BaseContentItem`、`Attributes`、`PlaylistPageController`、`AlbumPageController` 类路径是否未变（通常跨大版本都不变）。
+`focused-sources.tar.gz` 里有 `q8`、`J4`、`w9`、`x9`、`y9`、`kk`、`fi`、`gi`、`bi`、
+`kotlin/coroutines`、`player/*` 以及模型类的完整 smali/jadx 源码。
+macOS 文件系统大小写不敏感（`na.smali` 和 `Na.smali` 会互相覆盖），所以用
+`tar -xOzf … <path>` 按单个文件读取，不要整包解压。
 
-### 步骤 4：更新补丁文件与适配脚本
-1. **更新 Smali 补丁**：根据新类名更新 `cloud-patch/apple-vivo-car-lyrics.patch`。
-2. **更新校验脚本**：
-   - 修改 `cloud-patch/apply.sh` 中的 `manager_target`、`connection_target` 及方法签名。
-   - 修改 `cloud-patch/verify_title_hook.py` 中的 `TARGET`、`METHOD` 及上下文指令。
-   - 修改 `cloud-patch/patch_catalog_region.py` 中的 `TARGET`、`METHOD` 与 SHA256。
-   - 若 `patch_item_title.py` 中的类名有变动，同步更新类名常量。
-3. **更新辅助类（必要时）**：
-   - 若 MediaItem / PlaybackItem 反射字段有变（如字段 `J` 变更为其他名字），在 `cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java` 中增加新字段 fallback。
+### 步骤 3：定位
 
-### 步骤 5：本地自动化离线测试
-在本地运行静态契约测试与状态机单元测试，保证未破坏任何基线：
+1. 播放管理器：grep `seekToPosition` 和 `onCurrentItemChanged`。
+2. MediaItem 发布入口：管理器里参数为 `(Lz3/<MediaItem>;I)V` 的方法。
+3. Session 回调：参数为 `(LJ4/<session>;LJ4/<session>$e;)V`，参考
+   `controller-info-candidates.txt`。
+4. 正在播放绑定：生成的 binding 中调用 `getTitle()` 并给 `CustomTextView`
+   赋值的 `l()V`；歌手由 `<player>.y0(PlaybackItem)` 提供。
+5. Catalog 分发：`y9/k` 的等价类。
+6. 模型类和页面控制器：确认路径与方法签名不变。
+7. 按 §4 的清单逐项核对反射名。
+
+### 步骤 4：更新补丁与校验脚本
+
+| 文件 | 需要更新的内容 |
+| --- | --- |
+| `cloud-patch/apple-vivo-car-lyrics.patch` | 管理器、Session 回调、`na.smali` 的 hunk（`patch --fuzz=0`，必须严格匹配） |
+| `cloud-patch/apply.sh` | `manager_target`、`connection_target` 路径 |
+| `cloud-patch/verify_lyrics_hooks.py` | `MANAGER`、`CONNECTION`、`ATOMIC_BODY`、`SPECS`（签名、寄存器、stock hash、锚点） |
+| `cloud-patch/verify_title_hook.py` | 目标类/方法、locals、stock hash、借用寄存器的活性锚点、控件字段 |
+| `cloud-patch/patch_catalog_region.py` | `y9/k` 路径、方法签名、文件和代码 sha256 |
+| `cloud-patch/patch_item_title.py` | `ENTRY_PINS`、`ARTIST_RETURN_SPECS`（locals 和 receiver 寄存器） |
+| `cloud-patch/rebuild.sh` | `BUILD_MARKER`（`HELPER_MARKERS`）、最终 smali 路径报告 |
+| `VivoCarLyrics.java` 等 helper | §4 的反射名，以及 `BUILD_MARKER` |
+| `cloud-patch/tests/**` | 同步测试中的类名和 stub（`title_integration` 里的 O/P/Q、`J4/Z2`、`g2`、`z3/w`、`y`） |
+
+### 步骤 5：测试
+
+CI 第一步会运行（Java 测试只在 CI 中运行）：
 ```bash
-# 验证源码契约（禁止重发 MediaItem、能力位包含 7|8|16）
-python cloud-patch/tests/verify_source_contract.py
-
-# 验证核心 Python 契约与回退状态测试
-python cloud-patch/tests/test_p0_classes.py
+bash cloud-patch/tests/run-java-tests.sh
+python3 cloud-patch/tests/verify_source_contract.py
+python3 -m unittest discover -s cloud-patch/tests -p 'test_*.py' -v
 ```
-全部显示 `PASSED` / `OK` 即可提交。
+本地只跑 Python 部分（系统 `python3`，无第三方依赖）：
+`verify_source_contract.py` 加 `test_catalog_region.py`、`test_item_title_patch.py`、
+`test_lyrics_hooks.py`、`test_p0_classes.py`、`test_title_hook.py`。
 
-### 步骤 6：CI 构建与全量发布
-提交代码并触发全量重建：
+### 步骤 6：CI 重建
+
 ```bash
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897
 git push origin <branch>
-gh workflow run "APK analysis and rebuild" --ref <branch> \
-  -f rebuild=true -f embed_ampp=false -f standalone_module=false
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/<branch>)" ] || echo "push 未生效"
+gh workflow run "APK analysis and rebuild" --ref <branch> -f rebuild=true
 ```
-CI 构建成功后，会自动创建 GitHub Release `v1.0.0-build-<run_number>`，包含重新签名的 APK 及 SHA-256 校验文件。
 
-### 步骤 7：真机部署与功能回归验证
-下载 APK 并安装到测试机（例如平板或手机）：
+- `apply.sh` 依次执行：unpatched 预检 → 应用 patch → 校验 → catalog / item 注入 →
+  manifest。`rebuild.sh` 依次执行：回编译 → 编译 helper DEX → 注入 `lib/` → 对齐 →
+  用固定证书签名（pin：`config/signing-cert-sha256.txt`）→ 对最终 APK 重新解包，
+  再跑全部 verify 脚本和标记检查。
+- 成功后发布 Release `v1.0.0-build-<run_number>`。构建**不是逐字节可复现的**，
+  判断是否为同一构建要看 helper 标记和 verify 报告，不要看 APK sha256。
+
+### 步骤 7：实机回归
+
 ```bash
-adb install -r <rebuilt-apple-music>.apk
+adb install -r apple-music-vivo-car-lyrics-debug.apk
+adb logcat -s VivoCarTitle
 ```
-**回归验证清单**：
-- [ ] 1. 播放任意普通歌曲，声音正常，无损/杜比全景声生效。
-- [ ] 2. 进入歌单列表，歌名批量呈现简体中文。
-- [ ] 3. 进入专辑详情页，全部曲目呈现简体中文。
-- [ ] 4. 播放曾出现英文原名或港台繁体的歌曲（如五月天/831歌曲），确认显示为 100% 简体中文。
-- [ ] 5. 正在播放界面歌名正确显示简体中文。
-- [ ] 6. 切歌时，旧曲名立即刷新，无串歌名残留。
-- [ ] 7. 连接 vivo JoviInCar 车机：车机中控屏歌词正常同步滚动，切句时不刷新封面。
-- [ ] 8. vivo 原子随身听：桌面小组件歌词同步显示，进度条正常显示时长、随播放走动、支持拖拽 seek。
+
+- [ ] 正常播放；无损/杜比全景声正常。
+- [ ] 歌单、专辑页的歌名和**歌手**在预取后刷新为简体，滚动不卡顿。
+- [ ] 正在播放页的歌名和**歌手**（来自 `a1.y0` 副标题）正确；古典作曲者和
+      contentType 9 的格式化副标题保持宿主样式。
+- [ ] 从歌单、专辑、搜索三个入口播放同一首歌，歌手显示一致。
+- [ ] 通知栏的标题和歌手正确，且没有重发 MediaItem（原子随身听进度条不丢失）。
+- [ ] 快速切歌时没有串名；旧的纯标题缓存会补查到歌手。
+- [ ] 断网或查询失败时保留宿主显示，不崩溃。
+- [ ] 车机：歌词同步滚动，切句时封面不刷新。
+- [ ] 原子随身听：歌词同步；进度条有时长、会走动、可以拖动 seek。
 
 ---
 
-## 5. 核心避坑指南与铁律
+## 6. 避坑铁律
 
-| 踩坑点 | 现象 / 后果 | 预防铁律 |
-|---|---|---|
-| **重发 MediaItem** | 原子随身听进度条丢失变 `--:--`，车机每句歌词封面狂闪 | **铁律**：`publishMetadata` 必须保持无操作（no-op）。只允许更新 MediaSession Extras，严禁调用原生 `publish` 方法重新推送 MediaItem。 |
-| **原子能力位遗漏** | 原子随身听有歌词但进度条永远显示 `--:--` | **铁律**：在原生 MediaItem extras 发布路径中必须**原位 OR 入** `7 \| 8 \| 16 = 31`。其中 `16` 代表 seek/time 进度条能力位，不可遗漏。 |
-| **macOS 大小写不敏感** | 解压 Smali 时 `na.smali` 与 `Na.smali` 相互覆盖 | **铁律**：在 macOS 解包时使用 `tar -xOzf` 查看指定流，或在 GitHub Actions Linux 环境下解包，避免文件名覆盖混淆。 |
-| **网络请求全局污染** | 导致官方用户账号封禁、换区失败或播放鉴权异常 | **铁律**：StoreFront 目录请求必须携带模块专用请求 token，只有被标记的歌名请求才走大陆/港台 StoreFront，原生账号流请求原样直通。 |
-| **异步更新非原子** | 快速切歌时上一首的异步结果落到新歌上 | **铁律**：所有异步标题回填必须比对 `generation`、`queueId`、`catalogId`。如果当前播放歌曲已变更，异步结果仅写入持久化磁盘缓存，绝不刷新到当前 UI。 |
-| **繁体字转换性能** | 转换大歌单时 UI 掉帧、卡顿 | **铁律**：`ChineseConverter` 采用预排序二分查找与局部替换，严禁在主线程频繁分配大对象或正则匹配。 |
+| 坑 | 后果 | 铁律 |
+| --- | --- | --- |
+| 重发 MediaItem | 原子随身听进度条变 `--:--`，车机封面闪烁 | `publishMetadata` 保持 no-op；歌名/歌手只原位改字段，再刷新 stock 通知 |
+| 漏掉能力位 | 原子随身听进度条显示 `--:--` | 原位 OR `7\|8\|16`，16 不可少 |
+| 只 Hook `getArtistName` | 播放页歌手不变 | 播放页歌手来自 `y0` 副标题，必须在 binding 接缝修正 |
+| 借用了仍然存活的寄存器 | 运行时数据错乱 | 只能借用下一次使用是写入的寄存器，并用锚点断言 |
+| 放宽 pin 让 CI 变绿 | 改错位置也能通过 | 先确认语义，再更新 sha256 |
+| 网络请求被全局改写 | 账号或鉴权异常 | 只改写带 live token 的请求 |
+| 异步结果串到别的歌 | 快速切歌时显示错名 | 比对 generation / queueId / catalogId / revision |
+| 反射名静默失效 | 功能“没生效”但不报错 | 每个版本逐项核对 §4，并看 logcat |
+| macOS 大小写不敏感 | smali 文件互相覆盖 | 用 `tar -xOzf` 读单个文件，或在 Linux CI 中处理 |
+| 把 CI 成功当成实机验证 | 误报“已修复” | 实机回归通过前一律标注“未验证” |
 
 ---
 
-## 6. 核心文件职责索引
+## 7. 文件索引
 
-- `cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java`：总状态机，负责车机与原子随身听歌词分发、播放器生命周期拦截、原子能力位原位注入、UI 标题调度。
-- `cloud-patch/java/com/apple/android/music/player/CatalogTitleResolver.java`：StoreFront 多区网络解析器，管理 `cn` $\to$ `tw` $\to$ `hk` 级联回退与批量 Stage 调度。
-- `cloud-patch/java/com/apple/android/music/player/ChineseConverter.java`：高性能纯 Java 繁简转换引擎，2965 个字符二分查找。
-- `cloud-patch/java/com/apple/android/music/player/TitleCorrectionState.java`：内存 LRU 缓存与异步解析并发状态管理。
-- `cloud-patch/java/com/apple/android/music/player/TitleCacheStore.java`：应用私有目录的轻量原子文件持久化缓存（容量 256 项，30 天过期）。
-- `cloud-patch/patch_item_title.py`：列表模型与 Epoxy 页面控制器的静态/动态 Smali 注入脚本。
-- `cloud-patch/patch_catalog_region.py`：底层 HTTP 客户端 Smali 注入脚本。
-- `cloud-patch/verify_title_hook.py`：正在播放界面 ViewBinding 赋值接缝静态断言工具。
-- `cloud-patch/apply.sh`：主注入驱动脚本（打 patch、修改 manifest、运行 python 注入脚本、签名校验）。
-- `cloud-patch/rebuild.sh`：主重建驱动脚本（apktool 回编译、编译 Java helper 为 classesN.dex、zipalign、签名）。
-- `cloud-patch/tests/verify_source_contract.py`：代码安全契约断言测试。
-- `cloud-patch/tests/test_p0_classes.py`：Python 单元与回退测试集。
+**当前主路径**
+- `cloud-patch/java/com/apple/android/music/player/VivoCarLyrics.java`：总状态机。
+  负责歌词分发、能力位、歌名歌手调度、预取、列表刷新和反射写回。
+- `CatalogTitleResolver.java`：单曲/批量/ISRC 查询，cn → tw → hk 缺失回退，
+  以及 `correctCatalogRequest` 接缝。
+- `CatalogQueryMethod.java`：定位宿主的 catalog suspend 方法（按类缓存命中与缺失）。
+- `TitleCorrectionState.java`：内存 LRU（4096）、无锁快表、请求顺序保护。
+- `TitleCacheStore.java`：`cn_v1` 磁盘缓存（4096 项，30 天），读入时统一转简体。
+- `ChineseConverter.java`：字符级繁转简（先扫描，命中才分配数组）。
+- `ClusterLyricsPaginator.java`：仪表盘歌词分页（r38 基线，不扩展）。
+- `cloud-patch/apple-vivo-car-lyrics.patch`、`apply.sh`、`rebuild.sh`。
+- `cloud-patch/verify_lyrics_hooks.py`、`verify_title_hook.py`、
+  `verify_reflection_names.py`（§4 反射名的 CI 预检）、
+  `patch_item_title.py`、`patch_catalog_region.py`。
+- `cloud-patch/tests/`：`run-java-tests.sh`（只在 CI 运行）、
+  `verify_source_contract.py`、`test_*.py`、`com/**`、`title_integration/`、
+  `catalog_query/`。
+- `docs/ARTIST_LOCALIZATION_1609.zh-CN.md`：1609 映射与修复记录。
+
+**已废弃（AM++ 路线，已于 2026-10-13 从仓库删除）**
+- `cloud-patch/ampp/**`、`cloud-patch/embed-ampp.sh`、
+  `cloud-patch/tests/test_embed_build.py`、`docs/AMPP_INTEGRATION.zh-CN.md`；
+  workflow 的 `embed_ampp` / `standalone_module` 输入与 NPatch / AM++ 下载步骤。
+  需要时从 git 历史取回，**不要**再适配或重新启用。
+- `docs/HANDOFF_ARTIST_LOCALIZATION_ISSUE.zh-CN.md` 中的 1607 映射与命令
+  （包括 `py -3` 命令）均为历史记录。

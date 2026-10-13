@@ -22,7 +22,6 @@ import java.util.concurrent.Executor;
 public final class CatalogTitleResolver {
     public static final String CATALOG_LANGUAGE = "zh-CN";
     public static final String REQUEST_TOKEN_PARAMETER = "vivo_title_catalog_request";
-    private static final String MAINLAND_PATH = "/v1/catalog/cn/songs";
     private static final long QUERY_LIFETIME_NANOS = 15_000_000_000L;
     private static final int MAX_PENDING_REQUESTS = 64;
     private static final AtomicLong REQUEST_SEQUENCE = new AtomicLong();
@@ -44,24 +43,44 @@ public final class CatalogTitleResolver {
         }
     }
 
-    public interface Callback {
-        void onTitle(String title);
-        void onError(Throwable error);
-    }
-
     public interface TrackCallback {
         void onTrack(TrackInfo track);
         void onError(Throwable error);
     }
 
-    public interface BatchCallback {
-        void onTitles(Map<String, String> titles);
+    public interface BatchTrackCallback {
+        void onTracks(Map<String, TrackInfo> tracks);
+        /** complete is false when a tw/hk stage failed and only the accumulated part is reported. */
+        default void onTracks(Map<String, TrackInfo> tracks, boolean complete) { onTracks(tracks); }
         void onError(Throwable error);
     }
 
-    public interface BatchTrackCallback {
-        void onTracks(Map<String, TrackInfo> tracks);
-        void onError(Throwable error);
+    /** The only storefront table: fallback order is cn -> tw -> hk, for missing IDs only. */
+    private static final class Region {
+        static final Region HK = new Region("hk", "143463", "zh-HK", "zh-Hant-HK", null);
+        static final Region TW = new Region("tw", "143470", "zh-TW", "zh-Hant-TW", HK);
+        static final Region CN = new Region("cn", "143465", CATALOG_LANGUAGE, "zh-Hans", TW);
+
+        final String storefront;
+        final String storefrontId;
+        final String language;
+        final String acceptLanguage;
+        final Region next;
+
+        private Region(String storefront, String storefrontId, String language,
+                       String acceptLanguage, Region next) {
+            this.storefront = storefront;
+            this.storefrontId = storefrontId;
+            this.language = language;
+            this.acceptLanguage = acceptLanguage;
+            this.next = next;
+        }
+
+        static Region of(String storefront) {
+            if (TW.storefront.equalsIgnoreCase(storefront)) return TW;
+            if (HK.storefront.equalsIgnoreCase(storefront)) return HK;
+            return CN;
+        }
     }
 
     public static final class Request {
@@ -117,32 +136,13 @@ public final class CatalogTitleResolver {
         if (count == 0) throw new IllegalArgumentException("No valid catalog IDs");
         Map<String, String> params = new LinkedHashMap<String, String>();
         params.put("ids", builder.toString());
-        String sf = storefront == null || storefront.isEmpty() ? "cn" : storefront.toLowerCase();
-        params.put("l", "tw".equals(sf) ? "zh-TW" : ("hk".equals(sf) ? "zh-HK" : CATALOG_LANGUAGE));
+        params.put("l", Region.of(storefront).language);
         params.put("platform", "android");
         params.put("include[songs]", "artists");
         return new Request("songs", params);
     }
 
     /** Every ID/ISRC stage shares one 15-second deadline; duplicate callbacks settle once. */
-    public static boolean query(Object catalog, String catalogId, String language,
-                                String preferredName, Callback callback) {
-        return query(catalog, catalogId, language, preferredName, callback, new Executor() {
-            public void execute(Runnable task) { task.run(); }
-        });
-    }
-
-    public static boolean query(final Object catalog, String catalogId, String language,
-                                String preferredName, final Callback callback, final Executor hostExecutor) {
-        if (callback == null) return false;
-        return queryTrack(catalog, catalogId, language, preferredName, new TrackCallback() {
-            public void onTrack(TrackInfo track) {
-                callback.onTitle(track == null ? null : track.title);
-            }
-            public void onError(Throwable error) { callback.onError(error); }
-        }, hostExecutor);
-    }
-
     public static boolean queryTrack(Object catalog, String catalogId, String language,
                                      String preferredName, TrackCallback callback) {
         return queryTrack(catalog, catalogId, language, preferredName, callback, new Executor() {
@@ -183,20 +183,6 @@ public final class CatalogTitleResolver {
         }
     }
 
-    public static boolean batchQuery(Object catalog, Collection<String> catalogIds, String language,
-                                      String preferredName, BatchCallback callback) {
-        return batchQuery(catalog, catalogIds, language, preferredName, callback, new Executor() {
-            public void execute(Runnable task) { task.run(); }
-        });
-    }
-
-    public static boolean batchQuery(final Object catalog, Collection<String> catalogIds, String language,
-                                      String preferredName, final BatchCallback callback, final Executor hostExecutor) {
-        if (callback == null) return false;
-        final BatchOnce once = new BatchOnce(callback);
-        return startBatchExecution(catalog, catalogIds, preferredName, hostExecutor, once);
-    }
-
     public static boolean batchQueryTracks(Object catalog, Collection<String> catalogIds, String language,
                                             String preferredName, BatchTrackCallback callback) {
         return batchQueryTracks(catalog, catalogIds, language, preferredName, callback, new Executor() {
@@ -208,11 +194,22 @@ public final class CatalogTitleResolver {
                                             String preferredName, final BatchTrackCallback callback, final Executor hostExecutor) {
         if (callback == null) return false;
         final BatchOnce once = new BatchOnce(callback);
-        return startBatchExecution(catalog, catalogIds, preferredName, hostExecutor, once);
+        return startBatchExecution(catalog, catalogIds, preferredName, hostExecutor, once, Region.CN);
+    }
+
+    /** Runs only tw -> hk for IDs the caller already knows are absent from the mainland catalog. */
+    public static boolean regionalFallbackTracks(final Object catalog, Collection<String> catalogIds,
+                                                 String language, String preferredName,
+                                                 final BatchTrackCallback callback,
+                                                 final Executor hostExecutor) {
+        if (callback == null) return false;
+        final BatchOnce once = new BatchOnce(callback);
+        return startBatchExecution(catalog, catalogIds, preferredName, hostExecutor, once, Region.TW);
     }
 
     private static boolean startBatchExecution(final Object catalog, Collection<String> catalogIds,
-                                               String preferredName, final Executor hostExecutor, final BatchOnce once) {
+                                               String preferredName, final Executor hostExecutor,
+                                               final BatchOnce once, Region first) {
         try {
             if (catalog == null) throw new IllegalArgumentException("Missing catalog instance");
             final Method method = CatalogQueryMethod.resolve(catalog.getClass(),
@@ -228,7 +225,7 @@ public final class CatalogTitleResolver {
             if (targetIds.isEmpty()) throw new IllegalArgumentException("No valid catalog IDs");
 
             final Map<String, TrackInfo> accumulated = new LinkedHashMap<String, TrackInfo>();
-            executeBatchStage(catalog, method, targetIds, "cn", accumulated, hostExecutor, once);
+            executeBatchStage(catalog, method, targetIds, first, accumulated, hostExecutor, once);
             return true;
         } catch (Throwable error) {
             once.failure(unwrap(error));
@@ -237,30 +234,30 @@ public final class CatalogTitleResolver {
     }
 
     private static void executeBatchStage(final Object catalog, final Method method,
-                                          final List<String> pendingIds, final String storefront,
+                                          final List<String> pendingIds, final Region region,
                                           final Map<String, TrackInfo> accumulated,
                                           final Executor hostExecutor, final BatchOnce once) {
         if (!once.active()) return;
         if (pendingIds.isEmpty()) {
-            once.success(accumulated);
+            once.success(accumulated, true);
             return;
         }
         final Request request;
         try {
-            request = batchSongRequest(pendingIds, "tw".equalsIgnoreCase(storefront) ? "zh-TW" : ("hk".equalsIgnoreCase(storefront) ? "zh-HK" : CATALOG_LANGUAGE), storefront);
+            request = batchSongRequest(pendingIds, region.language, region.storefront);
         } catch (Throwable error) {
             once.failure(unwrap(error));
             return;
         }
-        dispatch(catalog, method, request.parameters, storefront, hostExecutor, once, new ResponseCallback() {
+        dispatch(catalog, method, request.parameters, region, hostExecutor, once, new ResponseCallback() {
             public void onResponse(Object response) {
                 if (!once.active()) return;
                 try {
                     if (hasResponseErrors(response) && !isNotFound(response)) {
-                        if ("cn".equalsIgnoreCase(storefront)) {
+                        if (region == Region.CN) {
                             throw new IllegalStateException("Catalog response contains errors");
                         } else {
-                            once.success(accumulated);
+                            once.success(accumulated, false);
                             return;
                         }
                     }
@@ -274,24 +271,21 @@ public final class CatalogTitleResolver {
                             remaining.add(id);
                         }
                     }
-                    if (remaining.isEmpty()) {
-                        once.success(accumulated);
-                    } else if ("cn".equalsIgnoreCase(storefront)) {
-                        executeBatchStage(catalog, method, remaining, "tw", accumulated, hostExecutor, once);
-                    } else if ("tw".equalsIgnoreCase(storefront)) {
-                        executeBatchStage(catalog, method, remaining, "hk", accumulated, hostExecutor, once);
+                    if (remaining.isEmpty() || region.next == null) {
+                        once.success(accumulated, true);
                     } else {
-                        once.success(accumulated);
+                        executeBatchStage(catalog, method, remaining, region.next, accumulated,
+                                hostExecutor, once);
                     }
                 } catch (Throwable error) {
                     once.failure(unwrap(error));
                 }
             }
             public void onError(Throwable error) {
-                if ("cn".equalsIgnoreCase(storefront)) {
+                if (region == Region.CN) {
                     once.failure(error);
                 } else {
-                    once.success(accumulated);
+                    once.success(accumulated, false);
                 }
             }
         });
@@ -354,19 +348,19 @@ public final class CatalogTitleResolver {
     private static boolean dispatch(final Object catalog, final Method method,
                                     Map<String, String> parameters, boolean mainland,
                                     Executor executor, final Chain chain, ResponseCallback callback) {
-        return dispatch(catalog, method, parameters, mainland ? "cn" : null, executor, chain, callback);
+        return dispatch(catalog, method, parameters, mainland ? Region.CN : null, executor, chain, callback);
     }
 
     private static boolean dispatch(final Object catalog, final Method method,
-                                    Map<String, String> parameters, String storefront,
+                                    Map<String, String> parameters, Region region,
                                     Executor executor, final Chain chain, ResponseCallback callback) {
         if (!chain.active()) return false;
         final RawOnce once = new RawOnce(callback, chain);
         try {
             final Map<String, String> owned = new LinkedHashMap<String, String>(parameters);
-            if (storefront != null && !storefront.isEmpty()) {
+            if (region != null) {
                 String key = owned.containsKey("ids") ? "ids" : "filter[isrc]";
-                once.request = new PendingRequest(key, owned.get(key), chain, storefront);
+                once.request = new PendingRequest(key, owned.get(key), chain, region);
                 once.token = registerRequest(once.request);
                 owned.put(REQUEST_TOKEN_PARAMETER, once.token);
             }
@@ -396,7 +390,7 @@ public final class CatalogTitleResolver {
     }
 
     /**
-     * The 1607 y9.k.a entry receives fresh mutable header/query maps after Q.q0 has overwritten
+     * The 1609 y9.k.a entry receives fresh mutable header/query maps after Q.q0 has overwritten
      * l. Only a live resolver token plus its exact song ID authorizes the final regional rewrite.
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -422,20 +416,19 @@ public final class CatalogTitleResolver {
             finishRequest(rawToken instanceof String ? (String) rawToken : null);
             throw error;
         }
-        String sf = request.storefront;
-        if (sf == null || sf.isEmpty()) sf = "cn";
-        parameters.put("l", "tw".equalsIgnoreCase(sf) ? "zh-TW" : ("hk".equalsIgnoreCase(sf) ? "zh-HK" : CATALOG_LANGUAGE));
+        Region region = request.region;
+        parameters.put("l", region.language);
         parameters.remove(REQUEST_TOKEN_PARAMETER);
-        replaceHeader(headers, "Accept-Language", "tw".equalsIgnoreCase(sf) ? "zh-Hant-TW" : ("hk".equalsIgnoreCase(sf) ? "zh-Hant-HK" : "zh-Hans"));
+        replaceHeader(headers, "Accept-Language", region.acceptLanguage);
         replaceHeader(headers, "X-Apple-Store-Front",
-                regionalStorefrontHeader(sf, header(headers, "X-Apple-Store-Front")));
+                regionalStorefrontHeader(region, header(headers, "X-Apple-Store-Front")));
         replaceHeader(headers, "X-Apple-Request-Store-Front",
-                regionalStorefrontHeader(sf, header(headers, "X-Apple-Request-Store-Front")));
+                regionalStorefrontHeader(region, header(headers, "X-Apple-Request-Store-Front")));
         if (!request.chain.active()) {
             throw new IllegalStateException("Mainland catalog request expired during localization");
         }
         request.localized = true;
-        return "/v1/catalog/" + sf.toLowerCase() + "/songs";
+        return "/v1/catalog/" + region.storefront + "/songs";
     }
 
     private static String registerRequest(PendingRequest request) {
@@ -485,19 +478,12 @@ public final class CatalogTitleResolver {
         return null;
     }
 
-    private static String regionalStorefrontHeader(String storefront, String original) {
-        String prefix = "143465";
-        if ("tw".equalsIgnoreCase(storefront)) prefix = "143470";
-        else if ("hk".equalsIgnoreCase(storefront)) prefix = "143463";
+    private static String regionalStorefrontHeader(Region region, String original) {
         String value = original == null ? "" : original;
         int offset = 0;
         while (offset < value.length() && value.charAt(offset) >= '0'
                 && value.charAt(offset) <= '9') offset++;
-        return prefix + value.substring(offset);
-    }
-
-    private static String mainlandStorefrontHeader(String original) {
-        return regionalStorefrontHeader("cn", original);
+        return region.storefrontId + value.substring(offset);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -514,16 +500,13 @@ public final class CatalogTitleResolver {
         final String selectorKey;
         final String selector;
         final Chain chain;
-        final String storefront;
+        final Region region;
         volatile boolean localized;
-        PendingRequest(String selectorKey, String selector, Chain chain) {
-            this(selectorKey, selector, chain, "cn");
-        }
-        PendingRequest(String selectorKey, String selector, Chain chain, String storefront) {
+        PendingRequest(String selectorKey, String selector, Chain chain, Region region) {
             this.selectorKey = selectorKey;
             this.selector = selector;
             this.chain = chain;
-            this.storefront = storefront == null || storefront.isEmpty() ? "cn" : storefront;
+            this.region = region;
         }
     }
 
@@ -620,11 +603,6 @@ public final class CatalogTitleResolver {
     }
 
     /** MediaApiResponse.getData() is MediaEntity[]; accept only an exact requested song identity. */
-    public static String extractTitle(Object response, String catalogId) {
-        TrackInfo track = extractTrack(response, catalogId);
-        return track == null ? null : track.title;
-    }
-
     public static TrackInfo extractTrack(Object response, String catalogId) {
         String id = normalizeId(catalogId);
         if (id.isEmpty() || response == null) return null;
@@ -661,15 +639,6 @@ public final class CatalogTitleResolver {
                     ChineseConverter.toSimplified(artist)
                 ));
             }
-        }
-        return Collections.unmodifiableMap(result);
-    }
-
-    public static Map<String, String> extractTitles(Object response) {
-        Map<String, TrackInfo> tracks = extractTracks(response);
-        Map<String, String> result = new LinkedHashMap<String, String>();
-        for (Map.Entry<String, TrackInfo> entry : tracks.entrySet()) {
-            result.put(entry.getKey(), entry.getValue().title);
         }
         return Collections.unmodifiableMap(result);
     }
@@ -823,20 +792,11 @@ public final class CatalogTitleResolver {
     }
 
     private static final class BatchOnce implements Chain {
-        private final BatchCallback callback;
-        private final BatchTrackCallback trackCallback;
+        private final BatchTrackCallback callback;
         private final AtomicBoolean done = new AtomicBoolean();
         private final long deadlineNanos = System.nanoTime() + QUERY_LIFETIME_NANOS;
 
-        BatchOnce(BatchCallback callback) {
-            this.callback = callback;
-            this.trackCallback = null;
-        }
-
-        BatchOnce(BatchTrackCallback trackCallback) {
-            this.callback = null;
-            this.trackCallback = trackCallback;
-        }
+        BatchOnce(BatchTrackCallback callback) { this.callback = callback; }
 
         public boolean active() {
             if (done.get()) return false;
@@ -847,28 +807,18 @@ public final class CatalogTitleResolver {
 
         public long deadlineNanos() { return deadlineNanos; }
 
-        void success(Map<String, TrackInfo> tracks) {
+        void success(Map<String, TrackInfo> tracks, boolean complete) {
             if (!active()) return;
             if (done.compareAndSet(false, true)) {
                 finishChain(this);
-                if (trackCallback != null) {
-                    trackCallback.onTracks(tracks);
-                }
-                if (callback != null) {
-                    Map<String, String> titles = new LinkedHashMap<String, String>();
-                    for (Map.Entry<String, TrackInfo> entry : tracks.entrySet()) {
-                        titles.put(entry.getKey(), entry.getValue().title);
-                    }
-                    callback.onTitles(titles);
-                }
+                callback.onTracks(tracks, complete);
             }
         }
 
         public void failure(Throwable error) {
             if (done.compareAndSet(false, true)) {
                 finishChain(this);
-                if (trackCallback != null) trackCallback.onError(error);
-                if (callback != null) callback.onError(error);
+                callback.onError(error);
             }
         }
     }

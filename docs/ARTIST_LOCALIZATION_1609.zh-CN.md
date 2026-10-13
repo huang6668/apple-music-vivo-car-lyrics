@@ -5,7 +5,8 @@ versionCode 1609，四 ABI、七 DPI 的 APKM。
 
 ## 范围
 
-- 默认手机 APK，不使用 AM++、NPatch 或 LSPosed。
+- 默认手机 APK，不依赖任何 Hook 框架（AM++ / NPatch / LSPosed 路线已于
+  2026-10-13 废弃）。
 - 不提供地区模式；继续使用 `cn_v1` 缓存、中国大陆优先查询及已有的
   `cn -> tw -> hk` 缺失回退，结果统一转为简体。
 - “本地化”使用目录返回的 `artistName`，不对歌手名做机器翻译。

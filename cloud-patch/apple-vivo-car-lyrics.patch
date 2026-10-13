@@ -77,8 +77,7 @@
      .line 403
      .line 404
      move-result-object v39
--
-+
+ 
 +    # 1609 l()V: binding v1, item v8, stock title v39; v40/v41 are dead here.
 +    move-object/16 v41, v39
 +    move-object/from16 v39, v1
@@ -90,8 +89,7 @@
 +
      .line 405
      move/from16 v41, v38
--
-+
+ 
      .line 406
      .line 407
      move-object/from16 v42, v39
@@ -99,8 +97,7 @@
      .line 659
      .line 660
      move-result-object v52
--
-+
+ 
 +    # 1609 subtitle binding: v53/v54 are dead until the stock copy and and-long.
 +    move-object/16 v54, v52
 +    move-object/from16 v52, v1
@@ -112,8 +109,7 @@
 +
      .line 661
      move-object/from16 v54, v52
--
-+
+ 
      .line 662
      .line 663
      goto :goto_27
