@@ -6,7 +6,8 @@ public final class O {
     public static StoreMediaItem item;
     public static z3.y received;
 
-    public static StoreMediaItem b(z3.y metadata) {
+    /** 1609 signature: b(Lz3/y;)Lcom/apple/android/music/model/PlaybackItem; */
+    public static com.apple.android.music.model.PlaybackItem b(z3.y metadata) {
         received = metadata;
         return item;
     }

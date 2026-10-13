@@ -1,6 +1,6 @@
 package com.apple.android.music.playback.model;
 
-public class StoreMediaItem {
+public class StoreMediaItem implements com.apple.android.music.model.PlaybackItem {
     private String title;
     private String artistName;
     private final String catalogId;

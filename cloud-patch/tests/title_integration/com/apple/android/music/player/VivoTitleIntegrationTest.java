@@ -256,9 +256,11 @@ public final class VivoTitleIntegrationTest {
         timeout.catalog.succeed(0, "Too late");
         Handler.drain();
         equal("Timeout stock", timeout.manager.media.d.a);
+        // The late answer is cached without touching the UI; the next bind reuses it.
         timeout.activate();
         timeout.request();
-        equal(2, timeout.catalog.calls.size());
+        equal(1, timeout.catalog.calls.size());
+        equal("Too late", timeout.manager.media.d.a);
     }
 
     private static void testUnknownQueueEnrichment() throws Exception {
@@ -799,7 +801,7 @@ public final class VivoTitleIntegrationTest {
                 fixture.catalog.miss(1);
                 Handler.drain();
                 equal(3, fixture.catalog.calls.size());
-                equal("zh-CN", fixture.catalog.calls.get(2).language);
+                equal("zh-TW", fixture.catalog.calls.get(2).language);
 
                 Handler.advanceBy(1000L);
                 check(state().snapshot().completed && !state().snapshot().pending,
@@ -813,7 +815,12 @@ public final class VivoTitleIntegrationTest {
                 equal("Fallback deadline stock", fixture.manager.media.d.a);
                 equal("Fallback stock artist", fixture.manager.media.d.b);
                 equal("Fallback stock artist", fixture.item.getArtistName());
-                equal(null, new TitleCacheStore(directory).getTrack(fixture.id));
+                if (miss) {
+                    equal(null, new TitleCacheStore(directory).getTrack(fixture.id));
+                } else {
+                    trackEquals("Late fallback title", "Late fallback artist",
+                            new TitleCacheStore(directory).getTrack(fixture.id));
+                }
                 equal(0, binding.rebinds);
                 equal(0, fixture.manager.service.notificationRefreshes);
                 equal(0, fixture.manager.republishes);
@@ -1048,10 +1055,20 @@ public final class VivoTitleIntegrationTest {
                 Map<Object, Object> fresh = new LinkedHashMap<Object, Object>(parameters);
                 fresh.put("l", Locale.getDefault().toLanguageTag());
                 LinkedHashMap<Object, Object> headers = new LinkedHashMap<Object, Object>();
-                equal("/v1/catalog/cn/songs", CatalogTitleResolver.correctCatalogRequest(
-                        "/v1/catalog/us/songs", headers, fresh));
-                equal("zh-Hans", headers.get("Accept-Language"));
-                equal("143465", headers.get("X-Apple-Store-Front"));
+                String path = CatalogTitleResolver.correctCatalogRequest(
+                        "/v1/catalog/us/songs", headers, fresh);
+                // Only the three resolver storefronts may come out of the rewrite seam.
+                if (path.equals("/v1/catalog/tw/songs")) {
+                    equal("zh-Hant-TW", headers.get("Accept-Language"));
+                    equal("143470", headers.get("X-Apple-Store-Front"));
+                } else if (path.equals("/v1/catalog/hk/songs")) {
+                    equal("zh-Hant-HK", headers.get("Accept-Language"));
+                    equal("143463", headers.get("X-Apple-Store-Front"));
+                } else {
+                    equal("/v1/catalog/cn/songs", path);
+                    equal("zh-Hans", headers.get("Accept-Language"));
+                    equal("143465", headers.get("X-Apple-Store-Front"));
+                }
                 check(!fresh.containsKey(CatalogTitleResolver.REQUEST_TOKEN_PARAMETER),
                         "module token does not leave final HTTP adapter");
                 parameters = fresh;

@@ -591,8 +591,8 @@ public final class VivoCarLyrics {
             completeTitleTrack(request, null);
             return;
         }
-        // Results are always delivered: a late regional hit is cached and persisted, while
-        // completeTitleTrack keeps the UI untouched once this request no longer applies.
+        // A late in-flight regional hit is cached and persisted, while completeTitleTrack keeps
+        // the UI untouched once this request no longer applies.
         CatalogTitleResolver.regionalFallbackTracks(api, Collections.singletonList(request.catalogId),
                 TITLE_LANGUAGE, "F", new CatalogTitleResolver.BatchTrackCallback() {
                     @Override public void onTracks(final Map<String, CatalogTitleResolver.TrackInfo> tracks) {
@@ -614,7 +614,21 @@ public final class VivoCarLyrics {
                             }
                         });
                     }
-                }, MAIN_EXECUTOR);
+                }, new Executor() {
+                    // Responses arrive through the continuation, not this executor, so an
+                    // in-flight regional hit is still cached after the deadline; only new
+                    // stage dispatches (tw -> hk) stop once the request no longer applies.
+                    @Override public void execute(final Runnable task) {
+                        MAIN.post(new Runnable() {
+                            @Override public void run() {
+                                synchronized (TITLE_LOCK) {
+                                    if (!TITLE_STATE.acceptsResult(request)) return;
+                                }
+                                task.run();
+                            }
+                        });
+                    }
+                });
     }
 
     /** Resolver results are already simplified at extraction. */
