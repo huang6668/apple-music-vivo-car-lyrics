@@ -1055,17 +1055,17 @@ public final class VivoTitleIntegrationTest {
                 Map<Object, Object> fresh = new LinkedHashMap<Object, Object>(parameters);
                 fresh.put("l", Locale.getDefault().toLanguageTag());
                 LinkedHashMap<Object, Object> headers = new LinkedHashMap<Object, Object>();
-                String path = CatalogTitleResolver.correctCatalogRequest(
+                String rewritten = CatalogTitleResolver.correctCatalogRequest(
                         "/v1/catalog/us/songs", headers, fresh);
                 // Only the three resolver storefronts may come out of the rewrite seam.
-                if (path.equals("/v1/catalog/tw/songs")) {
+                if (rewritten.equals("/v1/catalog/tw/songs")) {
                     equal("zh-Hant-TW", headers.get("Accept-Language"));
                     equal("143470", headers.get("X-Apple-Store-Front"));
-                } else if (path.equals("/v1/catalog/hk/songs")) {
+                } else if (rewritten.equals("/v1/catalog/hk/songs")) {
                     equal("zh-Hant-HK", headers.get("Accept-Language"));
                     equal("143463", headers.get("X-Apple-Store-Front"));
                 } else {
-                    equal("/v1/catalog/cn/songs", path);
+                    equal("/v1/catalog/cn/songs", rewritten);
                     equal("zh-Hans", headers.get("Accept-Language"));
                     equal("143465", headers.get("X-Apple-Store-Front"));
                 }
