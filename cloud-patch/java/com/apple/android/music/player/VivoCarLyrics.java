@@ -35,15 +35,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r45-1609-2026-10-13";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r46-1609-2026-10-14";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
     private static final String TITLE_PROFILE = "cn_v1";
     private static final String TITLE_LANGUAGE = "zh-CN";
-    private static final String EXTRA_LINE = "music.media.extras.LYRIC";
-    private static final String EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED";
-    private static final String EXTRA_NOTICE = "music.media.extras.NOTICE_CAR";
     private static final String ATOMIC_ACTION_KEY = "vivomusicmix.meida.extra.key.action";
     private static final String ATOMIC_LRC_CHANGE = "vivomusicmix.extra.lrc_change";
     private static final String ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id";
@@ -2442,14 +2439,12 @@ public final class VivoCarLyrics {
         try {
             Object sessionManager = getFieldValue(manager, "a");
             Bundle extras = new Bundle();
-            String safeLine = line == null ? "" : line;
             String safeWhole = whole == null ? "" : whole;
 
-            // Car head unit keys
-            extras.putBoolean(EXTRA_ALLOWED, true);
-            extras.putString(EXTRA_LINE, safeLine);
-            extras.putBoolean(EXTRA_NOTICE, true);
-
+            // 车联 6.0.8.3 never reads the legacy head-unit line keys; the head unit and
+            // cluster cut lines from the lrc_change event themselves. A line update is therefore
+            // an empty Bundle: setExtras replaces wholesale, so it still clears the previous
+            // lrc_change action.
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);

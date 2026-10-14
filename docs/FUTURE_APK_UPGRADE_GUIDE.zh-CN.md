@@ -8,8 +8,9 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1609**。
 >
-> **验证状态**：最新构建为 Build #166（Release `v1.0.0-build-166`，helper 标记
-> `vivo-car-cn-track-r45-1609-2026-10-13`），只通过了 CI 校验，**尚未实机验证**。
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r46-1609-2026-10-14`
+> （r46 去掉了旧车机 key，见 §8.1）；上一个发布的构建是 Build #166（r45）。
+> 两者都只通过了 CI 校验，**尚未实机验证**。
 > Build #155 的实机验证只覆盖 1607 的**歌名**移植；r38（Build #83）的车机歌词、
 > 原子随身听歌词和进度条已于 2026-09-04 实车确认。CI 成功不等于实机验证。
 >
@@ -77,8 +78,8 @@ flowchart TD
 
 ### 1.2 r38 冻结基线（不可破坏）
 
-- 6 个歌词 Hook 保持原语义。车机走 `music.media.extras.*`，原子随身听走
-  `vivomusicmix.extra.lrc_change` 会话 extras 事件。
+- 6 个歌词 Hook 保持原语义。车机、仪表和原子随身听**共用**
+  `vivomusicmix.extra.lrc_change` 会话 extras 事件（整首 LRC，车联自己按时间切行）。
 - 在原生 MediaItem 的 metadata extras 上**原位 OR** `support_event |= 7|8|16`。
 - `publishMetadata()` 保持 no-op。歌名/歌手修正**永远不重发** MediaItem、
   MediaMetadata、PlaybackState 或封面。
@@ -451,19 +452,15 @@ adb logcat -s VivoCarTitle
 
 ## 8. vivo 协议字段（跨版本稳定，必须原样照抄）
 
-### 8.1 车机（JoviInCar）：MediaSession Extras
+### 8.1 车机（JoviInCar）：没有单独的通道
 
-```text
-music.media.extras.LYRIC             = 当前歌词行（String）
-music.media.extras.LYRIC_IS_ALLOWED  = true
-music.media.extras.NOTICE_CAR        = true
-```
-
-- 通过宿主 MediaSession 管理器的“设置会话 Extras”方法发布（1609：`sessionManager.j(Bundle)`，见 §4）。
-  宿主的 Extras 更新是合并式的，所以每次逐句更新都要把 `vivomusicmix.meida.extra.key.action`
-  显式清空（见 8.2(c)）。
-- **车联 6.0.8.3 并不读取这三个 key**（只在常量类 `aa/b.java` 里定义过）。车机和仪表的歌词实际来自
-  8.2(c) 的 `lrc_change` 整首 LRC 事件，车联自己按播放时间切行。这三个 key 只为兼容其它车联版本保留。
+- 车机和仪表的歌词**完全来自** 8.2(c) 的 `lrc_change` 整首 LRC 事件：车联 `eg/l.java onExtrasChanged()`
+  消费它，再由 `fg/l.java` 按播放时间切行。
+- 旧的 `music.media.extras.LYRIC` / `LYRIC_IS_ALLOWED` / `NOTICE_CAR` 三个 key，车联 6.0.8.3 从不读取
+  （只在常量类 `aa/b.java` 里定义过）。**r46（2026-10-14）已删除**，不再兼容旧车联，契约测试禁止加回来。
+- 逐句更新仍然每换一句调用一次宿主的“设置会话 Extras”（1609：`sessionManager.j(Bundle)`，见 §4），
+  只是现在发的是空 Bundle。`setExtras` 是整包替换，这一包的作用是把上一次的 `lrc_change` 动作从
+  session extras 里冲掉，让原子和车联看到的事件序列与 r38 一致。别把逐句发布当成无用代码删掉。
 
 ### 8.2 原子随身听
 

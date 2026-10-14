@@ -79,16 +79,13 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/CatalogTitleResolver' \
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
-  'vivo-car-cn-track-r45-1609-2026-10-13' \
+  'vivo-car-cn-track-r46-1609-2026-10-14' \
   'correctPlayerTitle' \
   'correctPlayerArtist' \
   'resolveItemTitle' \
   'resolveItemArtist' \
   'VivoCarTitle' \
   'onNativeMediaItem' \
-  'music.media.extras.LYRIC' \
-  'music.media.extras.LYRIC_IS_ALLOWED' \
-  'music.media.extras.NOTICE_CAR' \
   'vivomusicmix.meida.extra.key.action' \
   'vivomusicmix.extra.lrc_change' \
   'vivomusicmix.extra.key.meidia_id' \

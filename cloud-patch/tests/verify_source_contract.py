@@ -143,13 +143,10 @@ for forbidden in ("new Bundle(", "constructCompatible(", 'invokeRequired(manager
         f"Capability bit must be ORed in place, not republished: {forbidden}"
     )
 
-# Only the car head unit is served through session Extras. r37 stopped publishing the ucar
-# instrument-cluster keys entirely; they must not come back through this path.
-for required in (
-    "extras.putString(EXTRA_LINE",
-    "extras.putBoolean(EXTRA_ALLOWED",
-):
-    assert required in session_extras, f"Missing session Extras contract: {required}"
+# 车联 6.0.8.3 reads only the Atomic lrc_change event; the legacy head-unit keys were dropped
+# in r46. r37 stopped publishing the ucar instrument-cluster keys; neither may come back.
+assert "music.media.extras" not in text, "Legacy music.media.extras.* keys were removed in r46"
+assert "extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE)" in session_extras
 assert "ucar.media.metadata" not in session_extras, (
     "Instrument-cluster keys were removed in r37; do not publish them from session Extras"
 )
