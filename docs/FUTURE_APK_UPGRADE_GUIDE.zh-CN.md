@@ -3,12 +3,15 @@
 > **适用场景**：Apple Music 发布新版本后，把车机歌词、原子随身听播控/歌词/进度条，
 > 以及歌名/歌手本地化（cn → tw → hk 缺失回退 + 繁转简）移植到新 APK。
 >
-> **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1609**。
-> 修复内容与验证状态见 [1609 歌手显示修复记录](ARTIST_LOCALIZATION_1609.zh-CN.md)。
+> **这是升级时唯一需要阅读的文档。** 协议字段（§8）、已验证的死路（§9）、
+> 安装签名限制（§10）都已并入本文；旧手册与历史排查记录已从 `docs/` 删除，需要时从 git 历史取回。
 >
-> **验证状态**：Build #155 的实机验证只覆盖 1607 的**歌名**移植。
-> 1609 的歌手修复（helper 标记 `vivo-car-cn-track-r44-1609-2026-10-12`）
-> 只通过了 CI 静态校验，**尚未实机验证**。CI 成功不等于实机验证。
+> **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1609**。
+>
+> **验证状态**：最新构建为 Build #166（Release `v1.0.0-build-166`，helper 标记
+> `vivo-car-cn-track-r45-1609-2026-10-13`），只通过了 CI 校验，**尚未实机验证**。
+> Build #155 的实机验证只覆盖 1607 的**歌名**移植；r38（Build #83）的车机歌词、
+> 原子随身听歌词和进度条已于 2026-09-04 实车确认。CI 成功不等于实机验证。
 >
 > **AM++ 路线已废弃（2026-10-13）**：仓库里已**删除** `cloud-patch/ampp/**`、
 > `embed-ampp.sh`、`test_embed_build.py`、`docs/AMPP_INTEGRATION.zh-CN.md`，
@@ -214,15 +217,16 @@ sequenceDiagram
 - 单曲路径：`queryTrack` 先按 cn ID 查，失败再走 ISRC：用账号 StoreFront 做一次
   无 token 的身份探测，然后在 cn 上做 `filter[isrc]`。账号区的结果只用于身份，
   不作为本地化结果。返回 null 时，再走 `batchQueryTracks` 的三区回退。
-- 查询缺失或失败：**歌名**保留宿主显示。**歌手**目前会把宿主原值做一次繁转简
-  （`resolveItemArtist` / `onPlaylistTrack`），与歌名行为不一致，见 review 待办 #4。
+- 查询缺失或失败：**歌名**保留宿主显示。**歌手**会把宿主原值做一次繁转简
+  （`resolveItemArtist` / `onPlaylistTrack`）。这与歌名不一致，但是有意保留的行为，不要“修正”。
 - 列表预取只对歌曲类型发请求（`getContentType()` 为 1 或 36；或 `PlayParams.getKind()`
   是 `songs`/`song`）。类型未知的对象按老行为处理。**失败缓存**：只有 cn/tw/hk 三区都
   正常应答、且结果里确实没有该 ID 时，才把它记入 6 小时冷却表（上限 4096）；部分结果
   不记录。解析器通过 `BatchTrackCallback.onTracks(tracks, complete)` 的 `complete`
   参数告知是否为完整结果。
-- 单曲回退**不再重复查 cn**（cn 已经失败过），只走 tw → hk。
-  请求超时后迟到的结果只写入内存与磁盘缓存，不改界面、不重建列表。
+- 单曲回退**不再重复查 cn**（cn 已经失败过），只走 tw → hk。请求超过 15 秒截止时间后
+  不再派发新的地区查询；已在途的迟到结果只写入内存与磁盘缓存，不改界面、不重建列表，
+  下次绑定同一首歌时直接使用。
 - 歌手名使用目录返回的 `artistName`，不做机器翻译。
 
 ### 3.2 缓存
@@ -433,12 +437,132 @@ adb logcat -s VivoCarTitle
 - `cloud-patch/tests/`：`run-java-tests.sh`（只在 CI 运行）、
   `verify_source_contract.py`、`test_*.py`、`com/**`、`title_integration/`、
   `catalog_query/`。
-- `docs/ARTIST_LOCALIZATION_1609.zh-CN.md`：1609 映射与修复记录。
 
 **已废弃（AM++ 路线，已于 2026-10-13 从仓库删除）**
 - `cloud-patch/ampp/**`、`cloud-patch/embed-ampp.sh`、
   `cloud-patch/tests/test_embed_build.py`、`docs/AMPP_INTEGRATION.zh-CN.md`；
   workflow 的 `embed_ampp` / `standalone_module` 输入与 NPatch / AM++ 下载步骤。
   需要时从 git 历史取回，**不要**再适配或重新启用。
-- `docs/HANDOFF_ARTIST_LOCALIZATION_ISSUE.zh-CN.md` 中的 1607 映射与命令
-  （包括 `py -3` 命令）均为历史记录。
+- 已删除的历史文档（2026-10-14 合并进本文）：`APK_UPDATE_GUIDE`（旧手册）、`KNOWN_ISSUES`、
+  `ARTIST_LOCALIZATION_1609`、`AI_HANDOFF_PROMPT`、`HANDOFF_ARTIST_LOCALIZATION_ISSUE`、
+  `STANDALONE_TITLE_CORRECTION_PLAN`。其中的 6.5.2 / 1607 映射只有历史价值。
+
+---
+
+## 8. vivo 协议字段（跨版本稳定，必须原样照抄）
+
+### 8.1 车机（JoviInCar）：MediaSession Extras
+
+```text
+music.media.extras.LYRIC             = 当前歌词行（String）
+music.media.extras.LYRIC_IS_ALLOWED  = true
+music.media.extras.NOTICE_CAR        = true
+```
+
+- 通过宿主 MediaSession 管理器的“设置会话 Extras”方法发布（1609：`sessionManager.j(Bundle)`，见 §4）。
+  宿主的 Extras 更新是合并式的，所以每次逐句更新都要把 `vivomusicmix.meida.extra.key.action`
+  显式清空（见 8.2(c)）。
+- **车联 6.0.8.3 并不读取这三个 key**（只在常量类 `aa/b.java` 里定义过）。车机和仪表的歌词实际来自
+  8.2(c) 的 `lrc_change` 整首 LRC 事件，车联自己按播放时间切行。这三个 key 只为兼容其它车联版本保留。
+
+### 8.2 原子随身听
+
+**(a) Manifest action**：见注入点 1。`com.vivo.musicwidgetmix.support.service` 让原子选择**合作控制器**
+`c0`，歌词事件只有它处理，**不能撤**。
+
+**(b) MediaMetadata Extras（原生 MediaItem 发布路径中原位 OR）**
+
+```text
+vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16   （= 31）
+```
+
+| bit | 用途 | 原子 6.2.5.6 源码依据 |
+| --- | --- | --- |
+| 1 / 2 / 4 | 基础播控（未知应用默认 7） | `getSupportEvent()` 默认值 |
+| 8 | 歌词 | `f5/n.java`、`f5/b.java`：`b1.c(P0(), 8)` |
+| 16 | 进度条 / seek / 时间显示 | `t4/d0.java` `Y0()/Z0()`：`duration > 0 && b1.c(P0(), 16)` |
+| 32 | 自定义颜色 / 互传 | `SettingsMainView`、锁屏组件 |
+| 64 | 列表入口 | `MusicControlPanelView`、`f5/w0.java` |
+| 128 | 未确认 | `f5/w0.java` |
+
+合作控制器 `c0.k0()` **原样读取**这个值，不会自己补位。通用控制器 `y2` 才会根据
+`ACTION_SEEK_TO` 自己算出 23。所以走合作路径时少了 16 位，进度条就永远是 `--:--`。
+
+**(c) MediaSession Extras（完整 LRC 事件）**
+
+```text
+vivomusicmix.meida.extra.key.action   = "vivomusicmix.extra.lrc_change"（有事件时）/ ""（逐句更新时）
+vivomusicmix.extra.key.meidia_id      = 当前公开 android.media.metadata.MEDIA_ID
+vivomusicmix.extra.key.lyric          = 完整带时间戳 LRC
+```
+
+- `meida` / `meidia` 是协议的**真实拼写**，不能改。
+- 切歌时先发一次空歌词事件（`lrc_change` + 新曲 ID + 空 lyric），清掉原子内存里的上一首。
+  公开 ID 还没出现时用新队列项的 store ID 兜底；连兜底也没有就发空 ID。
+- 原子要求 `meidia_id` 等于当前歌曲（`t4/d0.java E0()/z1()`），否则隐藏歌词；车联只要求非空。
+
+### 8.3 vivo 侧参考源码
+
+需要查原子或车联内部逻辑时，运行 workflow **Decompile vivo APK**
+（`.github/workflows/vivo-decompile.yml`，输入 `release_tag`、`label`）。
+
+| Release tag | 包 | label |
+| --- | --- | --- |
+| `atomic-apk-6.2.5.6` | 原子随身听 `com.vivo.musicwidgetmix` 6.2.5.6 | `atomic` |
+| `carnetworking-apk-6.0.8.3` | 车联 `com.vivo.car.networking` 6.0.8.3 | `carnetworking` |
+
+```text
+原子：controller/c3.java   控制器工厂（按包名 / manifest action 选控制器）
+      controller/c0.java   合作控制器：k0() 读 support_event 与 DURATION；内部类 b 处理 lrc_change
+      controller/y2.java   通用 MediaSession 控制器：j0() 自算 support_event
+      t4/d0.java           Y0()/Z0() 决定进度条是否显示；E0()/z1() 校验 lrc 的 mediaId
+      view/SeekBarLayout   refreshPosition()：!isSupportTimeInfo 时显示 --:--
+车联：aa/b.java            协议常量
+      eg/l.java            onExtrasChanged() 消费 lrc_change；c(MediaMetadata) 读 ucar.* 键
+      fg/l.java            WholeLyricManager：按播放位置从整首 LRC 切出当前行
+      gg/d.java            HudManager：仪表发送（截断 17 字 + "..."，每次附带封面）
+```
+
+原子的 `MediaControllerCompat` 只是 `android.media.session.MediaController` 的薄包装，
+compat 层和框架层是同一个 session，不是两条通道。
+
+---
+
+## 9. 已验证的死路（不要重试）
+
+| 方案 | 结论 |
+| --- | --- |
+| 重发 MediaItem（如 `manager.I(mediaItem, 0)`） | 重置 PlaybackState，原子进度条变 `--:--`，车机封面闪烁（r34 实测，已撤销） |
+| 往 MediaItem extras 写 `DURATION` 修进度条 | 无意义，时长本来就在；缺的是 support_event 的 16 位 |
+| compat token 反射路径、`Token.fromToken` | 方向错误，compat 层不是独立通道 |
+| 在 session extras 写 `ucar.media.metadata.LYRICS_WHOLE/LINE` | 车联只从 MediaMetadata 读这两个 key，写在 session extras 无效（r9–r36 分页失败的原因） |
+| 通过 MediaMetadata 的 `ucar.*` 单独喂车联 | 歌词加载完成后要重发 MediaItem，等于第一行的死路 |
+| 把 LRC 按 ≤20 字分页给仪表 | 原子和车机歌词页读同一个 key，会一起变成碎句，封面重载更频繁。**用户已否决** |
+| 给车联和原子发不同的 LRC | 两者都读 `vivomusicmix.extra.key.lyric`，后写覆盖先写；用 mediaId 区分会让原子隐藏歌词 |
+| 修仪表截断 / 每句重载封面 | 根因在车联 `gg/d.java`：写死 `substring(0,17)+"..."`；`CarMusicInfo.equals` 包含当前行，每句都会连同封面整包重发。Apple Music 侧没有杠杆；改车联需要 vivo 私钥 |
+| 外挂桥接 App（`kuwo-bridge/`，伪装 `cn.kuwo.player`） | 能解决车联识别和控制转发，但拿不到宿主私有的完整同步歌词。改 Apple Music APK 仍是最完整的方案 |
+| AM++ / NPatch / LSPosed | 2026-10-13 废弃，歌名歌手修正已完全内置于 helper DEX |
+
+历史版本的教训：r39 只适配了发布方法、漏改当前 MediaItem getter（1607 起为 `c()`，旧版 `a()`），
+导致车机和原子都没有歌词。**每个版本都要核对 §4 的全部反射名**，不能只改 smali。
+
+**诊断开关**：`VivoCarLyrics.DIAGNOSTIC_MODE = true` 会在歌词头部输出 D1–D6 诊断行
+（token 路径、时长与 support_event、PlaybackState、ucar 键、连接时间）；`TITLE_DEBUG = true`
+会在 `VivoCarTitle` tag 下打印逐曲查询日志。两者默认都是 `false`，改为 `true` 后重新构建即可，无需加代码。
+
+---
+
+## 10. 安装与签名限制
+
+- 重建的 APK 使用自有测试签名，**不能覆盖安装**官方 Apple Music。从官方版切换要先卸载，
+  已下载的歌曲会被清除。
+- 新签名可能影响 Apple 登录、DRM、推送或完整性检查，测试前确认账号可以重新登录。
+- 同一固定密钥构建的版本之间可以直接 `adb install -r` 覆盖。
+
+```text
+GitHub Secret: ANDROID_SIGNING_KEY_BASE64 / ANDROID_SIGNING_PASSWORD
+Key alias:     apple-music-vivo-car-lyrics
+证书 SHA-256:  见 config/signing-cert-sha256.txt（rebuild.sh 会校验，换了密钥构建直接失败）
+```
+
+密钥和密码只存在 GitHub Secrets 里，不进 Git。私钥丢失后，新构建将无法覆盖旧安装。

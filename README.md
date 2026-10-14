@@ -10,10 +10,10 @@ Private, manually triggered GitHub Actions workflow for analyzing and rebuilding
 - The pinned test certificate lets later builds update one another, but it cannot replace Apple's signed package or older builds signed with a different temporary key.
 - One in-process lyrics state machine (`VivoCarLyrics`) loads and parses Apple Music's private lyrics. The head unit receives the current line through `music.media.extras.*` session Extras; Atomic Player receives the full timestamped LRC through `vivomusicmix.*` session Extras.
 - Current-line changes only touch session Extras. `MediaMetadata` is never rebuilt and the `MediaItem` is never republished by the helper, so the native progress bar and artwork stay intact.
-- `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see `docs/KNOWN_ISSUES.zh-CN.md`).
+- `MediaPlaybackService` advertises `com.vivo.musicwidgetmix.support.service` so Atomic Player selects its cooperation controller, and `vivomusicmix.media.metadata.support_event` is ORed in place to `7|8|16` (transport + lyrics + seek/time). Bit 16 is what makes Atomic Player render the progress bar on that path (found by decompiling Atomic Player 6.2.5.6; see §8 of the upgrade guide).
 - Instrument-cluster (`ucar.media.metadata.*`) publishing was removed in r37; `ClusterLyricsPaginator` is kept compiled but unused.
 - Current baseline: r38, GitHub Release `v1.0.0-build-83`, helper marker `vivo-car-atomic-seek-bit-r38-2026-09-03`. Head-unit lyrics, Atomic Player lyrics and the Atomic progress bar are all confirmed working in the car (2026-09-04); r38 is the frozen baseline for future ports.
-- The build is self-contained: title/artist correction lives in the helper DEX and needs no Xposed-style module or wrapper shell. The current port targets Apple Music 7.0.0-beta 1609 and corrects both title and artist display, with mainland-first StoreFront fallback (`cn` -> `tw` -> `hk`) and Simplified Chinese conversion. Its bounded persistent cache is isolated as `cn_v1`; ordinary account, playback, and lyrics requests remain untouched. Build #155's device validation applied to the previous 1607 title port, not this artist fix. See [1609 artist fix and verification](docs/ARTIST_LOCALIZATION_1609.zh-CN.md).
+- The build is self-contained: title/artist correction lives in the helper DEX and needs no Xposed-style module or wrapper shell. The current port targets Apple Music 7.0.0-beta 1609 and corrects both title and artist display, with mainland-first StoreFront fallback (`cn` -> `tw` -> `hk`) and Simplified Chinese conversion. Its bounded persistent cache is isolated as `cn_v1`; ordinary account, playback, and lyrics requests remain untouched. The latest build is #166 (helper marker `vivo-car-cn-track-r45-1609-2026-10-13`), CI-verified only; Build #155's device validation applied to the previous 1607 title port, not this artist fix.
 - The AM++ / NPatch route was abandoned on 2026-10-13; its scripts, workflow inputs and artifacts were removed.
 
 ## KuWo bridge prototype
@@ -60,12 +60,9 @@ Rebuilds require the repository secrets `ANDROID_SIGNING_KEY_BASE64` and
 
 ## Future Apple Music updates
 
-- [Future APK upgrade and porting guide (新版 APK 适配与升级指南)](docs/FUTURE_APK_UPGRADE_GUIDE.zh-CN.md) — 5 大关键注入点定位、解耦架构、多区回退与繁简转换实操手册
-- [APK update and porting guide (历史移植手册)](docs/APK_UPDATE_GUIDE.zh-CN.md) — roadmap, stable protocol contract, reflection/hook relocation recipes, payload packaging, CI commands
-- [Prompt template for the next AI](docs/AI_HANDOFF_PROMPT.zh-CN.md)
-- [Known issues and dead ends](docs/KNOWN_ISSUES.zh-CN.md)
+- [Future APK upgrade and porting guide (新版 APK 适配与升级指南)](docs/FUTURE_APK_UPGRADE_GUIDE.zh-CN.md) — the single document for porting: injection points, per-version reflection names, upgrade steps, vivo protocol fields, verified dead ends, signing limits
 
-For a new Apple Music version, hand the new APK plus the prompt template to the AI.
+For a new Apple Music version, hand the new APKM plus this guide to the AI.
 The obfuscated classes and Smali hook locations must be rediscovered for every
-version; the 6.5.2 class names and line numbers are not stable interfaces, but the
-protocol fields, capability bits, and the six hook semantics are.
+version; class names are not stable interfaces, but the protocol fields,
+capability bits, and the six hook semantics are.
