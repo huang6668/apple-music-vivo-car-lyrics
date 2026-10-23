@@ -135,6 +135,31 @@ jobs:
 
           wc -l "$report"/*.txt
 
+      - name: Pack key sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src=work/target/jadx/sources
+          mkdir -p work/target/key-sources
+          for pkg in jg eg wb gg q9 fg ub aa; do
+            if [ -d "$src/$pkg" ]; then
+              cp -r "$src/$pkg" work/target/key-sources/
+            fi
+          done
+          tar -C work/target -czf "work/target/${{ inputs.label }}-key-sources.tar.gz" key-sources
+          ls -la work/target/*-key-sources.tar.gz
+
+      - name: Upload key analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.label }}-key-${{ github.run_number }}
+          path: |
+            work/target/*-key-sources.tar.gz
+            work/target/report/
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 9
+
       - name: Pack sources
         shell: bash
         run: |
