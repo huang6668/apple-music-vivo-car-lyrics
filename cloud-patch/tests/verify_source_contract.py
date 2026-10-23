@@ -165,7 +165,8 @@ assert "ClusterLyricsPaginator.paginate" in text
 
 # The head unit parses the whole LRC payload itself, so every row this helper ships must stay
 # a single, machine-readable [mm:ss.cc] line. 车联's reader (ub.e) only accepts 1-2 digit
-# minutes; a three-digit stamp turns the entire row into untimed text and the raw prefix shows.
+# minutes; a three-digit stamp yields no time token, the row is dropped, and an all-dropped
+# payload falls back to raw rows whose prefixes then reach the screen.
 assert "LRC_MAX_MILLIS = 99L * 60000L" in text, "Keep every LRC stamp inside two minute digits"
 assert "Math.min(Math.max(0L, millis), LRC_MAX_MILLIS)" in method_body(
     "private static String formatTime("), "formatTime must clamp to the two-digit ceiling"
@@ -202,6 +203,22 @@ assert ".replace('^', '\\uff3e')" in sanitise, (
 assert r'[ \\t]+' in text, "Only spaces and tabs collapse; NBSP is lyric content"
 assert "sanitizeLineText(text)" in method_body("private static void addLine(")
 
+# Every row - the last one included - must be CRLF terminated. Verified against the smali of
+# 车联's reader (ub.e.e, classes3.dex): the row-text extractor takes substring(start, length-1)
+# whenever the row's last character is neither '\n' nor '\r'. With LF-only rows it therefore
+# eats the last character of every line, a one-character line becomes empty and is dropped, and
+# a payload whose rows all end up empty falls back to "every raw row" - which is how a literal
+# [mm:ss.cc] prefix reaches a screen. For a CRLF row the same code strips exactly the trailing
+# '\r', which is the shape this reader was written for.
+assert 'private static final String LRC_ROW_SEPARATOR = "\\r\\n";' in text
+assert ".append(LRC_ROW_SEPARATOR)" in publish_lines, (
+    "Every LRC row must be CRLF terminated, not LF separated"
+)
+assert "lrc.append('\\n')" not in publish_lines, "Rows are terminated, never merely separated"
+assert "index + 1 < texts.length" not in publish_lines, (
+    "Terminate the last row too: a missing trailing CR eats its last character"
+)
+
 # The empty per-line Bundle is a heartbeat, not a clear: Media3 merges stored extras into every
 # setExtras (l0.j / C2786g2.m4607e), so the comment must not claim wholesale replacement.
 assert "setExtras MERGES here" in session_extras
@@ -213,6 +230,6 @@ assert "setExtras replaces wholesale" not in text
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r47-1609-2026-10-22"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r48-1609-2026-10-23"' in text
 
 print("VivoCarLyrics source contract passed")

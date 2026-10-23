@@ -35,7 +35,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r47-1609-2026-10-22";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r48-1609-2026-10-23";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -113,12 +113,22 @@ public final class VivoCarLyrics {
     /** Plain spaces and tabs only: NBSP and the ideographic space are legitimate lyric spacing. */
     private static final Pattern WHITESPACE_RUN = Pattern.compile("[ \\t]+");
     /**
-     * 车联's LRC reader (ub.e) only accepts one or two minute digits, so any timestamp at or
-     * beyond 100 minutes is treated as untimed text and the whole row - prefix included -
-     * reaches the head unit verbatim. {@link #formatTime} clamps each stamp to this ceiling;
-     * the timeline itself is left untouched so sync spacing and the cluster stay intact.
+     * 车联's LRC reader (ub.e) only accepts one or two minute digits, so a stamp at or beyond
+     * 100 minutes yields no time token at all and its row is dropped from the parsed lyrics -
+     * and once no row parses, the reader falls back to handing every raw row, prefix included,
+     * to the head unit. {@link #formatTime} clamps each stamp to this ceiling; the timeline
+     * itself is left untouched so sync spacing and the cluster stay intact.
      */
     private static final long LRC_MAX_MILLIS = 99L * 60000L + 59L * 1000L + 990L;
+    /**
+     * Every row - the last one included - is terminated with CRLF. 车联's LRC reader (ub.e)
+     * splits the payload on '\n' and then strips a trailing '\r' while extracting a row's text;
+     * a row without that '\r' loses its last character, and a one-character row becomes empty
+     * and is dropped outright. Once every row is empty the reader falls back to "all rows are
+     * raw", which is exactly how a literal {@code [mm:ss.cc]} prefix reaches a screen. Real LRC
+     * files are CRLF, so every parser fed by this payload already expects this form.
+     */
+    private static final String LRC_ROW_SEPARATOR = "\r\n";
     private static final LyricsState EMPTY_LYRICS = new LyricsState(
             new long[0], new String[0], "", new long[0], new String[0], "");
     private static final TitleCorrectionState TITLE_STATE = new TitleCorrectionState();
@@ -1782,10 +1792,9 @@ public final class VivoCarLyrics {
 
         StringBuilder lrc = new StringBuilder();
         for (int index = 0; index < texts.length; index++) {
-            lrc.append(formatTime(times[index])).append(texts[index]);
-            if (index + 1 < texts.length) {
-                lrc.append('\n');
-            }
+            // Terminated, not merely separated: the trailing '\r' is what keeps the reader from
+            // eating the last character of every row. See LRC_ROW_SEPARATOR.
+            lrc.append(formatTime(times[index])).append(texts[index]).append(LRC_ROW_SEPARATOR);
         }
 
         String whole = lrc.toString();
