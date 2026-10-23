@@ -163,4 +163,56 @@ assert "publishMetadata" not in line_publish
 assert "metadataLine" not in text
 assert "ClusterLyricsPaginator.paginate" in text
 
+# The head unit parses the whole LRC payload itself, so every row this helper ships must stay
+# a single, machine-readable [mm:ss.cc] line. 车联's reader (ub.e) only accepts 1-2 digit
+# minutes; a three-digit stamp turns the entire row into untimed text and the raw prefix shows.
+assert "LRC_MAX_MILLIS = 99L * 60000L" in text, "Keep every LRC stamp inside two minute digits"
+assert "Math.min(Math.max(0L, millis), LRC_MAX_MILLIS)" in method_body(
+    "private static String formatTime("), "formatTime must clamp to the two-digit ceiling"
+publish_lines = method_body("private static void publishLines(")
+assert "clampTimeline" not in text, (
+    "Squeezing the timeline distorts the cluster paging that reads the same times"
+)
+assert "mergeEqualTimes(times, texts)" in publish_lines
+assert "sortTimeline(times, texts)" in publish_lines
+assert "hasIncreasingTime" not in publish_lines, (
+    "One out-of-order line must not flatten the whole song onto a synthetic grid"
+)
+
+# Raw LRC: metadata rows are dropped, untimed rows keep one line each.
+raw_lyrics = method_body("private static void consumeRawLyrics(")
+assert "LRC_META_TAG.matcher(row.trim()).matches()" in raw_lyrics, (
+    "Only a row that is nothing but ID tags may be dropped"
+)
+assert "addLine(times, texts, 0L, clean)" in raw_lyrics, (
+    "Untimed rows must not merge: every one of them arrives at time 0"
+)
+assert "times.add(Long.valueOf(0L))" not in raw_lyrics
+add_line = method_body("private static void addLine(")
+assert "times.add(Long.valueOf(time))" in add_line
+assert " / " not in add_line, "addLine must not fold two rows into one"
+
+sanitise = method_body("private static String sanitizeLineText(")
+for required in ("'\\n'", "'\\r'", "'\\u2028'", "'\\u2029'", "INLINE_TIME",
+                 "WHITESPACE_RUN"):
+    assert required in sanitise, "sanitizeLineText must flatten one row per line: " + required
+assert ".replace('^', '\\uff3e')" in sanitise, (
+    "车联 turns '^' into a line break; map it to the fullwidth caret, do not delete it"
+)
+assert r'[ \\t]+' in text, "Only spaces and tabs collapse; NBSP is lyric content"
+assert "sanitizeLineText(text)" in method_body("private static void addLine(")
+
+# The empty per-line Bundle is a heartbeat, not a clear: Media3 merges stored extras into every
+# setExtras (l0.j / C2786g2.m4607e), so the comment must not claim wholesale replacement.
+assert "setExtras MERGES here" in session_extras
+assert "setExtras replaces wholesale" not in text
+
+# Delaying our first whole-LRC publish does not prevent 车联's stale cover: the compress callback
+# pushes the previous track's art itself and only self-heals on the next encode. Deferring the
+# lyric only cost the opening lines of every track, so the delay must stay out.
+for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
+    assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
+
+assert 'BUILD_MARKER = "vivo-car-cn-track-r47-1609-2026-10-22"' in text
+
 print("VivoCarLyrics source contract passed")

@@ -8,8 +8,9 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1609**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r46-1609-2026-10-14`
-> （r46 去掉了旧车机 key，见 §8.1）；上一个发布的构建是 Build #166（r45）。
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r47-1609-2026-10-22`
+> （r46 去掉了旧车机 key，见 §8.1；r47 修正整首 LRC 的行文本与发布时序，见 §8.1 与 §9）。
+> 上一个发布的构建是 Build #166（r45）。
 > 两者都只通过了 CI 校验，**尚未实机验证**。
 > Build #155 的实机验证只覆盖 1607 的**歌名**移植；r38（Build #83）的车机歌词、
 > 原子随身听歌词和进度条已于 2026-09-04 实车确认。CI 成功不等于实机验证。
@@ -459,8 +460,28 @@ adb logcat -s VivoCarTitle
 - 旧的 `music.media.extras.LYRIC` / `LYRIC_IS_ALLOWED` / `NOTICE_CAR` 三个 key，车联 6.0.8.3 从不读取
   （只在常量类 `aa/b.java` 里定义过）。**r46（2026-10-14）已删除**，不再兼容旧车联，契约测试禁止加回来。
 - 逐句更新仍然每换一句调用一次宿主的“设置会话 Extras”（1609：`sessionManager.j(Bundle)`，见 §4），
-  只是现在发的是空 Bundle。`setExtras` 是整包替换，这一包的作用是把上一次的 `lrc_change` 动作从
-  session extras 里冲掉，让原子和车联看到的事件序列与 r38 一致。别把逐句发布当成无用代码删掉。
+  只是现在发的是空 Bundle。**注意：`setExtras` 不是整包替换**——1609 的 `C13660l0.j(Bundle)` 先把已存的
+  `f9117D` `putAll` 进去、再叠加入参，`C2786g2.m4607e` 把合并后的包存回，所以空 Bundle 只是把上一次的
+  `lrc_change`（动作 + mediaId + 整首 LRC）**原样再广播一次**。车联 `eg/l.java` 丢弃空 lyric 事件、`jg/e.h0`
+  再按字符串去重，因此这只是心跳，不是“清除”。别把逐句发布当成无用代码删掉，也别指望它清场。
+- 车机滚动歌词只有一条通路：车联把 `lrc_change` 的整首 LRC **原样**经 AIDL `ILauncherManager.i5`
+  （transact 39，Bundle key `key_lyrics_whole`，只带包名不带 mediaId）交给桌面/车机端，由车机端自己解析。
+  逐句通道（`x3`，transact 40）送的是已剥掉时间戳的纯文本。所以屏幕上出现的时间戳一定是车机端解析我们
+  这份 LRC 的结果 → **每一行必须是一行可解析的 `[mm:ss.cc]文本`**。
+- **r47 的行格式约束**（`consumeRawLyrics` / `publishLines` / `sanitizeLineText`）：
+  分钟只能 1–2 位（车联解析器只认这个，`[100:00.00]` 会让整行变成无时间戳文本），`formatTime`
+  逐行钳到 `LRC_MAX_MILLIS`；**不压缩整条时间轴**——`lyricsState.times` 同时喂给车机分页器和
+  原子歌词，按比例挤压会连带改变这两条通路的节奏，而超长曲目本身极少。一行一个物理行（剥离
+  `<br>`、U+2028/9、行内 `[mm:ss]`/`<mm:ss.xx>` 标记，`^` 换成全角 `＾` 而不是删掉——车联把 `^`
+  直接当换行）；`[ti:]`/`[ar:]`/`[offset:]` 这类 LRC 头标签**整行匹配**才丢弃，含括号的正文不动；
+  无时间戳的行各自占一行，不能因为都是 time=0 被合并成一句（纯未同步歌词曾因此塌成一行）；
+  时间乱序时只做稳定排序 + 合并同时间行，**不再**把整首歌重排成 `index*step`。
+- **r47 已否决“延迟发布”**：曾经试过切歌后把首次整首 LRC 推迟 `COVER_SETTLE_MS`（2600 ms）来躲开
+  车联的封面压缩窗口，实测前提不成立，已整段删除——`a8.c.c(name, 2000L, r)` 的 `2000L` 是看门狗
+  `mExpectMaxExecuteTime`，不是延迟；车联 `wb/f` 的压缩回调只校验包名、会在切歌后把上一首的 URL
+  写进 holder，但它走的是自己的强制推送（`P("onCoverUpdate", aVar, true)`），根本不经过我们的歌词
+  事件，而压缩槽只有一个，下一次编码就自愈。延迟歌词换不来任何效果，只会让每次切歌的头一两句丢失。
+  旧封面闪一下是车联侧问题，见 §9。
 
 ### 8.2 原子随身听
 
@@ -536,7 +557,10 @@ compat 层和框架层是同一个 session，不是两条通道。
 | 通过 MediaMetadata 的 `ucar.*` 单独喂车联 | 歌词加载完成后要重发 MediaItem，等于第一行的死路 |
 | 把 LRC 按 ≤20 字分页给仪表 | 原子和车机歌词页读同一个 key，会一起变成碎句，封面重载更频繁。**用户已否决** |
 | 给车联和原子发不同的 LRC | 两者都读 `vivomusicmix.extra.key.lyric`，后写覆盖先写；用 mediaId 区分会让原子隐藏歌词 |
-| 修仪表截断 / 每句重载封面 | 根因在车联 `gg/d.java`：写死 `substring(0,17)+"..."`；`CarMusicInfo.equals` 包含当前行，每句都会连同封面整包重发。Apple Music 侧没有杠杆；改车联需要 vivo 私钥 |
+| 修仪表截断 / 每句重载封面 | 根因在车联 `gg/d.java`：写死 `substring(0,17)+"..."`；`CarMusicInfo.equals` 包含当前行，每句都会连同封面整包重发。Apple Music 侧没有杠杆；改车联需要 vivo 私钥。不尝试规避，不改车联 |
+| 切歌后延迟歌词发布，躲开“旧封面”窗口 | 前提不成立：车联的封面压缩回调是包名级防护，回写的是 holder 全局字段并自己强制推送 `onCoverUpdate`，不经过歌词事件；压缩槽只有一条，下一次编码自愈。`a8.c.c(..., 2000L, ...)` 的 2000 是看门狗不是延迟。延迟只会丢掉切歌后的头一两句歌词（r47 实测后撤销） |
+| 用空 Bundle “清除” session extras | Media3 每次 `setExtras` 都会合并已存 extras（`C13660l0.j` + `C2786g2.m4607e`），空包等于重播上一次的 `lrc_change`；车联又丢弃空 lyric 事件。清不掉，别再往这个方向想 |
+| 用重复发布整首 LRC 去“补发”给重连的桌面 | 车联 `jg/e.h0` 按字符串完全相等去重，同一份 LRC 重播会被吞掉；而它唯一的重取路径读 `ucar.media.metadata.LYRICS_WHOLE`，我们从不发布。在协议内无法可靠补发 |
 | 外挂桥接 App（`kuwo-bridge/`，伪装 `cn.kuwo.player`） | 能解决车联识别和控制转发，但拿不到宿主私有的完整同步歌词。改 Apple Music APK 仍是最完整的方案 |
 | AM++ / NPatch / LSPosed | 2026-10-13 废弃，歌名歌手修正已完全内置于 helper DEX |
 

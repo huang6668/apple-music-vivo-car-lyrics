@@ -35,7 +35,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r46-1609-2026-10-14";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r47-1609-2026-10-22";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -100,6 +100,25 @@ public final class VivoCarLyrics {
     private static final AtomicLong ATOMIC_STATE_SEQUENCE = new AtomicLong();
     private static final Object STATE_LOCK = new Object();
     private static final Pattern LRC_TIME = Pattern.compile("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]");
+    /**
+     * LRC ID/header tag, e.g. [ti:x], [ar:x], [offset:+120]. Anchored to the whole row, so it is
+     * only dropped when the row is nothing but one or more tags - a lyric that merely contains
+     * bracketed text is left alone.
+     */
+    private static final Pattern LRC_META_TAG = Pattern.compile(
+            "(?:\\[[A-Za-z]{1,10}(?:-[A-Za-z0-9]+)?:[^\\]]*\\])+");
+    /** Inline time tokens: LRC stamps and TTML word-level {@code <mm:ss.cc>} stamps. */
+    private static final Pattern INLINE_TIME = Pattern.compile(
+            "\\[\\d{1,3}:\\d{1,2}(?:[.:]\\d{1,3})?\\]|<\\d{1,3}:\\d{1,2}(?:[.:]\\d{1,3})?>");
+    /** Plain spaces and tabs only: NBSP and the ideographic space are legitimate lyric spacing. */
+    private static final Pattern WHITESPACE_RUN = Pattern.compile("[ \\t]+");
+    /**
+     * 车联's LRC reader (ub.e) only accepts one or two minute digits, so any timestamp at or
+     * beyond 100 minutes is treated as untimed text and the whole row - prefix included -
+     * reaches the head unit verbatim. {@link #formatTime} clamps each stamp to this ceiling;
+     * the timeline itself is left untouched so sync spacing and the cluster stay intact.
+     */
+    private static final long LRC_MAX_MILLIS = 99L * 60000L + 59L * 1000L + 990L;
     private static final LyricsState EMPTY_LYRICS = new LyricsState(
             new long[0], new String[0], "", new long[0], new String[0], "");
     private static final TitleCorrectionState TITLE_STATE = new TitleCorrectionState();
@@ -1702,15 +1721,20 @@ public final class VivoCarLyrics {
             matcher.reset();
             boolean found = matcher.find();
             matcher.reset();
+            if (!found && LRC_META_TAG.matcher(row.trim()).matches()) {
+                // [ti:], [ar:], [offset:], [by:] ... are file metadata, not lyric text.
+                continue;
+            }
             while (matcher.find()) {
                 long minutes = Long.parseLong(matcher.group(1));
                 long seconds = Long.parseLong(matcher.group(2));
                 long fraction = fractionMillis(matcher.group(3));
                 appendLine(times, texts, minutes * 60000L + seconds * 1000L + fraction, clean);
             }
-            if (!found && !clean.isEmpty()) {
-                times.add(Long.valueOf(0L));
-                texts.add(clean);
+            if (!found) {
+                // Untimed rows keep their own slot: folding every one of them onto time 0 would
+                // collapse an entire unsynced lyric into a single line.
+                addLine(times, texts, 0L, clean);
             }
         }
         publishLines(manager, generation, times, texts, duration);
@@ -1728,18 +1752,32 @@ public final class VivoCarLyrics {
 
         long[] times = new long[sourceTimes.size()];
         String[] texts = sourceTexts.toArray(new String[sourceTexts.size()]);
-        boolean hasIncreasingTime = false;
+        boolean anyIncrease = false;
+        boolean outOfOrder = false;
         for (int index = 0; index < times.length; index++) {
             times[index] = sourceTimes.get(index).longValue();
             if (index > 0 && times[index] > times[index - 1]) {
-                hasIncreasingTime = true;
+                anyIncrease = true;
+            } else if (index > 0 && times[index] < times[index - 1]) {
+                outOfOrder = true;
             }
         }
-        if (times.length > 1 && !hasIncreasingTime) {
+        if (times.length > 1 && outOfOrder) {
+            // Sort instead of replacing every timestamp with a synthetic grid: the old fallback
+            // threw away real sync spacing whenever a single line arrived out of order.
+            sortTimeline(times, texts);
+        }
+        if (times.length > 1 && !anyIncrease) {
+            // Genuinely untimed input (all stamps equal): spread the lines over the duration.
             long step = duration > 0L ? Math.max(1000L, duration / times.length) : 5000L;
             for (int index = 0; index < times.length; index++) {
                 times[index] = index * step;
             }
+        }
+        int kept = mergeEqualTimes(times, texts);
+        if (kept < times.length) {
+            times = java.util.Arrays.copyOf(times, kept);
+            texts = java.util.Arrays.copyOf(texts, kept);
         }
 
         StringBuilder lrc = new StringBuilder();
@@ -1765,6 +1803,7 @@ public final class VivoCarLyrics {
         requestPublish(manager, currentLine, whole, STATUS_SUCCESS, generation);
         MAIN.postDelayed(new LineTick(manager, generation), LINE_POLL_MS);
     }
+
 
     private static final class LineTick implements Runnable {
         private final Object manager;
@@ -1896,17 +1935,70 @@ public final class VivoCarLyrics {
     }
 
     private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return;
-        }
-        String clean = text.trim();
-        int last = times.size() - 1;
-        if (last >= 0 && times.get(last).longValue() == time) {
-            texts.set(last, texts.get(last) + " / " + clean);
+        addLine(times, texts, time, text);
+    }
+
+    /**
+     * Appends one collected row without folding it into the previous row. {@link #appendLine}
+     * merges equal consecutive times into "a / b", which is right for a multi-stamp TTML row but
+     * wrong for unsynced lyrics: every untimed row arrives at time 0, and merging them all would
+     * leave a single line holding the whole song.
+     */
+    private static void addLine(List<Long> times, List<String> texts, long time, String text) {
+        String clean = sanitizeLineText(text);
+        if (clean.isEmpty()) {
             return;
         }
         times.add(Long.valueOf(time));
         texts.add(clean);
+    }
+
+    /** Insertion sort on the parallel arrays; stable, so equal times keep their order. */
+    private static void sortTimeline(long[] times, String[] texts) {
+        for (int index = 1; index < times.length; index++) {
+            long time = times[index];
+            String text = texts[index];
+            int slot = index - 1;
+            while (slot >= 0 && times[slot] > time) {
+                times[slot + 1] = times[slot];
+                texts[slot + 1] = texts[slot];
+                slot--;
+            }
+            times[slot + 1] = time;
+            texts[slot + 1] = text;
+        }
+    }
+
+    /** Folds equal consecutive times into one "a / b" line; returns the surviving length. */
+    private static int mergeEqualTimes(long[] times, String[] texts) {
+        int kept = 0;
+        for (int index = 0; index < times.length; index++) {
+            if (kept > 0 && times[kept - 1] == times[index]) {
+                texts[kept - 1] = texts[kept - 1] + " / " + texts[index];
+                continue;
+            }
+            times[kept] = times[index];
+            texts[kept] = texts[index];
+            kept++;
+        }
+        return kept;
+    }
+
+    /**
+     * One physical LRC row per lyric line, because the head unit parses the whole payload itself.
+     * Embedded newlines (TTML {@code <br>}) and inline stamps turn one row into two, and the
+     * second row then renders with no or a literal timestamp. LRC's "^" is not a break here:
+     * 车联 turns it into a newline, so it is replaced with the lookalike fullwidth caret instead
+     * of being deleted.
+     */
+    private static String sanitizeLineText(String text) {
+        if (text == null) {
+            return "";
+        }
+        String flat = text.replace('\r', ' ').replace('\n', ' ').replace('\u2028', ' ')
+                .replace('\u2029', ' ').replace('^', '\uff3e');
+        String withoutStamps = INLINE_TIME.matcher(flat).replaceAll(" ");
+        return WHITESPACE_RUN.matcher(withoutStamps).replaceAll(" ").trim();
     }
 
     private static void requestPublish(final Object manager, final String line, final String whole,
@@ -2443,8 +2535,10 @@ public final class VivoCarLyrics {
 
             // 车联 6.0.8.3 never reads the legacy head-unit line keys; the head unit and
             // cluster cut lines from the lrc_change event themselves. A line update is therefore
-            // an empty Bundle: setExtras replaces wholesale, so it still clears the previous
-            // lrc_change action.
+            // an empty Bundle. Note setExtras MERGES here (l0.j copies the stored extras first and
+            // m4607e stores the merged copy back), so this does NOT clear the previous
+            // lrc_change payload - it only forces a re-broadcast of it, which 车联 drops on
+            // exact-string dedup. Treat the empty tick as a cheap heartbeat, never as a clear.
             if (atomicEvent) {
                 extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
                 extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
@@ -2719,7 +2813,7 @@ public final class VivoCarLyrics {
     }
 
     private static String formatTime(long millis) {
-        long safe = Math.max(0L, millis);
+        long safe = Math.min(Math.max(0L, millis), LRC_MAX_MILLIS);
         long minutes = safe / 60000L;
         long seconds = (safe % 60000L) / 1000L;
         long centiseconds = (safe % 1000L) / 10L;
