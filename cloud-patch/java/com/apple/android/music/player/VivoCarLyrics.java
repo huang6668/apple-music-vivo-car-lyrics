@@ -35,7 +35,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r48-1609-2026-10-23";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r49-1609-2026-10-24";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
