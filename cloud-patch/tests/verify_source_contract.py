@@ -158,7 +158,11 @@ for forbidden in (
 ):
     assert forbidden not in session_extras, f"Native artwork must stay intact: {forbidden}"
 
-assert "publishLineExtras" in line_publish
+assert "publishLineExtras" not in text, "r51 removed the per-line session-Extras heartbeat"
+assert "dispatchSessionExtras" not in line_publish, (
+    "Line updates must not touch session Extras; only the track change, the whole-LRC event and "
+    "the 25s keepalive write them"
+)
 assert "publishMetadata" not in line_publish
 assert "metadataLine" not in text
 assert "ClusterLyricsPaginator.paginate" in text
@@ -219,10 +223,16 @@ assert "index + 1 < texts.length" not in publish_lines, (
     "Terminate the last row too: a missing trailing CR eats its last character"
 )
 
-# The empty per-line Bundle is a heartbeat, not a clear: Media3 merges stored extras into every
-# setExtras (l0.j / C2786g2.m4607e), so the comment must not claim wholesale replacement.
-assert "setExtras MERGES here" in session_extras
+# r51: the empty per-line Bundle is gone. It could only re-broadcast the previous lrc_change
+# (Media3 merges stored extras into every setExtras: l0.j / C2786g2.m4607e), 车联 drops that on
+# exact-string dedup, and some component versions read an empty Bundle as "no lyrics" - the
+# 7tattoo/vivo-car-atomic-lyrics skill reports exactly that symptom. Session Extras are now
+# written only for the track-change clear, the whole-LRC event and its 25s keepalive.
+assert "setExtras MERGES here" not in text
 assert "setExtras replaces wholesale" not in text
+assert "ATOMIC_KEEPALIVE_MS" in text
+for required in ("publishAtomicClear(", "publishAtomicExtras("):
+    assert required in text, "The two whole-payload writers must stay: " + required
 
 # Delaying our first whole-LRC publish does not prevent 车联's stale cover: the compress callback
 # pushes the previous track's art itself and only self-heals on the next encode. Deferring the
@@ -230,6 +240,6 @@ assert "setExtras replaces wholesale" not in text
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r50-1611-2026-10-26"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r51-1611-2026-10-26"' in text
 
 print("VivoCarLyrics source contract passed")

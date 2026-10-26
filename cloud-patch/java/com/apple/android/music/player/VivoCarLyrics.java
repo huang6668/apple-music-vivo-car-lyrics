@@ -35,7 +35,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r50-1611-2026-10-26";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r51-1611-2026-10-26";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -1926,21 +1926,8 @@ public final class VivoCarLyrics {
             }
             lastStatus = STATUS_SUCCESS;
         }
-
-        Runnable publish = new Runnable() {
-            @Override
-            public void run() {
-                if (isCurrent(manager, generation)) {
-                    publishLineExtras(manager, latestLine, generation);
-                }
-            }
-        };
-        Handler handler = serviceHandler(manager);
-        if (handler != null && Looper.myLooper() != handler.getLooper()) {
-            handler.post(publish);
-        } else {
-            publish.run();
-        }
+        // r51: no per-line session-Extras write; only the dedup state above is kept (lastLine is
+        // still read by the Atomic replay/keepalive tasks).
     }
 
     private static void appendLine(List<Long> times, List<String> texts, long time, String text) {
@@ -2108,8 +2095,6 @@ public final class VivoCarLyrics {
                         scheduleAtomicReplays(latestManager, latestGeneration, latestWhole,
                                 latestStatus, latestAtomicStateSequence);
                     }
-                } else {
-                    publishLineExtras(latestManager, latestLine, latestGeneration);
                 }
             }
         };
@@ -2493,34 +2478,24 @@ public final class VivoCarLyrics {
         }
     }
 
-    private static void publishLineExtras(Object manager, String line, long generation) {
-        dispatchSessionExtras(manager, generation, line, false, "", "", false);
-    }
-
     private static void publishAtomicClear(Object manager, String mediaId, long generation) {
-        dispatchSessionExtras(manager, generation, "", true,
-                mediaId == null ? "" : mediaId, "", true);
+        dispatchSessionExtras(manager, generation, mediaId == null ? "" : mediaId, "");
     }
 
     private static void publishAtomicExtras(Object manager, String line, String mediaId,
                                             String whole, long generation) {
-        String normalizedMediaId = mediaId == null ? "" : mediaId;
-        dispatchSessionExtras(manager, generation, line, true,
-                normalizedMediaId, whole, false);
+        dispatchSessionExtras(manager, generation, mediaId == null ? "" : mediaId, whole);
     }
 
     private static void dispatchSessionExtras(final Object manager, final long generation,
-                                              final String line, final boolean atomicEvent,
-                                              final String mediaId, final String whole,
-                                              final boolean atomicClear) {
+                                              final String mediaId, final String whole) {
         if (!isCurrent(manager, generation)) {
             return;
         }
         Runnable publish = new Runnable() {
             @Override
             public void run() {
-                publishSessionExtras(manager, generation, line, atomicEvent,
-                        mediaId, whole, atomicClear);
+                publishSessionExtras(manager, generation, mediaId, whole);
             }
         };
         Handler handler = serviceHandler(manager);
@@ -2531,9 +2506,8 @@ public final class VivoCarLyrics {
         }
     }
 
-    private static void publishSessionExtras(Object manager, long generation, String line,
-                                             boolean atomicEvent, String mediaId, String whole,
-                                             boolean atomicClear) {
+    private static void publishSessionExtras(Object manager, long generation,
+                                             String mediaId, String whole) {
         if (!isCurrent(manager, generation)) {
             return;
         }
@@ -2542,19 +2516,20 @@ public final class VivoCarLyrics {
             Bundle extras = new Bundle();
             String safeWhole = whole == null ? "" : whole;
 
-            // 车联 6.0.8.3 never reads the legacy head-unit line keys; the head unit and
-            // cluster cut lines from the lrc_change event themselves. A line update is therefore
-            // an empty Bundle. Note setExtras MERGES here (l0.j copies the stored extras first and
-            // m4607e stores the merged copy back), so this does NOT clear the previous
-            // lrc_change payload - it only forces a re-broadcast of it, which 车联 drops on
-            // exact-string dedup. Treat the empty tick as a cheap heartbeat, never as a clear.
-            if (atomicEvent) {
-                extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
-                extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
-                extras.putString(ATOMIC_LYRIC, DIAGNOSTIC_MODE
-                        ? diagnosticHeader(manager, generation) + safeWhole
-                        : safeWhole);
-            }
+            // r51: session Extras are written only for the track-change clear (action + empty
+            // lyric), the whole-LRC event and its 25s keepalive. Per-line updates used to push an
+            // empty Bundle here as a "heartbeat". Media3 merges stored extras into every
+            // setExtras (l0.j copies the stored extras first, m4607e stores the merged copy
+            // back), so that tick could only re-broadcast the previous lrc_change - which 车联
+            // drops on exact-string dedup - while other component versions read an empty Bundle
+            // as "no lyrics" (the 7tattoo/vivo-car-atomic-lyrics skill reports exactly that).
+            // Nothing needs it: the head unit, the cluster and the Atomic widget all cut their
+            // own lines out of the whole LRC.
+            extras.putString(ATOMIC_ACTION_KEY, ATOMIC_LRC_CHANGE);
+            extras.putString(ATOMIC_MEDIA_ID, mediaId == null ? "" : mediaId);
+            extras.putString(ATOMIC_LYRIC, DIAGNOSTIC_MODE
+                    ? diagnosticHeader(manager, generation) + safeWhole
+                    : safeWhole);
             if (!isCurrent(manager, generation)) {
                 return;
             }
@@ -2568,30 +2543,6 @@ public final class VivoCarLyrics {
             return generation == GENERATION.get()
                     && currentAtomicMediaIdGeneration == generation
                     && currentAtomicMediaId.equals(mediaId);
-        }
-    }
-
-    private static final class AtomicActionClearTask implements Runnable {
-        private final Object manager;
-        private final long generation;
-        private final long sequence;
-
-        AtomicActionClearTask(Object manager, long generation, long sequence) {
-            this.manager = manager;
-            this.generation = generation;
-            this.sequence = sequence;
-        }
-
-        @Override
-        public void run() {
-            if (!isCurrent(manager, generation) || sequence != ATOMIC_EVENT_SEQUENCE.get()) {
-                return;
-            }
-            String line;
-            synchronized (STATE_LOCK) {
-                line = lastLine;
-            }
-            publishLineExtras(manager, line == null ? "" : line, generation);
         }
     }
 
