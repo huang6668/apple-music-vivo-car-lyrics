@@ -540,6 +540,8 @@ vivomusicmix.extra.key.lyric          = 完整带时间戳 LRC
 - 切歌时先发一次空歌词事件（`lrc_change` + 新曲 ID + 空 lyric），清掉原子内存里的上一首。
   公开 ID 还没出现时用新队列项的 store ID 兜底；连兜底也没有就发空 ID。
 - 原子要求 `meidia_id` 等于当前歌曲（`t4/d0.java E0()/z1()`），否则隐藏歌词；车联只要求非空。
+- 另有 25s 心跳（`ATOMIC_KEEPALIVE_MS`）：只用于“组件在播放开始后才连上”的场景，内容与上次相同，
+  车联侧会被 `jg/e.h0` 去重（见 §8.1），不要指望它给车机补发。
 
 ### 8.3 vivo 侧参考源码
 
@@ -566,6 +568,42 @@ vivomusicmix.extra.key.lyric          = 完整带时间戳 LRC
 原子的 `MediaControllerCompat` 只是 `android.media.session.MediaController` 的薄包装，
 compat 层和框架层是同一个 session，不是两条通道。
 
+### 8.4 外部参考实现（`7tattoo/vivo-car-atomic-lyrics`）
+
+这是别人整理的一份 Claude skill（MIT，v1.2.0），把 hachimi / TattooMusic / md3Music / NeriPlayer /
+kgka_Music_hl 五个项目的实车适配经验写成方法论。2026-10-26 对照核对过 `SKILL.md`、
+`references/protocols.md`、`references/card-cover.md`、`references/projects.md`（未逐行审 `scripts/`）。
+
+**逐字一致、可当独立交叉验证的**：Atomic 五个 key 与 vivo 的错拼（`meida` / `meidia`）、
+`support_event = 31 = 7|8|16`、`com.vivo.musicwidgetmix.support.service` action，以及本文 §8.1 的核心
+结论——车联 6.0.8.3 不读 `music.media.extras.*`，车机/仪表的歌词来自原子的 `lrc_change` 整首 LRC 事件、
+由车机端自己切行。它同样推荐 25s 重发节流，也把“写 `LYRICS_LINE`”“写负状态”列为禁止项。
+
+**结论相反、值得实机复核的一条**：它把“推空 Bundle 的 `setExtras()`”列为“绝不能做”（说会清空车机已收到
+的 extras、已显示歌词消失）；本文 §8.1 的实测相反——1609/1611 的 `setExtras` 走的是合并路径
+（`C13660l0.j` + `C2786g2.m4607e`），空包等于把上一次的 `lrc_change` 原样再广播一次，所以逐句更新只是
+心跳。两者可能对应不同车联/组件版本；观察点：切歌瞬间已显示的歌词会不会被清掉。
+
+**路线不同、不必对齐的两条**：
+
+- 它主张在 MediaMetadata 写 `ucar.media.metadata.LYRICS_WHOLE`（兼容旧车联）。本项目实测写它要重发
+  MediaItem，会把 PlaybackState 打回 `--:--`（r34），所以只保留 `lrc_change`。该 skill 自己的 NeriPlayer
+  档案同样写着“metadata 不再携带整段歌词，歌词照走 `lrc_change`”，与本文一致。
+- 它的形态是“改 `applicationId` 到白名单包名 + 桥接类 + 5 个稳定 API hook”，跨版本省事；本项目是就地改
+  官方 Apple Music 的 smali 接缝，每版必须重新定位（§2）。它说的“Apple Music”是 Flutter 应用 md3Music
+  套用该包名，不是官方 APK。
+
+**可以借鉴的封面投递规则**（`references/card-cover.md`；与本项目 §8.1 的“串台”是两条不同的链）。
+r50 去掉内联位图后，通知、锁屏、原子、车机全部改走 `METADATA_KEY_ALBUM_ART_URI`，这些约束开始直接适用：
+
+1. 只投 `http(s)`：`content://`、`file://` 卡片侧拉不到，宁可返回 `null`（占位图好过错图/纯色）。
+2. URL 里的字面量占位符必须替换（如 `{size}`），否则 404；而这个 404 只发生在卡片进程，自己的日志里看不到。
+3. 大图会下载超时 → 同样纯色；投 480px 级别的地址。
+4. 负缓存必须带 TTL，不能“一次取不到就永久放弃”。
+5. 非空才覆盖封面，只在换曲时清空；歌词刷新时顺手清封面会让卡片闪回纯色。
+6. `http` / `https` 的取舍**随组件版本反转**（它自己的两个项目结论相反），必须实测，别照抄。
+7. 封面和歌词是两条独立链路：App 内封面正常、卡片纯色很常见，不要因为“歌词通了”就认为封面也通了。
+
 ---
 
 ## 9. 已验证的死路（不要重试）
@@ -583,7 +621,7 @@ compat 层和框架层是同一个 session，不是两条通道。
 | 切歌后延迟歌词发布，躲开“旧封面”窗口 | 前提不成立：歌词事件与封面管线无关，延迟只会丢掉切歌后的头一两句歌词（r47 实测后撤销）。`a8.c.c(..., 2000L, ...)` 的 2000 是看门狗不是延迟 |
 | 想从 Apple Music 侧修车机“封面是上一首” | **r50 已规避，此条不再是死路**：车联 `jg/e$d.a(player, songId, url, bitmap)` 只比较包名就回写 holder 并 `A3(旧URL)` 推给车机；压缩是异步单槽（`wb/f`），连续切歌时结果永远慢一拍。r48 曾据此判定“只能报给 vivo”，但 r50 找到了另一条杠杆：让 Apple Music 不再提供内联位图（`J4/t.n` 内置空，见 §8.1），`jg/e.X` 返回 false，整条 MusicCoverStore 链路被跳过。延迟发布、重发 MediaItem 依旧是死路 |
 | 用空 Bundle “清除” session extras | Media3 每次 `setExtras` 都会合并已存 extras（`C13660l0.j` + `C2786g2.m4607e`），空包等于重播上一次的 `lrc_change`；车联又丢弃空 lyric 事件。清不掉，别再往这个方向想 |
-| 用重复发布整首 LRC 去“补发”给重连的桌面 | 车联 `jg/e.h0` 按字符串完全相等去重，同一份 LRC 重播会被吞掉；而它唯一的重取路径读 `ucar.media.metadata.LYRICS_WHOLE`，我们从不发布。在协议内无法可靠补发 |
+| 用重复发布整首 LRC 去“补发”给重连的车机 | 车联 `jg/e.h0` 按字符串完全相等去重，同一份 LRC 重播会被吞掉；它唯一的重取路径读 `ucar.media.metadata.LYRICS_WHOLE`，我们从不发布。所以对**车机**在协议内无法可靠补发。注意区分：**原子**侧仍需要 25s 心跳（`ATOMIC_KEEPALIVE_MS`），那是给组件重连用的，不是给车机补发的手段 |
 | 外挂桥接 App（`kuwo-bridge/`，伪装 `cn.kuwo.player`） | 能解决车联识别和控制转发，但拿不到宿主私有的完整同步歌词。改 Apple Music APK 仍是最完整的方案 |
 | AM++ / NPatch / LSPosed | 2026-10-13 废弃，歌名歌手修正已完全内置于 helper DEX |
 
