@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Apple Music 1609 title and artist data binding hooks."""
+"""Validate the Apple Music 1611 title and artist data binding hooks."""
 
 import argparse
 import hashlib
@@ -9,13 +9,13 @@ import re
 
 TARGET = "q8/na.smali"
 METHOD = "l()V"
-STOCK_CODE_SHA256 = "8083423c6c9cb2743854b750a5d3eeef9c02e573d4c8393e367a85ca45ff9d30"
+STOCK_CODE_SHA256 = "b54f26e3fd68f35f98711d838c543d6e454ec9a9a4bc404e806c32647b13aa14"
 HELPER = (
     "Lcom/apple/android/music/player/VivoCarLyrics;"
     "->correctPlayerTitle(Ljava/lang/Object;Ljava/lang/Object;"
     "Ljava/lang/CharSequence;)Ljava/lang/CharSequence;"
 )
-ITEM = "iget-object v8, v1, Lq8/ma;->r0:Lcom/apple/android/music/model/PlaybackItem;"
+ITEM = "iget-object v8, v1, Lq8/la;->s0:Lcom/apple/android/music/model/PlaybackItem;"
 RECEIVER = "move-object/from16 v1, p0"
 TITLE = (
     "invoke-interface {v8}, Lcom/apple/android/music/model/CollectionItemView;"
@@ -33,7 +33,7 @@ SEAM = (
     "move/from16 v41, v38",
     "move-object/from16 v42, v39",
 )
-VIEW = "iget-object v0, v1, Lq8/ma;->o0:Lcom/apple/android/music/common/views/CustomTextView;"
+VIEW = "iget-object v0, v1, Lq8/la;->p0:Lcom/apple/android/music/common/views/CustomTextView;"
 ASSIGN = (
     "invoke-static {v0, v2}, LI2/e;"
     "->a(Landroid/widget/TextView;Ljava/lang/CharSequence;)V"
@@ -48,7 +48,7 @@ ARTIST_HELPER = (
     "Ljava/lang/CharSequence;)Ljava/lang/CharSequence;"
 )
 ARTIST = (
-    "invoke-static {v8}, Lcom/apple/android/music/player/a1;"
+    "invoke-static {v8}, Lcom/apple/android/music/player/b1;"
     "->y0(Lcom/apple/android/music/model/PlaybackItem;)Ljava/lang/String;"
 )
 ARTIST_HOOK = "invoke-static/range {v52 .. v54}, " + ARTIST_HELPER
@@ -63,7 +63,7 @@ ARTIST_SEAM = (
     "move-object/from16 v54, v52",
     "goto :goto_27",
 )
-ARTIST_VIEW = "iget-object v0, v1, Lq8/ma;->n0:Lcom/apple/android/music/common/views/CustomTextView;"
+ARTIST_VIEW = "iget-object v0, v1, Lq8/la;->o0:Lcom/apple/android/music/common/views/CustomTextView;"
 ARTIST_ASSIGN = (
     "invoke-static {v0, v3}, LI2/e;"
     "->a(Landroid/widget/TextView;Ljava/lang/CharSequence;)V"
@@ -100,7 +100,7 @@ def verify_text(text, unpatched=False):
     assert text.count(ARTIST_HELPER) == expected_hooks, "Unexpected artist helper count"
     body = methods[0]
     assert re.search(r"^\s*\.locals 58\s*$", body, re.MULTILINE), (
-        "1609 display hooks must preserve the original 58 locals"
+        "1611 display hooks must preserve the original 58 locals"
     )
     ops = instructions(body)
     assert ops.count(TITLE) == 1, "Expected one stock title computation"
@@ -173,7 +173,7 @@ def main():
     parser.add_argument("--unpatched", action="store_true", help="Validate original stock seam before patching")
     args = parser.parse_args()
     mode = "stock preflight" if args.unpatched else "patched hook"
-    print("1609 title/artist binding " + mode + " verified: "
+    print("1611 title/artist binding " + mode + " verified: "
           + str(verify_tree(args.decoded_root, unpatched=args.unpatched)))
 
 

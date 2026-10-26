@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin 1609 MediaMetadataCompat factory method to strip inline bitmaps.
+"""Pin 1611 MediaMetadataCompat factory method to strip inline bitmaps.
 
 CarNetworking 6.0.8.3 has a race condition in MusicCoverStore (wb.f):
 When a song changes, MusicCoverStore's delayed (2000ms) background compression
@@ -22,7 +22,7 @@ import re
 
 TARGET = "J4/t.smali"
 METHOD = "public static n(Lz3/y;Ljava/lang/String;Landroid/net/Uri;JLandroid/graphics/Bitmap;)LK4/z;"
-STOCK_SHA256 = "a36804c8addb1932935298311b6a6507d6569cb7acc7561cec2b46972b03aeb9"
+STOCK_SHA256 = "0bba3016802fe23977679ab36b768a06e5db412fd2e7a2781735b35c247dd7fe"
 STOCK_CODE_SHA256 = "97e0740d04928e1ab862beabd7ec99c3a78a5ccb6f4b168f15c970fc42bf51bb"
 
 HOOK = (
@@ -65,7 +65,7 @@ def verify_text(text, patched=False):
     else:
         assert SEAM in block, "Factory method entry registers or seam drifted"
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == STOCK_SHA256, (
-            "1609 MediaMetadataCompat factory source drifted; re-analyze rather than patching"
+            "1611 MediaMetadataCompat factory source drifted; re-analyze rather than patching"
         )
 
 

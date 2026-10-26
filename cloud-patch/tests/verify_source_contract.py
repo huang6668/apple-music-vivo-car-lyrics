@@ -230,6 +230,6 @@ assert "setExtras replaces wholesale" not in text
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r49-1609-2026-10-24"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r50-1611-2026-10-26"' in text
 
 print("VivoCarLyrics source contract passed")

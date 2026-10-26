@@ -28,7 +28,7 @@ def restore(root):
     by_file = {}
     for _, relative, patterns, _ in names.SPECS:
         by_file.setdefault(relative, []).extend(patterns)
-    binding = by_file["smali_classes2/q8/ma.smali"]
+    binding = by_file["smali_classes2/q8/la.smali"]
     binding[:] = [BINDING_SETTER if pattern == BINDING_SETTER.replace("q0", "\\w+") else pattern
                   for pattern in binding]
     if BINDING_SETTER not in binding:
@@ -84,7 +84,7 @@ class ReflectionNamesTest(unittest.TestCase):
 
     def test_ambiguity_is_rejected(self):
         marker = sample_line(BINDING_SETTER) + "\n"
-        fixture(self.root, "smali_classes2/q8/ma.smali",
+        fixture(self.root, "smali_classes2/q8/la.smali",
                 marker +
                 ".method public abstract z9(Lcom/apple/android/music/model/PlaybackItem;)V\n")
         try:
@@ -92,7 +92,7 @@ class ReflectionNamesTest(unittest.TestCase):
             self.assertIsNone(setter)
             self.assertIn("exactly one", problem)
         finally:
-            fixture(self.root, "smali_classes2/q8/ma.smali", marker)
+            fixture(self.root, "smali_classes2/q8/la.smali", marker)
 
     def test_runtime_class_notes_cover_the_application_class(self):
         self.assertTrue(any(name.startswith("com.apple.android.music.AppleMusicApplication")

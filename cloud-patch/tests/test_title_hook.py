@@ -103,7 +103,7 @@ class TitleHookTest(unittest.TestCase):
 
     def test_preserve_title_assignment(self):
         with self.assertRaises(AssertionError):
-            hook.verify_text(fixture().replace(hook.VIEW, hook.VIEW.replace("->o0:", "->n0:")))
+            hook.verify_text(fixture().replace(hook.VIEW, hook.VIEW.replace("->p0:", "->o0:")))
 
     def test_scratch_register_must_be_dead(self):
         with self.assertRaises(AssertionError):
@@ -125,7 +125,7 @@ class TitleHookTest(unittest.TestCase):
                      fixture().replace("move-object/from16 v54, v52",
                                        "move-object/from16 v54, v31"),
                      fixture().replace(hook.ARTIST_VIEW,
-                                       hook.ARTIST_VIEW.replace("->n0:", "->o0:"))):
+                                       hook.ARTIST_VIEW.replace("->o0:", "->p0:"))):
             with self.assertRaises(AssertionError):
                 hook.verify_text(text)
 
@@ -154,8 +154,8 @@ class TitleHookTest(unittest.TestCase):
         self.assertGreater(patch.index(ui_header), patch.index("onAtomicControllerConnected"))
         self.assertEqual(
             hashlib.sha256(patch[:patch.index(ui_header)].encode("utf-8")).hexdigest(),
-            "1129e5c8f5dd166f40bbd4884943087a4fdbf2c8a9fcfc0cf63be109beb6fbef",
-            "The six P/d0 lyrics hooks must remain pinned to the audited 1609 port",
+            "a7e1724d76cdfc65933db8a13de368d3fc4325a2d16b35164ad3b266b3f61375",
+            "The six O/c0 lyrics hooks must remain pinned to the audited 1611 port",
         )
         self.assertEqual(patch.count("\n--- a/"), 2)
         for name in ("onNativeMediaItem", "onCurrentItemChanged", "onMetadataUpdated",
@@ -180,7 +180,7 @@ class TitleHookTest(unittest.TestCase):
 
     def test_artist_hunk_has_full_context_on_both_sides(self):
         patch_text = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
-        hunk = patch_text.split("@@ -3193,10 +3202,19 @@\n", 1)[1].splitlines()
+        hunk = patch_text.split("@@ -3140,10 +3149,19 @@\n", 1)[1].splitlines()
         leading = next(index for index, line in enumerate(hunk) if not line.startswith(" "))
         trailing = next(index for index, line in enumerate(reversed(hunk))
                         if not line.startswith(" "))

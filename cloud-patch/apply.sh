@@ -7,8 +7,8 @@ helper_source="$patch_root/java/com/apple/android/music/player/VivoCarLyrics.jav
 paginator_source="$patch_root/java/com/apple/android/music/player/ClusterLyricsPaginator.java"
 title_verifier="$patch_root/verify_title_hook.py"
 lyrics_verifier="$patch_root/verify_lyrics_hooks.py"
-manager_target=work/apktool/smali_classes2/com/apple/android/music/player/P.smali
-connection_target=work/apktool/smali_classes2/com/apple/android/music/player/d0.smali
+manager_target=work/apktool/smali_classes2/com/apple/android/music/player/O.smali
+connection_target=work/apktool/smali_classes2/com/apple/android/music/player/c0.smali
 manifest=work/apktool/AndroidManifest.xml
 atomic_service_action='com.vivo.musicwidgetmix.support.service'
 

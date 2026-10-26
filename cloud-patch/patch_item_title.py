@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin 1609 title/artist getters and Catalog-backed list-controller entry hooks."""
+"""Pin 1611 title/artist getters and Catalog-backed list-controller entry hooks."""
 
 import argparse
 import hashlib
@@ -23,8 +23,8 @@ ALBUM_METHOD = (
     "Ljava/lang/String;"
 )
 ENTRY_PINS = {
-    TARGET_PLAYLIST: "fd6374eec62cc316a3518bd73901963131ab5d9ee310fc435580be7076dd1f86",
-    TARGET_ALBUM: "9ded149da8a5d7a8d64ffa69c839ab9a1336363bb690f961d362f3047e3307b5",
+    TARGET_PLAYLIST: "ede9d565cfc2fd944ec99420ec73349cfdf055c837793fa3def397cbe95aaf1b",
+    TARGET_ALBUM: "efb388985ab53300e5dd0d2e757d8da89384de1d0271806bf76f8d952336d952",
 }
 PLAYLIST_HOOK = (
     "\n    invoke-static/range {p0 .. p1}, " + HELPER
@@ -188,7 +188,7 @@ def verify_artist_return(text, target, patched=False):
         block = block.replace(capture, "", 1).replace(call, "", 1)
         block = block.replace(".locals " + str(after) + "\n", ".locals " + str(before) + "\n", 1)
     assert hashlib.sha256(block.encode()).hexdigest() == pin, (
-        "Subtitle getter must preserve all 1609 stock instructions, labels and branches"
+        "Subtitle getter must preserve all 1611 stock instructions, labels and branches"
     )
 
 
@@ -248,7 +248,7 @@ def verify_entry(text, target, signature, patched=False):
         )
         block = block.replace(inserted, "", 1)
     assert hashlib.sha256(block.encode()).hexdigest() == ENTRY_PINS[target], (
-        "Controller hook must preserve every 1609 stock instruction/label: " + signature
+        "Controller hook must preserve every 1611 stock instruction/label: " + signature
     )
 
 

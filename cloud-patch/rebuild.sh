@@ -79,7 +79,7 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/CatalogTitleResolver' \
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
-  'vivo-car-cn-track-r49-1609-2026-10-24' \
+  'vivo-car-cn-track-r50-1611-2026-10-26' \
   'correctPlayerTitle' \
   'correctPlayerArtist' \
   'resolveItemTitle' \
@@ -276,11 +276,13 @@ python3 "$PATCH_ROOT/patch_catalog_region.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-catalog-region-hook.txt
 python3 "$PATCH_ROOT/patch_item_title.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-item-title-hook.txt
+python3 "$PATCH_ROOT/patch_car_cover.py" "$FINAL_MANIFEST_DIR" \
+  > out/report/verified-car-cover-hook.txt
 python3 "$PATCH_ROOT/verify_reflection_names.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-reflection-names.txt
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/P.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/O.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/d0.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/c0.smali' -print -quit)" \
   > out/report/final-connection-smali-path.txt
 unzip -Z1 out/apple-music-vivo-car-lyrics-debug.apk \
   | grep -E '^classes[0-9]*\.dex$' \

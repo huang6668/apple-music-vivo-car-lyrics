@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the six existing lyrics hooks to the cloud-analyzed 1609 stock methods."""
+"""Pin the six existing lyrics hooks to the cloud-analyzed 1611 stock methods."""
 
 import argparse
 import hashlib
@@ -7,11 +7,11 @@ from pathlib import Path
 import re
 
 
-MANAGER = "com/apple/android/music/player/P.smali"
-CONNECTION = "com/apple/android/music/player/d0.smali"
+MANAGER = "com/apple/android/music/player/O.smali"
+CONNECTION = "com/apple/android/music/player/c0.smali"
 HELPER = "Lcom/apple/android/music/player/VivoCarLyrics;"
 ATOMIC_BODY = (
-    "iget-object v0, p2, LJ4/g2$e;->a:LK4/B$b;\n"
+    "iget-object v0, p2, LJ4/k2$e;->a:LK4/B$b;\n"
     "iget-object v0, v0, LK4/B$b;->a:LK4/B$c;\n"
     "iget-object v0, v0, LK4/B$d;->a:Ljava/lang/String;\n"
     "invoke-static {v0}, " + HELPER + "->onAtomicControllerConnected(Ljava/lang/String;)V\n"
@@ -19,40 +19,40 @@ ATOMIC_BODY = (
 SPECS = (
     (MANAGER, "public final P(Lz3/w;I)V",
      "onNativeMediaItem(Ljava/lang/Object;)V", "{p1}",
-     "e3a875ba1aba71ade195ee9b44f3daf41e8cd795e4916240ee861a6259aa4c36",
-     "if-nez p2, :cond_4", "iget-object p2, p0, Lcom/apple/android/music/player/P;->j:Lz3/w;"),
+     "31a25e9f4285cc2bf738fcb738fbacf91373eadf35e0ed5c0afcc5dc0f4e7dc8",
+     "if-nez p2, :cond_4", "iget-object p2, p0, Lcom/apple/android/music/player/O;->j:Lz3/w;"),
     (MANAGER,
      "public final onCurrentItemChanged(Lcom/apple/android/music/playback/controller/MediaPlayerController;"
      "Lcom/apple/android/music/playback/model/PlayerQueueItem;"
      "Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
      "onCurrentItemChanged(Ljava/lang/Object;Ljava/lang/Object;)V", "{p0, p3}",
-     "53fdb3706e738c341d48beef4e5af8b5a410c9e0330d86930e7e0671880399d5",
+     "6a9f600318f3ec946ce6e0b789b3957298c4b1b13d75f67bd382e964f8fd098e",
      "invoke-static {p1, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V",
-     "new-instance v1, Lcom/apple/android/music/player/P$e;"),
+     "new-instance v1, Lcom/apple/android/music/player/O$e;"),
     (MANAGER,
      "public final onMetadataUpdated(Lcom/apple/android/music/playback/controller/MediaPlayerController;"
      "Lcom/apple/android/music/playback/model/PlayerQueueItem;)V",
      "onMetadataUpdated(Ljava/lang/Object;Ljava/lang/Object;)V", "{p0, p2}",
-     "864f1b0fdac91e4e0ecac1a9097728b121ba86197dbec6a75e0e0ce6bbf918f7",
+     "8286de7cfe258dab19e2a08569731037fca33f789dacdda6fe7a638595bd2e45",
      "invoke-static {p2, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V",
-     "new-instance v0, Lcom/apple/android/music/player/P$g;"),
+     "new-instance v0, Lcom/apple/android/music/player/O$g;"),
     (MANAGER,
      "public final onPlaybackError(Lcom/apple/android/music/playback/controller/MediaPlayerController;"
      "Lcom/apple/android/music/playback/model/MediaPlayerException;)V",
      "onPlaybackError(Ljava/lang/Object;)V", "{p0}",
-     "c5c5b79dd729bfbdebe4bbeab0c624e438e05ca3fe938cbae113d4df3e17fe51",
+     "7602fe780173d07565b18d68a05bf39e61f539ffdd534272a245f92334ca8cbf",
      "invoke-static {p2, v0}, Lkotlin/jvm/internal/l;->g(Ljava/lang/Object;Ljava/lang/String;)V",
      "invoke-virtual {p2}, Ljava/lang/Object;->toString()Ljava/lang/String;"),
     (MANAGER, "public final seekTo(J)V",
      "onSeek(Ljava/lang/Object;J)V", "{p0, p1, p2}",
-     "e77cf9e512c60b6324f8db326653698cec281e78af2bef17345a45809a0309ab",
+     "fcc9193c210b670383b1501af23b2392cbbc6daa40e02b50097cdd00cd1926fd",
      "invoke-interface {v0, p1, p2}, Lcom/apple/android/music/playback/controller/MediaPlayerController;"
      "->seekToPosition(J)V",
-     "new-instance p1, Lcom/apple/android/music/player/P$w;"),
-    (CONNECTION, "public final o(LJ4/g2;LJ4/g2$e;)V",
+     "new-instance p1, Lcom/apple/android/music/player/O$w;"),
+    (CONNECTION, "public final o(LJ4/k2;LJ4/k2$e;)V",
      "onAtomicControllerConnected(Ljava/lang/String;)V", "{v0}",
-     "1dabe3dd5f4102cda9a2a3d88d90be241ff4f4c301067f2f3ec5df534ee24c47",
-     "iget-object p0, p0, LJ4/w2;->i:Ljava/lang/String;", "return-void"),
+     "09461f8838450e0f488f71975cae21b1408fa335c1d860828e74180d2460b40d",
+     "iget-object p0, p0, LJ4/z2;->i:Ljava/lang/String;", "return-void"),
 )
 
 
@@ -115,7 +115,7 @@ def main():
     parser.add_argument("--unpatched", action="store_true")
     args = parser.parse_args()
     verify_tree(args.decoded_root, unpatched=args.unpatched)
-    print("1609 six stock-preserving lyrics hooks verified")
+    print("1611 six stock-preserving lyrics hooks verified")
 
 
 if __name__ == "__main__":

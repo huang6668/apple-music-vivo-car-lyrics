@@ -50,25 +50,25 @@ SPECS = (
     ),
     (
         "metadata -> PlaybackItem converter",
-        "smali_classes2/com/apple/android/music/player/O.smali",
+        "smali_classes2/com/apple/android/music/player/N.smali",
         (r"^\.method public static final b\(Lz3/y;\)Lcom/apple/android/music/model/PlaybackItem;$",),
         "currentPlaybackItem probes fail and the player page keeps the stock name",
     ),
     (
         "notification refresh method",
-        "smali/J4/Z2.smali",
-        (r"^\.method public final g\(LJ4/g2;Z\)Lag/a\$a;$",),
+        "smali/J4/b3.smali",
+        (r"^\.method public final g\(LJ4/k2;Z\)Lag/a\$a;$",),
         "refreshTitleNotification cannot rebuild the stock notification",
     ),
     (
         "notification session class",
-        "smali/J4/g2.smali",
-        (r"^\.class public LJ4/g2;$",),
+        "smali/J4/k2.smali",
+        (r"^\.class public LJ4/k2;$",),
         "the notification refresh chain resolves the wrong session class",
     ),
     (
         "notification session -> service field",
-        "smali/J4/w2.smali",
+        "smali/J4/z2.smali",
         (r"^\.field public final f:Landroid/content/Context;$",),
         "refreshTitleNotification cannot walk session.w2.f to the service",
     ),
@@ -76,45 +76,45 @@ SPECS = (
         "service -> session field",
         "smali_classes2/com/apple/android/music/player/MediaPlaybackService.smali",
         (
-            r"^\.field public volatile y:LJ4/s1\$b;$",
-            r"^\.method public final j\(LJ4/g2\$e;\)LJ4/s1\$b;$",
+            r"^\.field public volatile y:LJ4/x1\$b;$",
+            r"^\.method public final j\(LJ4/k2\$e;\)LJ4/x1\$b;$",
         ),
         "the service/session identity check in refreshTitleNotification fails closed",
     ),
     (
         "service base class",
-        "smali/J4/s1.smali",
-        (r"^\.super LJ4/Z2;$",),
+        "smali/J4/x1.smali",
+        (r"^\.super LJ4/b3;$",),
         "MediaPlaybackService is no longer a J4.Z2, so the g() lookup fails",
     ),
     (
         "player -> session manager field",
-        "smali_classes2/com/apple/android/music/player/l0.smali",
-        (r"^\.field public b:LJ4/s1\$b;$",),
+        "smali_classes2/com/apple/android/music/player/k0.smali",
+        (r"^\.field public b:LJ4/x1\$b;$",),
         "refreshTitleNotification cannot reach the session from the manager",
     ),
     (
         "manager current item",
-        "smali_classes2/com/apple/android/music/player/P.smali",
+        "smali_classes2/com/apple/android/music/player/O.smali",
         (
-            r"^\.field public final a:Lcom/apple/android/music/player/l0;$",
+            r"^\.field public final a:Lcom/apple/android/music/player/k0;$",
             r"^\.method public final c\(\)Lz3/w;$",
         ),
         "currentMediaItem returns nothing and title correction never applies",
     ),
     (
         "player page rebind setters",
-        "smali_classes2/q8/ma.smali",
+        "smali_classes2/q8/la.smali",
         (
             r"^\.method public abstract q0\(Lcom/apple/android/music/model/PlaybackItem;\)V$",
             r"^\.field public final o0:Lcom/apple/android/music/common/views/CustomTextView;$",
-            r"^\.field public final n0:Lcom/apple/android/music/common/views/CustomTextView;$",
+            r"^\.field public final p0:Lcom/apple/android/music/common/views/CustomTextView;$",
         ),
         "the player page never refreshes after an async title/artist arrives",
     ),
     (
         "player page subtitle source",
-        "smali_classes2/com/apple/android/music/player/a1.smali",
+        "smali_classes2/com/apple/android/music/player/b1.smali",
         (r"^\.method public static y0\(Lcom/apple/android/music/model/PlaybackItem;\)Ljava/lang/String;$",),
         "the player page artist hook has no source method to read",
     ),
@@ -183,13 +183,13 @@ def verify(root):
 def verify_playback_item_setter(root):
     """The one name this script does *not* hardcode: whatever rebinds the item.
 
-    1609 renamed the binding setter (``q0`` takes the PlaybackItem, ``r0`` takes the
+    1611 renamed the binding setter (``q0`` takes the PlaybackItem, ``r0`` takes the
     player model), so pin ``r0`` by string and fail the port. Assert the setter exists
     by signature instead, and report the name.
     """
-    text = read(root, "smali_classes2/q8/ma.smali")
+    text = read(root, "smali_classes2/q8/la.smali")
     if text is None:
-        return None, "Missing q8/ma.smali for the PlaybackItem setter"
+        return None, "Missing q8/la.smali for the PlaybackItem setter"
     matches = re.findall(
         r"^\.method public abstract (\w+)\(Lcom/apple/android/music/model/PlaybackItem;\)V$",
         text, re.M,
@@ -231,7 +231,7 @@ def main():
     for line in checked:
         print("ok %s" % line)
     if setter:
-        print("ok playback page item setter -> smali_classes2/q8/ma.smali :: %s(PlaybackItem)V" %
+        print("ok playback page item setter -> smali_classes2/q8/la.smali :: %s(PlaybackItem)V" %
               setter)
     for name, purpose in RUNTIME_CLASSES:
         if not name.startswith("com.apple.android.music.player.VivoCarLyrics"):
@@ -243,7 +243,7 @@ def main():
             print("FAIL %s" % problem, file=sys.stderr)
         raise SystemExit("Reflection name preflight failed (%s): %d problem(s)" %
                          (header, len(problems)))
-    print("1609 reflection name preflight verified (%s): %d names" % (header, len(checked) + 1))
+    print("1611 reflection name preflight verified (%s): %d names" % (header, len(checked) + 1))
 
 
 if __name__ == "__main__":

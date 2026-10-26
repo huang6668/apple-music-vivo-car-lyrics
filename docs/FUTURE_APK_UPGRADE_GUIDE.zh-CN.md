@@ -6,12 +6,13 @@
 > **这是升级时唯一需要阅读的文档。** 协议字段（§8）、已验证的死路（§9）、
 > 安装签名限制（§10）都已并入本文；旧手册与历史排查记录已从 `docs/` 删除，需要时从 git 历史取回。
 >
-> **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1609**。
+> **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r48-1609-2026-10-23`
-> （r46 去掉了旧车机 key；r47 修正整首 LRC 的行格式；r48 把每行改为 CRLF 终结并给出
-> 车机封面的车联侧根因，见 §8.1 与 §9）。最新发布的构建是 Build #170（r47），CI 已通过。
-> r45–r48 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r50-1611-2026-10-26`
+> （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
+> 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
+> 移植到 1611，见 §8.1 与 §9）。最新发布的构建是 Build #170（r47，1609），CI 已通过。
+> r49/r50 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。
 > Build #155 的实机验证只覆盖 1607 的**歌名**移植；r38（Build #83）的车机歌词、
 > 原子随身听歌词和进度条已于 2026-09-04 实车确认。CI 成功不等于实机验证。
 >
@@ -30,11 +31,11 @@
 flowchart TD
     subgraph Stock["官方 APK（每版混淆名会变）"]
         Manifest["AndroidManifest.xml"]
-        Player["播放管理器 / Session 回调\n(1609: player/P, player/d0)"]
-        Binding["正在播放绑定\n(1609: q8/na.l()V)"]
+        Player["播放管理器 / Session 回调\n(1611: player/O, player/c0)"]
+        Binding["正在播放绑定\n(1611: q8/na.l()V)"]
         Models["列表模型（未混淆）\nBaseContentItem / Attributes /\nBasePlaybackItem / Song"]
         Pages["页面控制器（未混淆）\nPlaylist / AlbumPageController"]
-        Http["Catalog HTTP 分发\n(1609: y9/k.a)"]
+        Http["Catalog HTTP 分发\n(1611: y9/k.a)"]
     end
 
     subgraph Seams["注入层（每版只需重新定位这层）"]
@@ -109,14 +110,14 @@ flowchart TD
 涉及 `apple-vivo-car-lyrics.patch` 与 `verify_lyrics_hooks.py`（`SPECS` 记录签名、
 寄存器、stock hash 和前后锚点指令）。
 
-| Hook | 1609 位置 | 1607（历史） |
-| --- | --- | --- |
-| `onNativeMediaItem(p1)` | `P.P(Lz3/w;I)V`，`if-nez p2, :cond_4` 之后 | `S.P(Lz3/v;I)V` |
-| `onCurrentItemChanged(p0, p3)` | `P.onCurrentItemChanged`，空检查之后 | `S` |
-| `onMetadataUpdated(p0, p2)` | `P.onMetadataUpdated`，空检查之后 | `S` |
-| `onPlaybackError(p0)` | `P.onPlaybackError`，空检查之后 | `S` |
-| `onSeek(p0, p1, p2)` | `P.seekTo(J)V`，`seekToPosition(J)` 之后 | `S` |
-| `onAtomicControllerConnected(v0)` | `d0.o(LJ4/g2;LJ4/g2$e;)V`，`.locals 0→1`，从 `g2$e.a:K4/B$b → .a:K4/B$c → K4/B$d.a:String` 取包名 | `e0.o(LJ4/f2;LJ4/f2$e;)V` |
+| Hook | 1611 位置 | 1609（历史） | 1607（历史） |
+| --- | --- | --- | --- |
+| `onNativeMediaItem(p1)` | `O.P(Lz3/w;I)V`，`if-nez p2, :cond_4` 之后 | `P.P(Lz3/w;I)V` | `S.P(Lz3/v;I)V` |
+| `onCurrentItemChanged(p0, p3)` | `O.onCurrentItemChanged`，空检查之后 | `P` | `S` |
+| `onMetadataUpdated(p0, p2)` | `O.onMetadataUpdated`，空检查之后 | `P` | `S` |
+| `onPlaybackError(p0)` | `O.onPlaybackError`，空检查之后 | `P` | `S` |
+| `onSeek(p0, p1, p2)` | `O.seekTo(J)V`，`seekToPosition(J)` 之后 | `P` | `S` |
+| `onAtomicControllerConnected(v0)` | `c0.o(LJ4/k2;LJ4/k2$e;)V`，`.locals 0→1`，从 `k2$e.a:K4/B$b → .a:K4/B$c → K4/B$d.a:String` 取包名 | `d0.o(LJ4/g2;…)` | `e0.o(LJ4/f2;…)` |
 
 定位方法：
 - **播放管理器**：实现了 `MediaPlayerController.Listener`，并且有一个调用
@@ -273,7 +274,7 @@ sequenceDiagram
 | Result 失败类型 | `CatalogTitleResolver.failureOf` | `kotlin.Result$Failure` | 回退 `bi.q$a` |
 | 正在播放 StoreMediaItem | `writeCorrectedTrack` | `playback.model.StoreMediaItem`（`title` / `artistName`） | 同 |
 
-> 注意：1609 中 `player.P` 是**播放管理器**。转换器探测会先试 `Q`、`P`，只要它们
+> 注意：1611 中 `player.O` 是**播放管理器**、`player.N` 才是 metadata → PlaybackItem 转换器。转换器探测会依次试 `N`、`Q`、`P`、`O`，只要它们
 > 恰好也有一个参数兼容的 static `b(...)`，就会拿错对象。新版本要确认探测顺序，
 > 并校验返回类型是 `PlaybackItem`（helper 已强制这一点）。
 >
@@ -485,8 +486,8 @@ adb logcat -s VivoCarTitle
   头标签**整行匹配**才丢弃，含括号的正文不动；无时间戳的行各自占一行，不能因为都是 time=0 被合并
   成一句（纯未同步歌词曾因此塌成一行）；时间乱序时只做稳定排序 + 合并同时间行，**不再**把整首歌
   重排成 `index*step`。
-- **车机专辑图串台是车联自己的缺陷，Apple Music 侧没有杠杆**（r47 的“闪一下”结论不准确，r48 用
-  smali 定死了机制）：车联封面走 `jg/e.X(String,q9/a)` → 位图交给 `wb/f.MusicCoverStore` 异步压缩
+- **车机专辑图串台：车联侧根因已定死，r50 已从 Apple Music 侧规避**（r47 的“闪一下”结论不准确，
+  r48 用 smali 定死了机制，r48 记下的“Apple Music 侧没有杠杆”已被 r50 推翻）：车联封面走 `jg/e.X(String,q9/a)` → 位图交给 `wb/f.MusicCoverStore` 异步压缩
   （PNG q100，单飞 + 单待发槽），回调 `jg/e$d.a(String player, String songId, String url, Bitmap)`
   **只比较包名**（`TextUtils.equals(p1, e.f25617j)`），它拿到的 `songId` 和入队时捕获的 `q9/a`
   都不参与校验，于是上一首的压缩结果照样执行 `jg/e.g(g)`：把旧 URL 写进全局 holder `f25631x`，
@@ -494,8 +495,13 @@ adb logcat -s VivoCarTitle
   连续切歌时交付总慢一拍，车机就会稳定显示“上一首/上上一首”的封面，而 `M()` 推的 JSON
   （`coverUrl` 取自当前 `q9/a`）只带正确歌名/歌手，所以标题是对的、只有封面错。
   **仪表不受影响**：`gg/d.HudManager` 走 CarLife Intent，每次 `intent.putExtra("cover", carMusicInfo.getCoverBitmap())`
-  都内联当前位图。修它需要改车联（`jg/e$d.a` 里把 `songId` 与当前歌曲比对），而车联需要 vivo 私钥，
-  所以这条只能报给 vivo；Apple Music 侧不要试图用延迟发布、重发 MediaItem 或改封面位图去规避。
+  都内联当前位图。**r50 的规避方式**：在 Apple Music 构造 `MediaMetadataCompat` 的工厂方法
+  （1611：`J4/t;->n(...)`）入口把内联位图参数置空（`const/4 p5, 0x0`，见 `patch_car_cover.py`），
+  metadata 里不再有 `DISPLAY_ICON`/`ALBUM_ART`，车联的 `jg/e.X` 返回 false、整条 `MusicCoverStore`
+  异步压缩链路不参与，CarLauncher 直接吃 `METADATA_KEY_ALBUM_ART_URI`，HUD 走 HTTP 下载，
+  “慢一拍”的窗口消失。**代价与影响面**：内联位图是全部 media-session 消费者共享的，系统媒体通知、
+  锁屏、原子随身听、蓝牙封面此后都只能走 URI 加载（需实机确认这几处表现，含断网场景）。
+  改车联本身（在 `jg/e$d.a` 里比对 `songId`）仍然需要 vivo 私钥，仍然是不可行的方向。
 
 ### 8.2 原子随身听
 
@@ -573,7 +579,7 @@ compat 层和框架层是同一个 session，不是两条通道。
 | 给车联和原子发不同的 LRC | 两者都读 `vivomusicmix.extra.key.lyric`，后写覆盖先写；用 mediaId 区分会让原子隐藏歌词 |
 | 修仪表截断 / 每句重载封面 | 根因在车联 `gg/d.java`：写死 `substring(0,17)+"..."`；`CarMusicInfo.equals` 包含当前行，每句都会连同封面整包重发。Apple Music 侧没有杠杆；改车联需要 vivo 私钥。不尝试规避，不改车联 |
 | 切歌后延迟歌词发布，躲开“旧封面”窗口 | 前提不成立：歌词事件与封面管线无关，延迟只会丢掉切歌后的头一两句歌词（r47 实测后撤销）。`a8.c.c(..., 2000L, ...)` 的 2000 是看门狗不是延迟 |
-| 想从 Apple Music 侧修车机“封面是上一首” | r48 用 smali 定死：车联 `jg/e$d.a(player, songId, url, bitmap)` 只比较包名就回写 holder 并 `A3(旧URL)` 推给车机；压缩是异步单槽（`wb/f`），连续切歌时结果永远慢一拍。`songId` 明明在手上却没比对——缺陷在 `com.vivo.car.networking`，改它需要 vivo 私钥。仪表走 CarLife Intent 内联当前位图，所以不受影响。不要再试延迟发布、重发 MediaItem、缩小/替换封面位图等规避手段 |
+| 想从 Apple Music 侧修车机“封面是上一首” | **r50 已规避，此条不再是死路**：车联 `jg/e$d.a(player, songId, url, bitmap)` 只比较包名就回写 holder 并 `A3(旧URL)` 推给车机；压缩是异步单槽（`wb/f`），连续切歌时结果永远慢一拍。r48 曾据此判定“只能报给 vivo”，但 r50 找到了另一条杠杆：让 Apple Music 不再提供内联位图（`J4/t.n` 内置空，见 §8.1），`jg/e.X` 返回 false，整条 MusicCoverStore 链路被跳过。延迟发布、重发 MediaItem 依旧是死路 |
 | 用空 Bundle “清除” session extras | Media3 每次 `setExtras` 都会合并已存 extras（`C13660l0.j` + `C2786g2.m4607e`），空包等于重播上一次的 `lrc_change`；车联又丢弃空 lyric 事件。清不掉，别再往这个方向想 |
 | 用重复发布整首 LRC 去“补发”给重连的桌面 | 车联 `jg/e.h0` 按字符串完全相等去重，同一份 LRC 重播会被吞掉；而它唯一的重取路径读 `ucar.media.metadata.LYRICS_WHOLE`，我们从不发布。在协议内无法可靠补发 |
 | 外挂桥接 App（`kuwo-bridge/`，伪装 `cn.kuwo.player`） | 能解决车联识别和控制转发，但拿不到宿主私有的完整同步歌词。改 Apple Music APK 仍是最完整的方案 |

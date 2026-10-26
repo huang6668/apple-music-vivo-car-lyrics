@@ -2,6 +2,7 @@ out/
 work/
 payload.tar
 payload.tar.part.*
+.work/
 *.apk
 *.aab
 *.keystore
