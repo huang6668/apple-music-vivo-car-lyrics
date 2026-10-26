@@ -15,6 +15,8 @@
 > r49–r51 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。r50 的 1611 构建为 Build #173
 > （Release `v1.0.0-build-173`）：CI 全绿，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、
 > 目录地区 seam、歌名/歌手 getter 与车机封面钩子（`out/report/verified-*.txt`）。
+> r51 的构建为 Build #174（Release `v1.0.0-build-174`），成品 helper DEX 里已确认 marker 是
+> `r51-1611`、且 `publishLineExtras` / `AtomicActionClearTask` 都不存在。
 > Build #155 的实机验证只覆盖 1607 的**歌名**移植；r38（Build #83）的车机歌词、
 > 原子随身听歌词和进度条已于 2026-09-04 实车确认。CI 成功不等于实机验证。
 >
