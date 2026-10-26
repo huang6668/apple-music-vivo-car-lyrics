@@ -127,21 +127,21 @@ public final class VivoTitleIntegrationTest {
     private static void testCompatiblePlaybackConverter() throws Exception {
         Handler.reset();
         Fixture fixture = new Fixture("Converter stock", "Converter stock artist");
-        O.item = fixture.item;
-        O.received = null;
+        N.item = fixture.item;
+        N.received = null;
         Q.calls = 0;
         P.calls = 0;
         try {
             check(call("currentPlaybackItem", fixture.manager) == fixture.item,
-                    "select the compatible static 1609 O converter");
-            check(O.received == fixture.manager.media.d, "converter receives current native metadata");
+                    "select the compatible static 1611 N converter");
+            check(N.received == fixture.manager.media.d, "converter receives current native metadata");
             equal(0, Q.calls);
             equal(0, P.calls);
             equal(0, fixture.manager.republishes);
             equal(0, Handler.pendingCount());
         } finally {
-            O.item = null;
-            O.received = null;
+            N.item = null;
+            N.received = null;
         }
     }
 
@@ -332,7 +332,7 @@ public final class VivoTitleIntegrationTest {
         Handler.reset();
         Fixture wrongSession = new Fixture("Wrong service session");
         wrongSession.request();
-        wrongSession.manager.service.y = new J4.g2(wrongSession.manager, wrongSession.manager.service);
+        wrongSession.manager.service.y = new J4.k2(wrongSession.manager, wrongSession.manager.service);
         wrongSession.catalog.succeed(0, "Corrected but not notified");
         Handler.drain();
         equal("Corrected but not notified", wrongSession.manager.media.d.a);
@@ -347,7 +347,7 @@ public final class VivoTitleIntegrationTest {
 
         Fixture wrongServiceType = new Fixture("Wrong service type");
         wrongServiceType.request();
-        J4.Z2 impostor = new J4.Z2();
+        J4.b3 impostor = new J4.b3();
         wrongServiceType.manager.a.b.a.f = impostor;
         wrongServiceType.catalog.succeed(0, "Corrected without service match");
         Handler.drain();
@@ -991,7 +991,7 @@ public final class VivoTitleIntegrationTest {
         int republishes;
         Manager(z3.w media) {
             this.media = media;
-            a = new SessionHolder(new J4.g2(this, service));
+            a = new SessionHolder(new J4.k2(this, service));
             service.y = a.b;
         }
         public z3.w c() { return media; }
@@ -1000,8 +1000,8 @@ public final class VivoTitleIntegrationTest {
     }
 
     public static final class SessionHolder {
-        public final J4.g2 b;
-        SessionHolder(J4.g2 session) { b = session; }
+        public final J4.k2 b;
+        SessionHolder(J4.k2 session) { b = session; }
     }
 
     public static final class Binding {
