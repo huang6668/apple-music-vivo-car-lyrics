@@ -8,15 +8,16 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r51-1611-2026-10-26`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r52-1611-2026-10-27`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
-> 移植到 1611；r51 删掉逐句空 Bundle 心跳，见 §8.1 与 §9）。最新发布的构建是 Build #170（r47，1609），CI 已通过。
+> 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1），见 §8.1 与 §9）。
+> 最新发布的构建是 Build #170（r47，1609），CI 已通过。
 > r49–r51 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。r50 的 1611 构建为 Build #173
 > （Release `v1.0.0-build-173`）：CI 全绿，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、
 > 目录地区 seam、歌名/歌手 getter 与车机封面钩子（`out/report/verified-*.txt`）。
 > r51 的构建为 Build #174（Release `v1.0.0-build-174`），成品 helper DEX 里已确认 marker 是
-> `r51-1611`、且 `publishLineExtras` / `AtomicActionClearTask` 都不存在。
+> `r51-1611`、且 `publishLineExtras` / `AtomicActionClearTask` 都不存在；r52 撤回封面剥离，构建号见后。
 > Build #155 的实机验证只覆盖 1607 的**歌名**移植；r38（Build #83）的车机歌词、
 > 原子随身听歌词和进度条已于 2026-09-04 实车确认。CI 成功不等于实机验证。
 >
@@ -492,21 +493,25 @@ adb logcat -s VivoCarTitle
   头标签**整行匹配**才丢弃，含括号的正文不动；无时间戳的行各自占一行，不能因为都是 time=0 被合并
   成一句（纯未同步歌词曾因此塌成一行）；时间乱序时只做稳定排序 + 合并同时间行，**不再**把整首歌
   重排成 `index*step`。
-- **车机专辑图串台：车联侧根因已定死，r50 已从 Apple Music 侧规避**（r47 的“闪一下”结论不准确，
-  r48 用 smali 定死了机制，r48 记下的“Apple Music 侧没有杠杆”已被 r50 推翻）：车联封面走 `jg/e.X(String,q9/a)` → 位图交给 `wb/f.MusicCoverStore` 异步压缩
+- **车机专辑图串台：车联侧根因已定死；r50 曾规避，r52 撤回**（r47 的“闪一下”结论不准确，r48 用
+  smali 定死了机制）：车联封面走 `jg/e.X(String,q9/a)` → 位图交给 `wb/f.MusicCoverStore` 异步压缩
   （PNG q100，单飞 + 单待发槽），回调 `jg/e$d.a(String player, String songId, String url, Bitmap)`
-  **只比较包名**（`TextUtils.equals(p1, e.f25617j)`），它拿到的 `songId` 和入队时捕获的 `q9/a`
-  都不参与校验，于是上一首的压缩结果照样执行 `jg/e.g(g)`：把旧 URL 写进全局 holder `f25631x`，
-  再 `ILauncherManager.A3(旧URL, null, elapsedRealtimeNanos, 包名)` 推给车机。压缩槽只有一个，
-  连续切歌时交付总慢一拍，车机就会稳定显示“上一首/上上一首”的封面，而 `M()` 推的 JSON
-  （`coverUrl` 取自当前 `q9/a`）只带正确歌名/歌手，所以标题是对的、只有封面错。
-  **仪表不受影响**：`gg/d.HudManager` 走 CarLife Intent，每次 `intent.putExtra("cover", carMusicInfo.getCoverBitmap())`
-  都内联当前位图。**r50 的规避方式**：在 Apple Music 构造 `MediaMetadataCompat` 的工厂方法
-  （1611：`J4/t;->n(...)`）入口把内联位图参数置空（`const/4 p5, 0x0`，见 `patch_car_cover.py`），
-  metadata 里不再有 `DISPLAY_ICON`/`ALBUM_ART`，车联的 `jg/e.X` 返回 false、整条 `MusicCoverStore`
-  异步压缩链路不参与，CarLauncher 直接吃 `METADATA_KEY_ALBUM_ART_URI`，HUD 走 HTTP 下载，
-  “慢一拍”的窗口消失。**代价与影响面**：内联位图是全部 media-session 消费者共享的，系统媒体通知、
-  锁屏、原子随身听、蓝牙封面此后都只能走 URI 加载（需实机确认这几处表现，含断网场景）。
+  **只比较包名**（`TextUtils.equals(p1, e.f25617j)`），`songId` 与入队时捕获的 `q9/a` 都不参与校验，
+  于是上一首的压缩结果照样执行 `jg/e.g(g)`：把旧 URL 写进 holder `f25631x`，再
+  `ILauncherManager.A3(旧URL, ...)` 推给车机——切歌后车机封面慢一拍。
+  ```
+  r50 的规避 = 在 J4/t.n 入口置空内联位图（const/4 p5, 0x0）→ jg/e.X 返回 false → 跳过 MusicCoverStore
+  r52 的撤回 = 恢复内联位图；原因是它把仪表封面整块打断了（下面这段是车联 6.0.8.3 的实证）
+  ```
+  **仪表为什么必须要有内联位图**：`HudManager`（`gg/d.java`）只从 `CarMusicInfo.getCoverBitmap()`
+  取图，而该位图来自 `q9/a.a()` = metadata 的 `DISPLAY_ICON || ALBUM_ART || ART`；为空时它回落到
+  `x()`（URL 下载缓存）——但 `e0()` 的顺序是「先 `O()` 通知、后 `j0()` 拉封面」，通知发生时缓存还是
+  上一首的或空的；又因为 `CarMusicInfo.equals` **不比较位图**，`M()` 与 `HudManager.l()` 都按
+  `equals` 去重，下载完成后没有任何二次通知（封面的 `d(bitmap,...)` 回调仪表根本没实现，
+  它只重写了 `g/h/i/j`），于是整首停在默认图标，能否显示取决于缓存是否已热——就是“开盲盒”。
+  **结论（不可兼得）**：位图留在 metadata → 仪表稳定，车机卡片在切歌后约 2s 内可能仍是上一张；
+  位图剥离 → 车机卡片稳定，仪表随机丢图。r52 选前者（整块丢显示比慢一拍更严重）。
+  要两者兼得，只能让车联在封面就绪后再通知一次——那需要改 `com.vivo.car.networking` 或 vivo 私钥。
   改车联本身（在 `jg/e$d.a` 里比对 `songId`）仍然需要 vivo 私钥，仍然是不可行的方向。
 
 ### 8.2 原子随身听
@@ -599,7 +604,7 @@ kgka_Music_hl 五个项目的实车适配经验写成方法论。2026-10-26 对�
   套用该包名，不是官方 APK。
 
 **可以借鉴的封面投递规则**（`references/card-cover.md`；与本项目 §8.1 的“串台”是两条不同的链）。
-r50 去掉内联位图后，通知、锁屏、原子、车机全部改走 `METADATA_KEY_ALBUM_ART_URI`，这些约束开始直接适用：
+r52 撤回位图剥离后，内联位图与 `ALBUM_ART_URI` 并存，但**卡片/车机那侧仍然按 URI 自己下载**，这些约束照样适用：
 
 1. 只投 `http(s)`：`content://`、`file://` 卡片侧拉不到，宁可返回 `null`（占位图好过错图/纯色）。
 2. URL 里的字面量占位符必须替换（如 `{size}`），否则 404；而这个 404 只发生在卡片进程，自己的日志里看不到。
@@ -624,7 +629,7 @@ r50 去掉内联位图后，通知、锁屏、原子、车机全部改走 `METAD
 | 给车联和原子发不同的 LRC | 两者都读 `vivomusicmix.extra.key.lyric`，后写覆盖先写；用 mediaId 区分会让原子隐藏歌词 |
 | 修仪表截断 / 每句重载封面 | 根因在车联 `gg/d.java`：写死 `substring(0,17)+"..."`；`CarMusicInfo.equals` 包含当前行，每句都会连同封面整包重发。Apple Music 侧没有杠杆；改车联需要 vivo 私钥。不尝试规避，不改车联 |
 | 切歌后延迟歌词发布，躲开“旧封面”窗口 | 前提不成立：歌词事件与封面管线无关，延迟只会丢掉切歌后的头一两句歌词（r47 实测后撤销）。`a8.c.c(..., 2000L, ...)` 的 2000 是看门狗不是延迟 |
-| 想从 Apple Music 侧修车机“封面是上一首” | **r50 已规避，此条不再是死路**：车联 `jg/e$d.a(player, songId, url, bitmap)` 只比较包名就回写 holder 并 `A3(旧URL)` 推给车机；压缩是异步单槽（`wb/f`），连续切歌时结果永远慢一拍。r48 曾据此判定“只能报给 vivo”，但 r50 找到了另一条杠杆：让 Apple Music 不再提供内联位图（`J4/t.n` 内置空，见 §8.1），`jg/e.X` 返回 false，整条 MusicCoverStore 链路被跳过。延迟发布、重发 MediaItem 依旧是死路 |
+| 想从 Apple Music 侧修车机“封面是上一首” | **r50 试过、r52 撤回：与仪表互斥**。剥离内联位图（`J4/t.n` 置空）确实让 `jg/e.X` 返回 false、跳过 `MusicCoverStore`，车机卡片稳定；但 `HudManager` 只吃 `CarMusicInfo.getCoverBitmap()`，没有内联位图后仪表整首丢图（`equals` 不比位图 + 无二次通知），见 §8.1。两者不可兼得；要兼得只能改车联。延迟发布、重发 MediaItem 依旧是死路 |
 | 用空 Bundle “清除” session extras | Media3 每次 `setExtras` 都会合并已存 extras（`C13660l0.j` + `C2786g2.m4607e`），空包等于重播上一次的 `lrc_change`；车联又丢弃空 lyric 事件。清不掉，别再往这个方向想 |
 | 用空 Bundle 的 `setExtras` 逐句“刷新”车机 | 空转：合并语义下车联只会重收同一份 `lrc_change`、再被 `jg/e.h0` 去重；部分组件版本还会把它读成“本曲无歌词”。**r51 已删除**，别再把它加回来 |
 | 用重复发布整首 LRC 去“补发”给重连的车机 | 车联 `jg/e.h0` 按字符串完全相等去重，同一份 LRC 重播会被吞掉；它唯一的重取路径读 `ucar.media.metadata.LYRICS_WHOLE`，我们从不发布。所以对**车机**在协议内无法可靠补发。注意区分：**原子**侧仍需要 25s 心跳（`ATOMIC_KEEPALIVE_MS`），那是给组件重连用的，不是给车机补发的手段 |
