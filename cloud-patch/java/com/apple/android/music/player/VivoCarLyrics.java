@@ -1,6 +1,7 @@
 package com.apple.android.music.player;
 
 import android.app.Application;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -781,6 +782,27 @@ public final class VivoCarLyrics {
         } catch (Throwable error) {
             Log.w(TITLE_LOG_TAG, "title cache write failed", error);
         }
+    }
+
+    /**
+     * r53: hand the car a card-sized https cover URL instead of the full-size original.
+     *
+     * The launcher card and the Atomic widget fetch this URL in their own process, so a
+     * 1000x1000 artwork (~200-400 kB) is what "big image times out and the old picture
+     * stays on screen" looks like; the open-source 7tattoo/vivo-car-atomic-lyrics skill
+     * pins 480 px for the same reason and requires http(s) only. Apple Music puts the
+     * size into the last path segment ("1000x1000bb.jpg"), so rewrite just that segment
+     * and return every other shape untouched.
+     */
+    public static Uri coverUri(Uri uri) {
+        if (uri == null) return null;
+        String text = uri.toString();
+        int slash = text.lastIndexOf('/');
+        if (slash <= 0 || slash + 1 >= text.length()) return uri;
+        String last = text.substring(slash + 1);
+        if (!last.matches("\\d+x\\d+(?:bb|sr|sc|w)?\\.(?:jpg|jpeg|png|webp)")) return uri;
+        if (last.startsWith("480x480")) return uri;
+        return Uri.parse(text.substring(0, slash + 1) + "480x480bb.jpg");
     }
 
     /** Cached values are simplified when stored (resolver and disk load); one lookup per call. */
