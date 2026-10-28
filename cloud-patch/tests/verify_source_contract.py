@@ -240,6 +240,6 @@ for required in ("publishAtomicClear(", "publishAtomicExtras("):
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r52-1611-2026-10-27"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r53-1611-2026-10-28"' in text
 
 print("VivoCarLyrics source contract passed")
