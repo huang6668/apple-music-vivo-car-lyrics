@@ -8,7 +8,7 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r53-1611-2026-10-28`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r54-1611-2026-10-28`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
 > 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1）；
@@ -514,7 +514,12 @@ adb logcat -s VivoCarTitle
   位图剥离 → 车机卡片稳定，仪表随机丢图。r52 选前者（整块丢显示比慢一拍更严重）。
   要两者兼得，只能让车联在封面就绪后再通知一次——那需要改 `com.vivo.car.networking` 或 vivo 私钥。
   改车联本身（在 `jg/e$d.a` 里比对 `songId`）仍然需要 vivo 私钥，仍然是不可行的方向。
-- **r53：按 skill 的投递规范归一化封面 URL**。卡片和原子是**另一个进程按 URL 自己下图片**
+- **r54：把 r50 的剥离和 r53 的 480px 合到一起**（最终形态）。卡片的 JSON 里一旦出现 `content://`
+  （车联的压缩产物，provider 带 `CAR_PERMISSION` 且没有 URI 授权）就永远拉不到图，而只要给内联位图就必然产生它。
+  所以彻底走 URL 路径：metadata 不带内联位图（`const/4 p5, 0x0`）+ 封面 URL 归一到 480px
+  （`VivoCarLyrics.coverUri`）。这样 `jg/e.Y()` 用我们的 http URL 填 `f25631x`，`R()` 再强制通知一次
+  `CarMusicInfo`——仪表拿到 `s(url)`（480px 很快）下载的位图，卡片拿到 http URL，两边都不碰压缩产物。
+- **r53：按 skill 的投递规范归一化封面 URL**（r54 起与剥离合并）。卡片和原子是**另一个进程按 URL 自己下图片**
   （见 §8.4），1–2 MB 的原图会下载超时、界面保留旧图。所以 `J4/t.n` 入口多挂一个
   `VivoCarLyrics.coverUri(Uri)`（`patch_cover_uri.py`）：只改 URL 最后一段
   （`1000x1000bb.jpg` → `480x480bb.jpg`），其它形状原样返回。仪表吃的是内联位图，不受影响；

@@ -57,12 +57,13 @@ class CoverUriPatchTest(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 cover.verify_text(text, patched=False)
 
-    def test_requires_once_at_entry(self):
+    def test_requires_the_whole_hook_once_at_entry(self):
         changed = self.original.replace(cover.SEAM, cover.PATCHED_SEAM)
         for text in (
             self.original,
             changed.replace(cover.HOOK, cover.HOOK * 2),
             changed.replace(cover.HOOK, "").replace("    return-object", cover.HOOK + "    return-object"),
+            changed.replace("const/4 p5, 0x0\n", ""),
         ):
             with self.assertRaises(AssertionError):
                 cover.verify_text(text, patched=True)

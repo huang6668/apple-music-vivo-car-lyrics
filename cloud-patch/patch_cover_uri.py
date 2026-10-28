@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Pin 1611 media-metadata factory so the car gets a 480px cover URL.
+"""Pin 1611 media-metadata factory: 480px cover URL, no inline bitmap.
 
-The launcher card and the Atomic widget download this URL in their own process
-(the open-source 7tattoo/vivo-car-atomic-lyrics skill: cards only read http(s),
-and a 1-2 MB original times out -> the previous picture stays on screen).
-Apple Music carries the size in the URL's last path segment, so the helper
-rewrites that segment to 480x480bb.jpg and leaves every other shape untouched.
+Why both hooks (verified against CarNetworking 6.0.8.3):
+
+* The launcher card and the Atomic widget fetch the artwork URL in their own
+  process and only accept http(s). Any inline bitmap makes CarNetworking put the
+  compressed result (a permission-guarded content:// URI) into the launcher JSON,
+  which the card cannot read - the previous cover stays on screen.
+* Without a bitmap, jg/e.Y() -> R() runs the URL path, which sets the cached URL
+  to our http URL and force-notifies CarMusicInfo, so HudManager (the instrument
+  cluster) gets the bitmap that s(url) just downloaded.
+
+A 1000x1000 original (~200-400 kB) makes that download miss its 5 s budget, which
+is why the URL is rewritten to the 480x480 variant first - the same rule the
+7tattoo/vivo-car-atomic-lyrics skill pins for the card side.
 """
 import argparse
 import hashlib
@@ -19,8 +27,10 @@ STOCK_SHA256 = "0bba3016802fe23977679ab36b768a06e5db412fd2e7a2781735b35c247dd7fe
 STOCK_CODE_SHA256 = "97e0740d04928e1ab862beabd7ec99c3a78a5ccb6f4b168f15c970fc42bf51bb"
 
 HOOK = (
-    "    # Vivo car card cover: hand the launcher/atomic card a 480px https URL\n"
-    "    # instead of the full-size artwork (big images time out in the card process).\n"
+    "    # Car cover: no inline bitmaps (the card cannot read CarNetworking's\n"
+    "    # compressed content:// URI), and a card-sized https URL instead.\n"
+    "    const/4 p5, 0x0\n"
+    "\n"
     "    invoke-static {p2}, Lcom/apple/android/music/player/VivoCarLyrics;"
     "->coverUri(Landroid/net/Uri;)Landroid/net/Uri;\n"
     "\n"
@@ -46,12 +56,14 @@ def verify_text(text, patched=False):
     assert len(blocks) == 1, "Expected unique MediaMetadataCompat factory method"
     block = blocks[0]
     marker = "->coverUri(Landroid/net/Uri;)Landroid/net/Uri;"
+    strip = "const/4 p5, 0x0"
     assert block.count(marker) == (1 if patched else 0), "Unexpected cover-url hook count"
+    assert block.count(strip) == (1 if patched else 0), "Unexpected bitmap-strip hook count"
     if patched:
         hook_code = code(HOOK)
         canonical = code(block)
         entry = ".method " + METHOD + "\n.locals 3\n" + hook_code + "new-instance v0, LK4/z$b;"
-        assert entry in canonical, "Cover-url hook entry registers or seam drifted"
+        assert entry in canonical, "Cover hook entry registers or seam drifted"
         stock_code = canonical.replace(hook_code, "", 1)
         assert hashlib.sha256(stock_code.encode()).hexdigest() == STOCK_CODE_SHA256, (
             "Patched factory method must preserve all stock code"
@@ -87,10 +99,10 @@ def main():
         text = text.replace(SEAM, PATCHED_SEAM, 1)
         verify_text(text, patched=True)
         path.write_text(text, encoding="utf-8")
-        print("Cover-url hook applied")
+        print("Car cover hook applied")
     else:
         verify_text(text, patched=True)
-        print("Cover-url hook verified")
+        print("Car cover hook verified")
 
 
 if __name__ == "__main__":
