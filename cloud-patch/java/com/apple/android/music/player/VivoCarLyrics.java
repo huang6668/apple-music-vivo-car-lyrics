@@ -36,7 +36,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r54-1611-2026-10-28";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r55-1611-2026-10-29";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -77,6 +77,16 @@ public final class VivoCarLyrics {
      * what METADATA_KEY_DURATION says.
      */
     private static final long ATOMIC_SEEK_SUPPORT_EVENT = 16L;
+    /**
+     * Playlist / list-entry capability bit. Atomic's control panel draws the "播放列表" entry from
+     * MusicControlPanelView and routes the tap through f5/w0.java only when
+     * {@code (support_event & 64) == 64}. The cooperation controller (c0) reads our value
+     * verbatim instead of computing it, so with 7|8|16 the entry is visible but the tap is a
+     * silent no-op. The list itself is filled from the session queue
+     * (MediaController.getQueue()); this patch only advertises the capability and never
+     * republishes a MediaItem to fill it.
+     */
+    private static final long ATOMIC_LIST_SUPPORT_EVENT = 64L;
     /**
      * Baseline Atomic Player capability bits. Atomic's own getSupportEvent() falls back to 7
      * (bits 1|2|4) whenever it cannot query an app's vivo service, so 7 is what it assumes for
@@ -2467,7 +2477,7 @@ public final class VivoCarLyrics {
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
                 | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT
-                | ATOMIC_SEEK_SUPPORT_EVENT);
+                | ATOMIC_SEEK_SUPPORT_EVENT | ATOMIC_LIST_SUPPORT_EVENT);
         return true;
     }
 

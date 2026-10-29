@@ -138,6 +138,11 @@ assert "ATOMIC_BASELINE_SUPPORT_EVENTS" in capability
 assert "ATOMIC_SEEK_SUPPORT_EVENT" in capability, (
     "Seek/time-info bit 16 must be ORed in, Atomic hides the progress bar without it"
 )
+# Atomic's control-panel list entry (MusicControlPanelView / f5/w0.java) only reacts when bit 64
+# is advertised; the cooperation controller reads the app value verbatim.
+assert "ATOMIC_LIST_SUPPORT_EVENT" in capability, (
+    "List-entry bit 64 must be ORed in, or the 播放列表 entry is a silent no-op"
+)
 for forbidden in ("new Bundle(", "constructCompatible(", 'invokeRequired(manager, "I"'):
     assert forbidden not in capability, (
         f"Capability bit must be ORed in place, not republished: {forbidden}"
@@ -240,6 +245,6 @@ for required in ("publishAtomicClear(", "publishAtomicExtras("):
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r54-1611-2026-10-28"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r55-1611-2026-10-29"' in text
 
 print("VivoCarLyrics source contract passed")

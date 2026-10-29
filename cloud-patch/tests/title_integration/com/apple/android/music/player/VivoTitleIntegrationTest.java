@@ -118,7 +118,7 @@ public final class VivoTitleIntegrationTest {
         equal("Native corrected", fixture.item.getTitle());
         check(fixture.manager.media.d == sameMetadata && sameMetadata.J == sameExtras,
                 "native title must not replace metadata or extras");
-        equal(31L, sameExtras.getLong(SUPPORT, 0L));
+        equal(95L, sameExtras.getLong(SUPPORT, 0L));
         equal(fixture.queue.id, sameExtras.getLong(QUEUE, 0L));
         equal(fixture.id, sameExtras.getString(CATALOG));
         equal(0, fixture.manager.republishes);

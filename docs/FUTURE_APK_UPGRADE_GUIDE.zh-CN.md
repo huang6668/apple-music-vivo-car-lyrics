@@ -8,11 +8,12 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r54-1611-2026-10-28`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r55-1611-2026-10-29`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
 > 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1）；
-> r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9）。
+> r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9；r55 补上原子随身听的列表入口能力位
+> bit 64，修复「播放列表点了没反应」，见 §8.2(b)）。
 > 最新发布的构建是 Build #170（r47，1609），CI 已通过。
 > r49–r51 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。r50 的 1611 构建为 Build #173
 > （Release `v1.0.0-build-173`）：CI 全绿，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、
@@ -88,7 +89,8 @@ flowchart TD
 
 - 6 个歌词 Hook 保持原语义。车机、仪表和原子随身听**共用**
   `vivomusicmix.extra.lrc_change` 会话 extras 事件（整首 LRC，车联自己按时间切行）。
-- 在原生 MediaItem 的 metadata extras 上**原位 OR** `support_event |= 7|8|16`。
+- 在原生 MediaItem 的 metadata extras 上**原位 OR** `support_event |= 7|8|16|64`（64 = 原子随身听的
+  播放列表入口，缺了它就是「点了没反应」）。
 - `publishMetadata()` 保持 no-op。歌名/歌手修正**永远不重发** MediaItem、
   MediaMetadata、PlaybackState 或封面。
 - 不做 LRC 分页、不发布 `ucar.*`、不改车联。仪表盘截断和封面重载是车联侧问题。
@@ -415,7 +417,8 @@ adb logcat -s VivoCarTitle
 | 坑 | 后果 | 铁律 |
 | --- | --- | --- |
 | 重发 MediaItem | 原子随身听进度条变 `--:--`，车机封面闪烁 | `publishMetadata` 保持 no-op；歌名/歌手只原位改字段，再刷新 stock 通知 |
-| 漏掉能力位 | 原子随身听进度条显示 `--:--` | 原位 OR `7\|8\|16`，16 不可少 |
+| 漏掉能力位 | 原子随身听进度条显示 `--:--` | 原位 OR `7\|8\|16\|64`，16 不可少 |
+| 漏掉列表能力位 | 原子随身听「播放列表」点了没反应 | 64 是列表入口，合作控制器 `c0` 原样读取、不会补位 |
 | 只 Hook `getArtistName` | 播放页歌手不变 | 播放页歌手来自 `y0` 副标题，必须在 binding 接缝修正 |
 | 借用了仍然存活的寄存器 | 运行时数据错乱 | 只能借用下一次使用是写入的寄存器，并用锚点断言 |
 | 放宽 pin 让 CI 变绿 | 改错位置也能通过 | 先确认语义，再更新 sha256 |
@@ -533,7 +536,7 @@ adb logcat -s VivoCarTitle
 **(b) MediaMetadata Extras（原生 MediaItem 发布路径中原位 OR）**
 
 ```text
-vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16   （= 31）
+vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64   （= 95）
 ```
 
 | bit | 用途 | 原子 6.2.5.6 源码依据 |
@@ -542,7 +545,7 @@ vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16   （= 31）
 | 8 | 歌词 | `f5/n.java`、`f5/b.java`：`b1.c(P0(), 8)` |
 | 16 | 进度条 / seek / 时间显示 | `t4/d0.java` `Y0()/Z0()`：`duration > 0 && b1.c(P0(), 16)` |
 | 32 | 自定义颜色 / 互传 | `SettingsMainView`、锁屏组件 |
-| 64 | 列表入口 | `MusicControlPanelView`、`f5/w0.java` |
+| 64 | **播放列表入口**（缺了就点不动，r55） | `MusicControlPanelView`、`f5/w0.java` |
 | 128 | 未确认 | `f5/w0.java` |
 
 合作控制器 `c0.k0()` **原样读取**这个值，不会自己补位。通用控制器 `y2` 才会根据
@@ -595,7 +598,8 @@ kgka_Music_hl 五个项目的实车适配经验写成方法论。2026-10-26 对�
 `references/protocols.md`、`references/card-cover.md`、`references/projects.md`（未逐行审 `scripts/`）。
 
 **逐字一致、可当独立交叉验证的**：Atomic 五个 key 与 vivo 的错拼（`meida` / `meidia`）、
-`support_event = 31 = 7|8|16`、`com.vivo.musicwidgetmix.support.service` action，以及本文 §8.1 的核心
+`support_event` 的 7|8|16 三位（它只写到 31；r55 起本项目多 OR 一位 64 = 列表入口，见 §8.2(b)）、
+`com.vivo.musicwidgetmix.support.service` action，以及本文 §8.1 的核心
 结论——车联 6.0.8.3 不读 `music.media.extras.*`，车机/仪表的歌词来自原子的 `lrc_change` 整首 LRC 事件、
 由车机端自己切行。它同样推荐 25s 重发节流，也把“写 `LYRICS_LINE`”“写负状态”列为禁止项。
 
