@@ -25,6 +25,8 @@ item_title_patcher="$patch_root/patch_item_title.py"
 [[ -f "$item_title_patcher" ]] || { echo "Item title patcher missing: $item_title_patcher" >&2; exit 1; }
 cover_uri_patcher="$patch_root/patch_cover_uri.py"
 [[ -f "$cover_uri_patcher" ]] || { echo "Cover URL patcher missing: $cover_uri_patcher" >&2; exit 1; }
+browse_patcher="$patch_root/patch_vivo_browse.py"
+[[ -f "$browse_patcher" ]] || { echo "Vivo browse patcher missing: $browse_patcher" >&2; exit 1; }
 reflection_verifier="$patch_root/verify_reflection_names.py"
 [[ -f "$reflection_verifier" ]] || { echo "Reflection name verifier missing: $reflection_verifier" >&2; exit 1; }
 
@@ -32,6 +34,7 @@ python3 "$title_verifier" work/apktool --unpatched
 python3 "$lyrics_verifier" work/apktool --unpatched
 python3 "$item_title_patcher" work/apktool --unpatched
 python3 "$cover_uri_patcher" work/apktool --unpatched
+python3 "$browse_patcher" work/apktool --unpatched
 python3 "$patch_root/verify_reflection_names.py" work/apktool --preflight
 echo "Applying vivo car and Atomic Player lyrics hooks"
 patch --batch --forward --fuzz=0 --strip=1 --directory=work/apktool < "$patch_file"
@@ -42,6 +45,8 @@ python3 "$item_title_patcher" work/apktool --apply
 python3 "$item_title_patcher" work/apktool
 python3 "$cover_uri_patcher" work/apktool --apply
 python3 "$cover_uri_patcher" work/apktool
+python3 "$browse_patcher" work/apktool --apply
+python3 "$browse_patcher" work/apktool
 
 python3 - "$manifest" "$atomic_service_action" <<'PY'
 import os
@@ -160,7 +165,7 @@ PY
 
 mkdir -p out/report
 sha256sum "$patch_file" "$helper_source" "$paginator_source" "$title_verifier" "$lyrics_verifier" \
-  "$item_title_patcher" "$cover_uri_patcher" "$reflection_verifier" \
+  "$item_title_patcher" "$cover_uri_patcher" "$browse_patcher" "$reflection_verifier" \
   "$patch_root/patch_catalog_region.py" \
   "$patch_root/java/com/apple/android/music/player/TitleCorrectionState.java" \
   "$patch_root/java/com/apple/android/music/player/TitleCacheStore.java" \

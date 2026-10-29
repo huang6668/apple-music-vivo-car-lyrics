@@ -8,12 +8,14 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r55-1611-2026-10-29`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r56-1611-2026-10-29`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
 > 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1）；
-> r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9；r55 补上原子随身听的列表入口能力位
-> bit 64，修复「播放列表点了没反应」，见 §8.2(b)）。
+> r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9）。
+> r55 曾误把 bit 64 当「列表入口」再加进 support_event——反编译 6.2.5.6 后确认 64 实为「收藏」
+> （`MusicControlPanelView.isFavoriteEnable()` / `f5.w0.t`），r56 保留该位但改名为收藏位；
+> 真正的「播放列表」走 MediaBrowser 的 browse 通道，r56 新增擦边实现，见 §8.2(d)）。
 > 最新发布的构建是 Build #170（r47，1609），CI 已通过。
 > r49–r51 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。r50 的 1611 构建为 Build #173
 > （Release `v1.0.0-build-173`）：CI 全绿，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、
@@ -89,8 +91,8 @@ flowchart TD
 
 - 6 个歌词 Hook 保持原语义。车机、仪表和原子随身听**共用**
   `vivomusicmix.extra.lrc_change` 会话 extras 事件（整首 LRC，车联自己按时间切行）。
-- 在原生 MediaItem 的 metadata extras 上**原位 OR** `support_event |= 7|8|16|64`（64 = 原子随身听的
-  播放列表入口，缺了它就是「点了没反应」）。
+- 在原生 MediaItem 的 metadata extras 上**原位 OR** `support_event |= 7|8|16|64`（64 = 收藏）。
+  播放列表是另一条通道：原子用 MediaBrowser browse 读 `vivomusicmix_current_list`，见 §8.2(d)。
 - `publishMetadata()` 保持 no-op。歌名/歌手修正**永远不重发** MediaItem、
   MediaMetadata、PlaybackState 或封面。
 - 不做 LRC 分页、不发布 `ucar.*`、不改车联。仪表盘截断和封面重载是车联侧问题。
@@ -417,8 +419,8 @@ adb logcat -s VivoCarTitle
 | 坑 | 后果 | 铁律 |
 | --- | --- | --- |
 | 重发 MediaItem | 原子随身听进度条变 `--:--`，车机封面闪烁 | `publishMetadata` 保持 no-op；歌名/歌手只原位改字段，再刷新 stock 通知 |
-| 漏掉能力位 | 原子随身听进度条显示 `--:--` | 原位 OR `7\|8\|16\|64`，16 不可少 |
-| 漏掉列表能力位 | 原子随身听「播放列表」点了没反应 | 64 是列表入口，合作控制器 `c0` 原样读取、不会补位 |
+| 漏掉能力位 | 原子随身听进度条显示 `--:--` | 原位 OR `7\|8\|16\|64`，16 不可少（64 是收藏，不是列表） |
+| 把 64 当列表入口 | 误以为「播放列表」是能力位 | 播放列表走 MediaBrowser browse 通道，见 §8.2(d)；64 只是收藏（`isFavoriteEnable()`） |
 | 只 Hook `getArtistName` | 播放页歌手不变 | 播放页歌手来自 `y0` 副标题，必须在 binding 接缝修正 |
 | 借用了仍然存活的寄存器 | 运行时数据错乱 | 只能借用下一次使用是写入的寄存器，并用锚点断言 |
 | 放宽 pin 让 CI 变绿 | 改错位置也能通过 | 先确认语义，再更新 sha256 |
@@ -536,7 +538,7 @@ adb logcat -s VivoCarTitle
 **(b) MediaMetadata Extras（原生 MediaItem 发布路径中原位 OR）**
 
 ```text
-vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64   （= 95）
+vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64   （= 95，64 是收藏不是列表）
 ```
 
 | bit | 用途 | 原子 6.2.5.6 源码依据 |
@@ -545,7 +547,7 @@ vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64   （= 95�
 | 8 | 歌词 | `f5/n.java`、`f5/b.java`：`b1.c(P0(), 8)` |
 | 16 | 进度条 / seek / 时间显示 | `t4/d0.java` `Y0()/Z0()`：`duration > 0 && b1.c(P0(), 16)` |
 | 32 | 自定义颜色 / 互传 | `SettingsMainView`、锁屏组件 |
-| 64 | **播放列表入口**（缺了就点不动，r55） | `MusicControlPanelView`、`f5/w0.java` |
+| 64 | 收藏 | `MusicControlPanelView.isFavoriteEnable()`、`f5/w0.java` 字段 `t` |
 | 128 | 未确认 | `f5/w0.java` |
 
 合作控制器 `c0.k0()` **原样读取**这个值，不会自己补位。通用控制器 `y2` 才会根据
@@ -565,6 +567,33 @@ vivomusicmix.extra.key.lyric          = 完整带时间戳 LRC
 - 原子要求 `meidia_id` 等于当前歌曲（`t4/d0.java E0()/z1()`），否则隐藏歌词；车联只要求非空。
 - 25s 心跳（`ATOMIC_KEEPALIVE_MS`）：只用于“组件在播放开始后才连上”的场景，发的是**整首 LRC**（不是空包），
   车联侧会被 `jg/e.h0` 去重（见 §8.1），不要指望它给车机补发。r51 之后它是唯一的高频写入。
+
+**(d) 播放列表：MediaBrowser browse 通道（r56）**
+
+原子合作控制器 `c0.y0(parentId, page)` 用 `MediaBrowserCompat.subscribe(parentId, options, cb)` 读列表：
+
+```text
+parentId ∈ { vivomusicmix_current_list, vivomusicmix_favorite_list, vivomusicmix_local_list }
+options   = { vivomusicmix_key_media_page: int }
+```
+
+回调 `c0$c.onChildrenLoaded` 把每个 `MediaItem` 的 `MediaDescription` 转成一首歌：
+
+```text
+mediaId  = MediaDescription.getMediaId()   （点击后回给 playFromMediaId）
+title    = MediaDescription.getTitle()
+subtitle = MediaDescription.getSubtitle()
+分页信息 = 最后一个 item 的 extras：vivomusicmix_key_has_more(bool) / vivomusicmix_key_media_page(int)
+```
+
+Apple Music 的 media3 库对这三个 root 返回空，所以原子「播放列表」一直是空的（表现就是“点了没反应”）。
+**r56 在 `K4/g$e$a.onLoadChildren(String, Result, Bundle)`（API 26+）与 `K4/g$d$a.onLoadChildren(String, Result)`
+（旧 API）两处擦边**：parentId 以 `vivomusicmix_` 开头就调 `VivoCarLyrics.vivoBrowseChildren(parentId)`
+直接 `sendResult`；其余 parentId 原样交回 stock。helper 用 `MediaPlayerController.getAllQueueItems()`（回退
+`getQueueItems()`）枚举当前播放队列，映射成 `FLAG_PLAYABLE` 的 `MediaItem`，歌名取 `getTitle()`、歌手取
+`getArtistName()` 再繁转简。favorite/local 两类暂时返回空列表（Apple Music 没有对应模型）。
+**未实机验证**：列表能不能弹出来、点歌（`playFromMediaId`）能不能跳，都要上机确认；点歌跳不动的话
+还需要在 MediaSession 回调用再挂一个注入点。
 
 ### 8.3 vivo 侧参考源码
 
@@ -598,7 +627,7 @@ kgka_Music_hl 五个项目的实车适配经验写成方法论。2026-10-26 对�
 `references/protocols.md`、`references/card-cover.md`、`references/projects.md`（未逐行审 `scripts/`）。
 
 **逐字一致、可当独立交叉验证的**：Atomic 五个 key 与 vivo 的错拼（`meida` / `meidia`）、
-`support_event` 的 7|8|16 三位（它只写到 31；r55 起本项目多 OR 一位 64 = 列表入口，见 §8.2(b)）、
+`support_event` 的 7|8|16 三位（它只写到 31；本项目多 OR 一位 64 = 收藏，见 §8.2(b)）、
 `com.vivo.musicwidgetmix.support.service` action，以及本文 §8.1 的核心
 结论——车联 6.0.8.3 不读 `music.media.extras.*`，车机/仪表的歌词来自原子的 `lrc_change` 整首 LRC 事件、
 由车机端自己切行。它同样推荐 25s 重发节流，也把“写 `LYRICS_LINE`”“写负状态”列为禁止项。

@@ -138,11 +138,18 @@ assert "ATOMIC_BASELINE_SUPPORT_EVENTS" in capability
 assert "ATOMIC_SEEK_SUPPORT_EVENT" in capability, (
     "Seek/time-info bit 16 must be ORed in, Atomic hides the progress bar without it"
 )
-# Atomic's control-panel list entry (MusicControlPanelView / f5/w0.java) only reacts when bit 64
-# is advertised; the cooperation controller reads the app value verbatim.
-assert "ATOMIC_LIST_SUPPORT_EVENT" in capability, (
-    "List-entry bit 64 must be ORed in, or the 播放列表 entry is a silent no-op"
+# Atomic's 收藏 entry (MusicControlPanelView.isFavoriteEnable() / f5.w0.t) is gated on bit 64.
+assert "ATOMIC_FAVORITE_SUPPORT_EVENT" in capability, (
+    "Favorite bit 64 must be ORed in (r55 mislabeled it as the playlist bit)"
 )
+# r56: the playlist is a MediaBrowser browse, not a capability bit. The helper answers the
+# vivomusicmix_current_list root from the playback queue and keeps every other root untouched.
+browse = method_body("public static List<android.media.browse.MediaBrowser.MediaItem> vivoBrowseChildren(")
+assert '"vivomusicmix_current_list"' in browse
+assert 'invokeOptional(manager, "getAllQueueItems")' in browse
+assert "FLAG_PLAYABLE" in browse
+assert 'new android.media.MediaDescription.Builder()' in browse
+
 for forbidden in ("new Bundle(", "constructCompatible(", 'invokeRequired(manager, "I"'):
     assert forbidden not in capability, (
         f"Capability bit must be ORed in place, not republished: {forbidden}"
@@ -245,6 +252,6 @@ for required in ("publishAtomicClear(", "publishAtomicExtras("):
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r55-1611-2026-10-29"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r56-1611-2026-10-29"' in text
 
 print("VivoCarLyrics source contract passed")

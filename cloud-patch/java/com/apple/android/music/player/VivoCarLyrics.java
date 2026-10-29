@@ -36,7 +36,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r55-1611-2026-10-29";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r56-1611-2026-10-29";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -78,15 +78,12 @@ public final class VivoCarLyrics {
      */
     private static final long ATOMIC_SEEK_SUPPORT_EVENT = 16L;
     /**
-     * Playlist / list-entry capability bit. Atomic's control panel draws the "播放列表" entry from
-     * MusicControlPanelView and routes the tap through f5/w0.java only when
-     * {@code (support_event & 64) == 64}. The cooperation controller (c0) reads our value
-     * verbatim instead of computing it, so with 7|8|16 the entry is visible but the tap is a
-     * silent no-op. The list itself is filled from the session queue
-     * (MediaController.getQueue()); this patch only advertises the capability and never
-     * republishes a MediaItem to fill it.
+     * Favorite capability bit. Atomic's MusicControlPanelView.isFavoriteEnable() and f5/w0 field t
+     * read {@code (support_event & 64) == 64} before showing the 收藏 entry. r55 mislabeled this
+     * as the playlist bit; the real playlist channel is the MediaBrowser browse handled by
+     * {@link #vivoBrowseChildren}.
      */
-    private static final long ATOMIC_LIST_SUPPORT_EVENT = 64L;
+    private static final long ATOMIC_FAVORITE_SUPPORT_EVENT = 64L;
     /**
      * Baseline Atomic Player capability bits. Atomic's own getSupportEvent() falls back to 7
      * (bits 1|2|4) whenever it cannot query an app's vivo service, so 7 is what it assumes for
@@ -2477,7 +2474,7 @@ public final class VivoCarLyrics {
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
                 | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT
-                | ATOMIC_SEEK_SUPPORT_EVENT | ATOMIC_LIST_SUPPORT_EVENT);
+                | ATOMIC_SEEK_SUPPORT_EVENT | ATOMIC_FAVORITE_SUPPORT_EVENT);
         return true;
     }
 
@@ -3072,5 +3069,60 @@ public final class VivoCarLyrics {
 
     private static String stringValue(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    /**
+     * Atomic Player's cooperation controller browses the app's MediaBrowserService with the
+     * parentId {@code "vivomusicmix_current_list"} and turns each child's MediaDescription into a
+     * song (mediaId, title, subtitle); the last child's extras {@code vivomusicmix_key_has_more}
+     * and {@code vivomusicmix_key_media_page} drive paging. Apple Music implements no such root,
+     * so the widget's playlist page has only ever been empty for us. r56 answers that one root
+     * with the current playback queue (MediaPlayerController.getAllQueueItems). The generic
+     * controller and the favorite/local roots have no Apple Music model and stay empty.
+     */
+    public static List<android.media.browse.MediaBrowser.MediaItem> vivoBrowseChildren(
+            String parentId) {
+        ArrayList<android.media.browse.MediaBrowser.MediaItem> items =
+                new ArrayList<android.media.browse.MediaBrowser.MediaItem>();
+        if (!"vivomusicmix_current_list".equals(parentId)) {
+            return items;
+        }
+        Object manager = currentManager;
+        if (manager == null) {
+            return items;
+        }
+        Object queue = invokeOptional(manager, "getAllQueueItems");
+        if (queue == null) {
+            queue = invokeOptional(manager, "getQueueItems");
+        }
+        if (!(queue instanceof List)) {
+            return items;
+        }
+        int index = 0;
+        for (Object entry : (List<?>) queue) {
+            if (entry == null) {
+                continue;
+            }
+            Object item = invokeOptional(entry, "getItem");
+            String id = queueMediaId(entry);
+            String title = stringValue(invokeOptional(item, "getTitle"));
+            String artist = ChineseConverter.toSimplified(
+                    stringValue(invokeOptional(item, "getArtistName")));
+            if (id.isEmpty() && title.isEmpty() && artist.isEmpty()) {
+                continue;
+            }
+            android.media.MediaDescription.Builder builder =
+                    new android.media.MediaDescription.Builder()
+                            .setMediaId(id.isEmpty() ? "vivo" + index : id)
+                            .setTitle(title.isEmpty() ? " " : title);
+            if (!artist.isEmpty()) {
+                builder.setSubtitle(artist);
+            }
+            items.add(new android.media.browse.MediaBrowser.MediaItem(
+                    builder.build(),
+                    android.media.browse.MediaBrowser.MediaItem.FLAG_PLAYABLE));
+            index++;
+        }
+        return items;
     }
 }

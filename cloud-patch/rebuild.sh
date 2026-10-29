@@ -79,7 +79,7 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/CatalogTitleResolver' \
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
-  'vivo-car-cn-track-r55-1611-2026-10-29' \
+  'vivo-car-cn-track-r56-1611-2026-10-29' \
   'correctPlayerTitle' \
   'correctPlayerArtist' \
   'resolveItemTitle' \
