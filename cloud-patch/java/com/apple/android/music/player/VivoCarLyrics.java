@@ -3088,6 +3088,8 @@ public final class VivoCarLyrics {
             return items;
         }
         Object manager = currentManager;
+        Log.w(TITLE_LOG_TAG, "vivo-browse parent=" + parentId
+                + " manager=" + (manager == null ? "null" : manager.getClass().getName()));
         if (manager == null) {
             return items;
         }
@@ -3095,6 +3097,9 @@ public final class VivoCarLyrics {
         if (queue == null) {
             queue = invokeOptional(manager, "getQueueItems");
         }
+        Log.w(TITLE_LOG_TAG, "vivo-browse queue="
+                + (queue == null ? "null" : queue.getClass().getName())
+                + " size=" + (queue instanceof List ? ((List<?>) queue).size() : -1));
         if (!(queue instanceof List)) {
             return items;
         }
@@ -3123,6 +3128,7 @@ public final class VivoCarLyrics {
                     android.media.browse.MediaBrowser.MediaItem.FLAG_PLAYABLE));
             index++;
         }
+        Log.w(TITLE_LOG_TAG, "vivo-browse built=" + items.size());
         return items;
     }
 }
