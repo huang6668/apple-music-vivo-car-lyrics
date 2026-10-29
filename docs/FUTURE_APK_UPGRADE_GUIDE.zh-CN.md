@@ -587,11 +587,17 @@ subtitle = MediaDescription.getSubtitle()
 ```
 
 Apple Music 的 media3 库对这三个 root 返回空，所以原子「播放列表」一直是空的（表现就是“点了没反应”）。
+更早的一层：media3 的 `onGetLibraryRoot` 对 `com.vivo.musicwidgetmix` 返回 null，`K4/g$d$a.onGetRoot`
+拿到 null 就返回 null root，原子的 MediaBrowser **根本连不上**，连 subscribe 都到不了 `onLoadChildren`。
 **r56 在 `K4/g$e$a.onLoadChildren(String, Result, Bundle)`（API 26+）与 `K4/g$d$a.onLoadChildren(String, Result)`
 （旧 API）两处擦边**：parentId 以 `vivomusicmix_` 开头就调 `VivoCarLyrics.vivoBrowseChildren(parentId)`
 直接 `sendResult`；其余 parentId 原样交回 stock。helper 用 `MediaPlayerController.getAllQueueItems()`（回退
 `getQueueItems()`）枚举当前播放队列，映射成 `FLAG_PLAYABLE` 的 `MediaItem`，歌名取 `getTitle()`、歌手取
 `getArtistName()` 再繁转简。favorite/local 两类暂时返回空列表（Apple Music 没有对应模型）。
+**r56 还顺带在 `K4/g$d$a.onGetRoot(String, int, Bundle)` 擦边**：client 是 `com.vivo.musicwidgetmix` 时
+直接返回 rootId `vivomusicmix_current_list` 的 BrowserRoot，其余 client 原样交回 stock——这样原子的
+browser 才能连上、subscribe 才能到 `onLoadChildren`（r56 第一版只挂了 onLoadChildren，没挂这一层，
+是“点了没反应”的真正原因）。
 **未实机验证**：列表能不能弹出来、点歌（`playFromMediaId`）能不能跳，都要上机确认；点歌跳不动的话
 还需要在 MediaSession 回调用再挂一个注入点。
 
