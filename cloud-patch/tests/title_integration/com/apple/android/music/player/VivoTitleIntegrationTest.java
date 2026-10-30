@@ -27,6 +27,8 @@ public final class VivoTitleIntegrationTest {
 
     public static void main(String[] args) throws Exception {
         testWhitelistedFieldWrites();
+        testAtomicListPlayStaysInQueue();
+        testAtomicListBrowsesTheController();
         testCompatiblePlaybackConverter();
         testNativeIdentityGuards();
         testPlayerBindingAndStaleItems();
@@ -98,6 +100,48 @@ public final class VivoTitleIntegrationTest {
         call("writeCorrectedTrack", null, "Corrected", "Corrected artist");
     }
 
+    private static z3.w atomicTap(String mediaId, String list) {
+        Bundle extras = new Bundle();
+        extras.putString("vivomusicmix_key_list", list);
+        return new z3.w(mediaId, null, extras);
+    }
+
+    private static void testAtomicListPlayStaysInQueue() throws Exception {
+        AtomicPlayer player = new AtomicPlayer(300, 149);
+        // Stock caps both queue views at 100 rows; the current item is outside the first window.
+        player.all = player.queue.subList(0, 100);
+        player.upcoming = player.queue.subList(150, 250);
+        AtomicConnection connection = new AtomicConnection(player);
+        check(VivoCarLyrics.onAtomicListPlay(connection, Collections.singletonList(
+                atomicTap("910", "vivomusicmix_current_list"))), "tap must be handled");
+        equal(210L, player.skippedTo);
+        check(VivoCarLyrics.onAtomicListPlay(connection, Collections.singletonList(
+                atomicTap("750", "vivomusicmix_current_list"))), "rows before the window are gone");
+        equal(210L, player.skippedTo);
+        check(!VivoCarLyrics.onAtomicListPlay(connection, Collections.singletonList(
+                atomicTap("910", "vivomusicmix_favorite_list"))), "other lists stay stock");
+        check(!VivoCarLyrics.onAtomicListPlay(connection, Collections.singletonList(
+                new z3.w("910", null, null))), "ordinary play requests stay stock");
+        equal(210L, player.skippedTo);
+    }
+
+    private static void testAtomicListBrowsesTheController() throws Exception {
+        Field manager = VivoCarLyrics.class.getDeclaredField("currentManager");
+        manager.setAccessible(true);
+        Object previous = manager.get(null);
+        try {
+            AtomicPlayer player = new AtomicPlayer(300, 149);
+            manager.set(null, new AtomicConnection(player));
+            equal(300, VivoCarLyrics.vivoBrowseChildren("vivomusicmix_current_list").size());
+            player.all = player.queue.subList(0, 100);
+            player.upcoming = player.queue.subList(150, 250);
+            equal(101, VivoCarLyrics.vivoBrowseChildren("vivomusicmix_current_list").size());
+            equal(0, VivoCarLyrics.vivoBrowseChildren("vivomusicmix_favorite_list").size());
+        } finally {
+            manager.set(null, previous);
+        }
+    }
+
     private static void testNativeIdentityGuards() throws Exception {
         Handler.reset();
         Fixture fixture = new Fixture("Native stock");
@@ -118,7 +162,7 @@ public final class VivoTitleIntegrationTest {
         equal("Native corrected", fixture.item.getTitle());
         check(fixture.manager.media.d == sameMetadata && sameMetadata.J == sameExtras,
                 "native title must not replace metadata or extras");
-        equal(95L, sameExtras.getLong(SUPPORT, 0L));
+        equal(351L, sameExtras.getLong(SUPPORT, 0L));
         equal(fixture.queue.id, sameExtras.getLong(QUEUE, 0L));
         equal(fixture.id, sameExtras.getString(CATALOG));
         equal(0, fixture.manager.republishes);
@@ -982,6 +1026,50 @@ public final class VivoTitleIntegrationTest {
         Queue(long id, StoreMediaItem item) { this.id = id; this.item = item; }
         public long getPlaybackQueueId() { return id; }
         public StoreMediaItem getItem() { return item; }
+    }
+
+    public static final class AtomicItem {
+        final long id;
+        final AtomicTrack item;
+        AtomicItem(long id) { this.id = id; item = new AtomicTrack(id); }
+        public long getPlaybackQueueId() { return id; }
+        public AtomicTrack getItem() { return item; }
+    }
+
+    public static final class AtomicTrack {
+        final long index;
+        AtomicTrack(long index) { this.index = index; }
+        public String getSubscriptionStoreId() { return String.valueOf(700L + index); }
+    }
+
+    public static final class AtomicPlayer {
+        final List<AtomicItem> queue = new ArrayList<AtomicItem>();
+        List<AtomicItem> all;
+        List<AtomicItem> upcoming;
+        final int current;
+        long skippedTo = -1L;
+        AtomicPlayer(int count, int current) {
+            for (int index = 0; index < count; index++) {
+                queue.add(new AtomicItem(index));
+            }
+            all = queue;
+            upcoming = queue.subList(current + 1, count);
+            this.current = current;
+        }
+        public List<AtomicItem> getAllQueueItems() { return all; }
+        public List<AtomicItem> getQueueItems() { return upcoming; }
+        public AtomicItem getCurrentItem() { return queue.get(current); }
+        public void skipToQueueItemWithId(long id) { skippedTo = id; }
+    }
+
+    public static final class AtomicSession {
+        public final AtomicPlayer h;
+        AtomicSession(AtomicPlayer player) { h = player; }
+    }
+
+    public static final class AtomicConnection {
+        public final AtomicSession a;
+        AtomicConnection(AtomicPlayer player) { a = new AtomicSession(player); }
     }
 
     public static final class Manager {

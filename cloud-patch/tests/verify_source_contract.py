@@ -145,8 +145,17 @@ assert "ATOMIC_FAVORITE_SUPPORT_EVENT" in capability, (
 # r56: the playlist is a MediaBrowser browse, not a capability bit. The helper answers the
 # vivomusicmix_current_list root from the playback queue and keeps every other root untouched.
 browse = method_body("public static List<android.media.browse.MediaBrowser.MediaItem> vivoBrowseChildren(")
-assert '"vivomusicmix_current_list"' in browse
-assert 'invokeOptional(manager, "getAllQueueItems")' in browse
+assert 'ATOMIC_CURRENT_LIST.equals(parentId)' in browse
+# r57: O has no queue methods (r56 always got null); the queue lives on O.a(k0).h.
+assert "playbackController(currentManager)" in browse
+assert 'invokeOptional(controller, "getAllQueueItems")' in method_body(
+    "private static List<Object> atomicQueueItems(")
+# f5/w0 disables the current-list tab unless (support_event & 256) == 256.
+assert "ATOMIC_CURRENT_LIST_SUPPORT_EVENT" in capability, (
+    "Atomic disables its current-list tab without bit 256"
+)
+play = method_body("public static boolean onAtomicListPlay(")
+assert '"skipToQueueItemWithId"' in play, "A list tap must jump inside the queue, not replace it"
 assert "FLAG_PLAYABLE" in browse
 assert 'new android.media.MediaDescription.Builder()' in browse
 
@@ -252,6 +261,6 @@ for required in ("publishAtomicClear(", "publishAtomicExtras("):
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r56-1611-2026-10-29"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r57-1611-2026-10-30"' in text
 
 print("VivoCarLyrics source contract passed")

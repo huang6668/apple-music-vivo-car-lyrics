@@ -36,7 +36,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r56-1611-2026-10-29";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r57-1611-2026-10-30";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -91,6 +91,15 @@ public final class VivoCarLyrics {
      * actively declares those three baseline capabilities as unsupported.
      */
     private static final long ATOMIC_BASELINE_SUPPORT_EVENTS = 7L;
+    /**
+     * Current-list tab bit. f5/w0.k0()/Z() set the tab enabled flag from
+     * {@code b1.a(pkg) & 256}, and for an unlisted package b1.a returns this support_event, so
+     * without the bit MusicPlayPanel.onListIconClicked ignores the tap. Favorites (512) and local
+     * (1024) stay off: Apple Music has no list to serve for them.
+     */
+    private static final long ATOMIC_CURRENT_LIST_SUPPORT_EVENT = 256L;
+    private static final String ATOMIC_CURRENT_LIST = "vivomusicmix_current_list";
+    private static final String ATOMIC_LIST_KEY = "vivomusicmix_key_list";
 
     /**
      * Diagnostic build switch. Set true to prefix Atomic lyric payloads with probe lines.
@@ -2474,7 +2483,8 @@ public final class VivoCarLyrics {
         long supportEvents = longValue(extras.get(ATOMIC_SUPPORT_EVENTS), 0L);
         extras.putLong(ATOMIC_SUPPORT_EVENTS, supportEvents
                 | ATOMIC_BASELINE_SUPPORT_EVENTS | ATOMIC_LYRIC_SUPPORT_EVENT
-                | ATOMIC_SEEK_SUPPORT_EVENT | ATOMIC_FAVORITE_SUPPORT_EVENT);
+                | ATOMIC_SEEK_SUPPORT_EVENT | ATOMIC_FAVORITE_SUPPORT_EVENT
+                | ATOMIC_CURRENT_LIST_SUPPORT_EVENT);
         return true;
     }
 
@@ -3077,48 +3087,37 @@ public final class VivoCarLyrics {
      * song (mediaId, title, subtitle); the last child's extras {@code vivomusicmix_key_has_more}
      * and {@code vivomusicmix_key_media_page} drive paging. Apple Music implements no such root,
      * so the widget's playlist page has only ever been empty for us. r56 answers that one root
-     * with the current playback queue (MediaPlayerController.getAllQueueItems). The generic
+     * with the current playback queue, read since r57 from the controller. The generic
      * controller and the favorite/local roots have no Apple Music model and stay empty.
      */
     public static List<android.media.browse.MediaBrowser.MediaItem> vivoBrowseChildren(
             String parentId) {
         ArrayList<android.media.browse.MediaBrowser.MediaItem> items =
                 new ArrayList<android.media.browse.MediaBrowser.MediaItem>();
-        if (!"vivomusicmix_current_list".equals(parentId)) {
+        if (!ATOMIC_CURRENT_LIST.equals(parentId)) {
             return items;
         }
-        Object manager = currentManager;
-        Log.w(TITLE_LOG_TAG, "vivo-browse parent=" + parentId
-                + " manager=" + (manager == null ? "null" : manager.getClass().getName()));
-        if (manager == null) {
-            return items;
-        }
-        Object queue = invokeOptional(manager, "getAllQueueItems");
-        if (queue == null) {
-            queue = invokeOptional(manager, "getQueueItems");
-        }
-        Log.w(TITLE_LOG_TAG, "vivo-browse queue="
-                + (queue == null ? "null" : queue.getClass().getName())
-                + " size=" + (queue instanceof List ? ((List<?>) queue).size() : -1));
-        if (!(queue instanceof List)) {
-            return items;
-        }
+        // The playback manager (O) has no queue methods; the controller lives at O.a(k0).h.
+        Object controller = playbackController(currentManager);
+        List<Object> queue = atomicQueueItems(controller);
+        Log.w(TITLE_LOG_TAG, "vivo-browse controller=" + (controller != null)
+                + " size=" + queue.size());
         int index = 0;
-        for (Object entry : (List<?>) queue) {
+        for (Object entry : queue) {
             if (entry == null) {
                 continue;
             }
             Object item = invokeOptional(entry, "getItem");
-            String id = queueMediaId(entry);
+            String id = rowMediaId(entry, index++);
             String title = stringValue(invokeOptional(item, "getTitle"));
             String artist = ChineseConverter.toSimplified(
                     stringValue(invokeOptional(item, "getArtistName")));
-            if (id.isEmpty() && title.isEmpty() && artist.isEmpty()) {
+            if (title.isEmpty() && artist.isEmpty() && id.startsWith("vivo")) {
                 continue;
             }
             android.media.MediaDescription.Builder builder =
                     new android.media.MediaDescription.Builder()
-                            .setMediaId(id.isEmpty() ? "vivo" + index : id)
+                            .setMediaId(id)
                             .setTitle(title.isEmpty() ? " " : title);
             if (!artist.isEmpty()) {
                 builder.setSubtitle(artist);
@@ -3126,9 +3125,89 @@ public final class VivoCarLyrics {
             items.add(new android.media.browse.MediaBrowser.MediaItem(
                     builder.build(),
                     android.media.browse.MediaBrowser.MediaItem.FLAG_PLAYABLE));
-            index++;
         }
         Log.w(TITLE_LOG_TAG, "vivo-browse built=" + items.size());
         return items;
+    }
+
+    /**
+     * Turns Atomic's playFromMediaId on a current-list row into a jump inside the live queue.
+     * True means handled: the c0.d hook then fails onSetMediaItems, which the legacy session
+     * ignores, instead of letting stock replace the whole queue with that single track.
+     * skipToQueueItemWithId resumes playback itself.
+     */
+    public static boolean onAtomicListPlay(Object connection, Object mediaItems) {
+        try {
+            if (!(mediaItems instanceof List) || ((List<?>) mediaItems).size() != 1) {
+                return false;
+            }
+            Object mediaItem = ((List<?>) mediaItems).get(0);
+            Object extras = getFieldValue(getFieldValue(mediaItem, "f"), "c");
+            if (!(extras instanceof Bundle)
+                    || !ATOMIC_CURRENT_LIST.equals(((Bundle) extras).getString(ATOMIC_LIST_KEY))) {
+                return false;
+            }
+            Object controller = getFieldValue(getFieldValue(connection, "a"), "h");
+            String mediaId = stringValue(getFieldValue(mediaItem, "a"));
+            int index = 0;
+            for (Object entry : atomicQueueItems(controller)) {
+                if (mediaId.equals(rowMediaId(entry, index++))) {
+                    invokeRequired(controller, "skipToQueueItemWithId",
+                            Long.valueOf(queueItemId(entry)));
+                    break;
+                }
+            }
+            Log.w(TITLE_LOG_TAG, "vivo-browse play id=" + mediaId);
+            return true;
+        } catch (Throwable error) {
+            Log.w(TITLE_LOG_TAG, "vivo-browse play failed", error);
+            return false;
+        }
+    }
+
+    private static String rowMediaId(Object queueItem, int index) {
+        String id = queueMediaId(queueItem);
+        return id.isEmpty() ? "vivo" + index : id;
+    }
+
+    private static Object playbackController(Object manager) {
+        return manager == null ? null
+                : getFieldValueQuietly(getFieldValueQuietly(manager, "a"), "h");
+    }
+
+    /**
+     * getAllQueueItems stops at the upcoming-item cap (100) counted from the queue start, so a
+     * long queue is extended with getQueueItems; past the cap it starts at the current item.
+     */
+    private static List<Object> atomicQueueItems(Object controller) {
+        List<Object> items = new ArrayList<Object>();
+        if (controller == null) {
+            return items;
+        }
+        Set<Long> seen = new HashSet<Long>();
+        addQueueItems(items, seen, invokeOptional(controller, "getAllQueueItems"));
+        Object current = invokeOptional(controller, "getCurrentItem");
+        if (current != null && !seen.contains(Long.valueOf(queueItemId(current)))) {
+            items.clear();
+            seen.clear();
+            addQueueItems(items, seen, Collections.singletonList(current));
+        }
+        addQueueItems(items, seen, invokeOptional(controller, "getQueueItems"));
+        return items;
+    }
+
+    private static void addQueueItems(List<Object> items, Set<Long> seen, Object source) {
+        if (!(source instanceof List)) {
+            return;
+        }
+        for (Object entry : (List<?>) source) {
+            if (entry != null && seen.add(Long.valueOf(queueItemId(entry)))) {
+                items.add(entry);
+            }
+        }
+    }
+
+    private static long queueItemId(Object queueItem) {
+        return longValue(invokeOptional(queueItem, "getPlaybackQueueId"), 0L);
     }
 }

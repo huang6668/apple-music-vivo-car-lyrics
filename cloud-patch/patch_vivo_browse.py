@@ -15,6 +15,10 @@ r56 hooked onLoadChildren to answer the list but did not fix onGetRoot, so the b
 reached it. r57 also accepts "com.vivo.musicwidgetmix" at onGetRoot (K4/g$d$a, inherited by the
 real stub g$e$a) with rootId "vivomusicmix_current_list"; every other client falls through to
 the stock root dispatch untouched.
+
+Atomic plays a row with playFromMediaId(mediaId, {"vivomusicmix_key_list": <list>}), which media3
+routes to the connection's onSetMediaItems (c0.d). That hook turns current-list rows into a queue
+jump; everything else keeps stock behavior.
 """
 import argparse
 import hashlib
@@ -73,7 +77,35 @@ HOOK_ROOT = (
     '    :L_vivo_root_stock'
 )
 
+HOOK_PLAY = (
+    '    # vivo browse: a current-list tap jumps inside the live queue. A failed future is\n'
+    '    # ignored by the legacy session; stock would replace the queue with that one track.\n'
+    '    invoke-static {p0, p3}, ' + HELPER
+    + '->onAtomicListPlay(Ljava/lang/Object;Ljava/lang/Object;)Z\n'
+    '\n'
+    '    move-result v0\n'
+    '\n'
+    '    if-eqz v0, :L_vivo_play_stock\n'
+    '\n'
+    '    new-instance v0, Lag/o$a;\n'
+    '\n'
+    '    invoke-direct {v0}, Lag/b;-><init>()V\n'
+    '\n'
+    '    new-instance v1, Ljava/lang/UnsupportedOperationException;\n'
+    '\n'
+    '    invoke-direct {v1}, Ljava/lang/UnsupportedOperationException;-><init>()V\n'
+    '\n'
+    '    invoke-virtual {v0, v1}, Lag/b;->n(Ljava/lang/Throwable;)Z\n'
+    '\n'
+    '    return-object v0\n'
+    '\n'
+    '    :L_vivo_play_stock'
+)
+
 SEAM_NORMALIZE = "    invoke-static {p3}, LC3/e0;->n(Landroid/os/Bundle;)Landroid/os/Bundle;"
+
+CONNECTION = "com/apple/android/music/player/c0.smali"
+DEX = {CONNECTION: "smali_classes2"}
 
 SPECS = (
     ("K4/g$e$a.smali",
@@ -97,6 +129,12 @@ SPECS = (
      "cb1f48a895ab57866cf765f75e15789ec43d3e1daa2bf6253e789912a6e6d362",
      HOOK_ROOT,
      "const-string v1, \"vivomusicmix_current_list\""),
+    (CONNECTION,
+     "public final d(LJ4/k2;LJ4/k2$e;LVf/l0;IJ)Lag/q;",
+     "    iget-object v0, p1, LJ4/k2;->a:LJ4/z2;",
+     "ec02f1eec9fe398a3cdc8d33a0d20a1f504c8d3b7a984fe9711302dab7da133d",
+     HOOK_PLAY,
+     HELPER + "->onAtomicListPlay(Ljava/lang/Object;Ljava/lang/Object;)Z"),
 )
 
 
@@ -130,10 +168,18 @@ def verify(text, target, method, seam, stock_sha, hook, marker, patched):
         )
 
 
+def insert_hook(text, method, seam, hook):
+    # Scoped to the method: the connection repeats the same seam in earlier methods.
+    pattern = r"(?ms)^\.method " + re.escape(method) + r"\n.*?^\.end method$"
+    return re.sub(pattern, lambda m: m.group(0).replace(seam, hook + "\n" + seam, 1), text, count=1)
+
+
 def target_path(root, target):
     paths = sorted(root.glob("smali*/" + target))
     assert len(paths) == 1, f"Expected {target} in exactly one dex, found {len(paths)}: {paths}"
-    assert paths[0].relative_to(root).parts[0] == "smali", f"Target moved dex: {target}"
+    assert paths[0].relative_to(root).parts[0] == DEX.get(target, "smali"), (
+        f"Target moved dex: {target}"
+    )
     return paths[0]
 
 
@@ -150,7 +196,7 @@ def main():
             verify(text, target, method, seam, stock_sha, hook, marker, patched=False)
         elif args.apply:
             verify(text, target, method, seam, stock_sha, hook, marker, patched=False)
-            text = text.replace(seam, hook + "\n" + seam, 1)
+            text = insert_hook(text, method, seam, hook)
             verify(text, target, method, seam, stock_sha, hook, marker, patched=True)
             path.write_text(text, encoding="utf-8")
         else:

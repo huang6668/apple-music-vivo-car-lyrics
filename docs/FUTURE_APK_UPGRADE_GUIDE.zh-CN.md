@@ -8,14 +8,15 @@
 >
 > **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r56-1611-2026-10-29`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r57-1611-2026-10-30`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
 > 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1）；
 > r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9）。
 > r55 曾误把 bit 64 当「列表入口」再加进 support_event——反编译 6.2.5.6 后确认 64 实为「收藏」
 > （`MusicControlPanelView.isFavoriteEnable()` / `f5.w0.t`），r56 保留该位但改名为收藏位；
-> 真正的「播放列表」走 MediaBrowser 的 browse 通道，r56 新增擦边实现，见 §8.2(d)）。
+> 真正的「播放列表」走 MediaBrowser 的 browse 通道，r56 新增擦边实现；
+> r57 补上列表页开关 bit 256、改从 controller 取队列、点歌改为队列内跳转，见 §8.2(d)）。
 > 最新发布的构建是 Build #170（r47，1609），CI 已通过。
 > r49–r51 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。r50 的 1611 构建为 Build #173
 > （Release `v1.0.0-build-173`）：CI 全绿，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、
@@ -538,7 +539,7 @@ adb logcat -s VivoCarTitle
 **(b) MediaMetadata Extras（原生 MediaItem 发布路径中原位 OR）**
 
 ```text
-vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64   （= 95，64 是收藏不是列表）
+vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64 | 256   （= 351，64 是收藏，256 才是列表）
 ```
 
 | bit | 用途 | 原子 6.2.5.6 源码依据 |
@@ -546,6 +547,7 @@ vivomusicmix.media.metadata.support_event = 原值 | 7 | 8 | 16 | 64   （= 95�
 | 1 / 2 / 4 | 基础播控（未知应用默认 7） | `getSupportEvent()` 默认值 |
 | 8 | 歌词 | `f5/n.java`、`f5/b.java`：`b1.c(P0(), 8)` |
 | 16 | 进度条 / seek / 时间显示 | `t4/d0.java` `Y0()/Z0()`：`duration > 0 && b1.c(P0(), 16)` |
+| 256 | 播放列表页开关（r57） | `f5/w0.java`：`(b1.a(pkg) & 256) == 256`，否则 `MusicPlayPanel.onListIconClicked` 直接返回；512/1024 是收藏/本地列表，不发 |
 | 32 | 自定义颜色 / 互传 | `SettingsMainView`、锁屏组件 |
 | 64 | 收藏 | `MusicControlPanelView.isFavoriteEnable()`、`f5/w0.java` 字段 `t` |
 | 128 | 未确认 | `f5/w0.java` |
@@ -598,8 +600,18 @@ Apple Music 的 media3 库对这三个 root 返回空，所以原子「播放列
 直接返回 rootId `vivomusicmix_current_list` 的 BrowserRoot，其余 client 原样交回 stock——这样原子的
 browser 才能连上、subscribe 才能到 `onLoadChildren`（r56 第一版只挂了 onLoadChildren，没挂这一层，
 是“点了没反应”的真正原因）。
-**未实机验证**：列表能不能弹出来、点歌（`playFromMediaId`）能不能跳，都要上机确认；点歌跳不动的话
-还需要在 MediaSession 回调用再挂一个注入点。
+**r57 修了 r56 仍然打不开的三层原因**：
+
+1. support_event 缺 bit 256，原子直接禁用列表页（见上表）。
+2. r56 在 `currentManager`（类 `O`）上找 `getAllQueueItems`，而 1611 的 `O` 没有任何队列方法，队列恒为 null。
+   现在经 `O.a`（`k0`）`.h` 拿 `MediaPlayerController`，合并 `getAllQueueItems` / `getCurrentItem` /
+   `getQueueItems` 并按 `getPlaybackQueueId` 去重；两个列表都有 100 条上限，当前曲超出首窗时从当前曲开始。
+3. 点歌是 `playFromMediaId(id, {"vivomusicmix_key_list": 列表名})`，经 media3 走到 `c0.d`（onSetMediaItems），
+   stock 会用这一首替换整个队列。`patch_vivo_browse.py` 在 `c0.d` 入口挂 `onAtomicListPlay`：只接管
+   `vivomusicmix_current_list`，匹配后 `skipToQueueItemWithId`，再返回失败 future（legacy session 忽略失败，
+   队列不变）；其他播放请求原样交回 stock。
+
+**未实机验证**：r57 只过了 CI，列表能否弹出、点歌能否跳都要上机确认（logcat 看 `vivo-browse`）。
 
 ### 8.3 vivo 侧参考源码
 

@@ -88,6 +88,27 @@ SPECS = (
         "MediaPlaybackService is no longer a J4.Z2, so the g() lookup fails",
     ),
     (
+        "Atomic list playback controller",
+        "smali_classes2/com/apple/android/music/player/k0.smali",
+        (r"^\.field public h:Lcom/apple/android/music/playback/controller/MediaPlayerController;$",),
+        "the Atomic current list stays empty and a row tap cannot jump",
+    ),
+    (
+        "Atomic list tap request extras",
+        "smali/z3/w$h.smali",
+        (r"^\.field public final c:Landroid/os/Bundle;$",),
+        "a current-list tap falls through to stock and replaces the queue",
+    ),
+    (
+        "Atomic list tap media id",
+        "smali/z3/w.smali",
+        (
+            r"^\.field public final a:Ljava/lang/String;$",
+            r"^\.field public final f:Lz3/w\$h;$",
+        ),
+        "a current-list tap falls through to stock and replaces the queue",
+    ),
+    (
         "player -> session manager field",
         "smali_classes2/com/apple/android/music/player/k0.smali",
         (r"^\.field public b:LJ4/x1\$b;$",),

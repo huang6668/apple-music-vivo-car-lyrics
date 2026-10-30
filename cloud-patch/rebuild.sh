@@ -79,7 +79,8 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/CatalogTitleResolver' \
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
-  'vivo-car-cn-track-r56-1611-2026-10-29' \
+  'onAtomicListPlay' \
+  'vivo-car-cn-track-r57-1611-2026-10-30' \
   'correctPlayerTitle' \
   'correctPlayerArtist' \
   'resolveItemTitle' \
@@ -278,6 +279,12 @@ python3 "$PATCH_ROOT/patch_item_title.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-item-title-hook.txt
 python3 "$PATCH_ROOT/patch_cover_uri.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-cover-uri-hook.txt
+# apktool renames labels on re-decode, so the pinned hook body only matches before assembly.
+grep -Fq -- '->onAtomicListPlay(Ljava/lang/Object;Ljava/lang/Object;)Z' \
+  "$FINAL_MANIFEST_DIR/smali_classes2/com/apple/android/music/player/c0.smali" || {
+  echo "Final APK lost the Atomic list play hook" >&2
+  exit 1
+}
 python3 "$PATCH_ROOT/verify_reflection_names.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-reflection-names.txt
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/O.smali' -print -quit)" \
