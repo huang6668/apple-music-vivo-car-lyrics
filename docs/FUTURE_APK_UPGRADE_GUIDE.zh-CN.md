@@ -17,7 +17,8 @@
 > （`MusicControlPanelView.isFavoriteEnable()` / `f5.w0.t`），r56 保留该位但改名为收藏位；
 > 真正的「播放列表」走 MediaBrowser 的 browse 通道，r56 新增擦边实现；
 > r57 补上列表页开关 bit 256、改从 controller 取队列、点歌改为队列内跳转，见 §8.2(d)）。
-> 最新发布的构建是 Build #170（r47，1609），CI 已通过。
+> 最新发布的构建是 Build #183（r57，1611，Release `v1.0.0-build-183`），CI 已通过；用户已上机确认原子随身听的
+> 播放列表能打开（2026-10-30），列表内容是否完整、点歌跳转的结果还没有反馈。
 > r49–r51 都只通过了 CI 校验与源码/字节码比对，**尚未实机验证**。r50 的 1611 构建为 Build #173
 > （Release `v1.0.0-build-173`）：CI 全绿，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、
 > 目录地区 seam、歌名/歌手 getter 与车机封面钩子（`out/report/verified-*.txt`）。
@@ -611,7 +612,9 @@ browser 才能连上、subscribe 才能到 `onLoadChildren`（r56 第一版只�
    `vivomusicmix_current_list`，匹配后 `skipToQueueItemWithId`，再返回失败 future（legacy session 忽略失败，
    队列不变）；其他播放请求原样交回 stock。
 
-**未实机验证**：r57 只过了 CI，列表能否弹出、点歌能否跳都要上机确认（logcat 看 `vivo-browse`）。
+**实机状态**：Build #183 上已确认列表能打开（2026-10-30）。列表内容是否完整、点歌是否跳转且不替换队列
+还没有反馈，有问题先看 logcat 的 `vivo-browse`。已知限制：当前曲超出 `getAllQueueItems` 的首窗时，列表从当前曲
+开始，前面的歌不显示。
 
 ### 8.3 vivo 侧参考源码
 
