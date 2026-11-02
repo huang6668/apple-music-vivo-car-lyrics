@@ -6,13 +6,17 @@
 > **这是升级时唯一需要阅读的文档。** 协议字段（§8）、已验证的死路（§9）、
 > 安装签名限制（§10）都已并入本文；旧手册与历史排查记录已从 `docs/` 删除，需要时从 git 历史取回。
 >
-> **当前适配目标**：Apple Music 7.0.0-beta，versionCode **1611**。
+> **当前适配目标**：Apple Music 7.0.0，versionCode **1614**（1607/1609/1611 为历史版本）。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r57-1611-2026-10-30`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r58-1614-2026-11-02`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
 > 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1）；
 > r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9）。
+> r58 把整条注入链搬到 1614：混淆名整体位移，播放管理器 `O→N`、metadata→PlaybackItem 转换器
+> `N→M`、Media3 会话 `k2→m2` / `z2→B2` / `b3→d3` / `x1→y1`，正在播放页的绑定基类
+> `q8/la→q8/ma`（标题控件 `p0→o0`，歌手控件 `o0→n0`，PlaybackItem 字段 `s0→r0`）。
+> **1614 目前只有本地解码比对与 CI 校验，尚未实机验证。**
 > r55 曾误把 bit 64 当「列表入口」再加进 support_event——反编译 6.2.5.6 后确认 64 实为「收藏」
 > （`MusicControlPanelView.isFavoriteEnable()` / `f5.w0.t`），r56 保留该位但改名为收藏位；
 > 真正的「播放列表」走 MediaBrowser 的 browse 通道，r56 新增擦边实现；
@@ -42,11 +46,11 @@
 flowchart TD
     subgraph Stock["官方 APK（每版混淆名会变）"]
         Manifest["AndroidManifest.xml"]
-        Player["播放管理器 / Session 回调\n(1611: player/O, player/c0)"]
-        Binding["正在播放绑定\n(1611: q8/na.l()V)"]
+        Player["播放管理器 / Session 回调\n(1614: player/N, player/c0)"]
+        Binding["正在播放绑定\n(1614: q8/na.l()V → q8/ma 控件)"]
         Models["列表模型（未混淆）\nBaseContentItem / Attributes /\nBasePlaybackItem / Song"]
         Pages["页面控制器（未混淆）\nPlaylist / AlbumPageController"]
-        Http["Catalog HTTP 分发\n(1611: y9/k.a)"]
+        Http["Catalog HTTP 分发\n(1614: y9/k.a)"]
     end
 
     subgraph Seams["注入层（每版只需重新定位这层）"]
@@ -122,14 +126,14 @@ flowchart TD
 涉及 `apple-vivo-car-lyrics.patch` 与 `verify_lyrics_hooks.py`（`SPECS` 记录签名、
 寄存器、stock hash 和前后锚点指令）。
 
-| Hook | 1611 位置 | 1609（历史） | 1607（历史） |
+| Hook | 1614 位置 | 1611（历史） | 1609（历史） |
 | --- | --- | --- | --- |
-| `onNativeMediaItem(p1)` | `O.P(Lz3/w;I)V`，`if-nez p2, :cond_4` 之后 | `P.P(Lz3/w;I)V` | `S.P(Lz3/v;I)V` |
-| `onCurrentItemChanged(p0, p3)` | `O.onCurrentItemChanged`，空检查之后 | `P` | `S` |
-| `onMetadataUpdated(p0, p2)` | `O.onMetadataUpdated`，空检查之后 | `P` | `S` |
-| `onPlaybackError(p0)` | `O.onPlaybackError`，空检查之后 | `P` | `S` |
-| `onSeek(p0, p1, p2)` | `O.seekTo(J)V`，`seekToPosition(J)` 之后 | `P` | `S` |
-| `onAtomicControllerConnected(v0)` | `c0.o(LJ4/k2;LJ4/k2$e;)V`，`.locals 0→1`，从 `k2$e.a:K4/B$b → .a:K4/B$c → K4/B$d.a:String` 取包名 | `d0.o(LJ4/g2;…)` | `e0.o(LJ4/f2;…)` |
+| `onNativeMediaItem(p1)` | `N.P(Lz3/w;I)V`，`if-nez p2, :cond_4` 之后 | `O.P(Lz3/w;I)V` | `P.P(Lz3/w;I)V` |
+| `onCurrentItemChanged(p0, p3)` | `N.onCurrentItemChanged`，空检查之后 | `O` | `P` |
+| `onMetadataUpdated(p0, p2)` | `N.onMetadataUpdated`，空检查之后 | `O` | `P` |
+| `onPlaybackError(p0)` | `N.onPlaybackError`，空检查之后 | `O` | `P` |
+| `onSeek(p0, p1, p2)` | `N.seekTo(J)V`，`seekToPosition(J)` 之后 | `O` | `P` |
+| `onAtomicControllerConnected(v0)` | `c0.o(LJ4/m2;LJ4/m2$e;)V`，`.locals 0→1`，从 `m2$e.a:K4/B$b → .a:K4/B$c → K4/B$d.a:String` 取包名 | `c0.o(LJ4/k2;…)` | `d0.o(LJ4/g2;…)` |
 
 定位方法：
 - **播放管理器**：实现了 `MediaPlayerController.Listener`，并且有一个调用
@@ -268,28 +272,31 @@ sequenceDiagram
 这些名字**不在** smali 校验脚本的覆盖范围内，失效时只会静默回退到宿主显示。
 请用 CI 分析报告里的 jadx/smali 逐项核对，并在本表补充新版本一列。
 
-| 用途 | 位置 | 1609 | 1607 |
+| 用途 | 位置 | 1614 | 1611（历史） |
 | --- | --- | --- | --- |
-| 元数据 / MediaItem 类 | `writeCorrectedTrack` | `z3.y`（标题 `a`、歌手 `b`，CharSequence）/ `z3.w` | `z3.x` / `z3.v` |
+| 元数据 / MediaItem 类 | `writeCorrectedTrack` | `z3.y`（标题 `a`、歌手 `b`，CharSequence）/ `z3.w` | 同 |
 | 元数据 Extras 字段 | `getMetadataExtras` | `J`（回退 `I`） | 同 |
 | MediaItem → 元数据字段 | `applyTitleCorrection` / `currentPlaybackItem` | `d` | 同 |
 | 管理器当前 MediaItem | `currentMediaItem` | `c()`（回退 `a()`） | 同 |
-| 元数据 → PlaybackItem 转换器 | `currentPlaybackItem` 依次探测 `player.Q` / `P` / `O` 的 static `b(metadata)` | `O.b(Lz3/y;)` | `Q` 或 `P` |
-| 通知刷新链 | `refreshTitleNotification` | `manager.a.b` → session，`session.a.f` → service，`service.y == session`，`session.c() == manager`，`J4.Z2.g(J4.g2, boolean)` | `J4.Y2` / `J4.f2` |
-| 播放页重绑定 | `applyTitleCorrectionFromState` | `q8.ma.q0(PlaybackItem)`（回退 `setItem`） | 同 |
-| 正在播放绑定自持的播放器引用 | `q8.ma.r0(Lcom/apple/android/music/player/a1;)V` | **不是** PlaybackItem setter，别拿它重绑定 | — |
+| 元数据 → PlaybackItem 转换器 | `currentPlaybackItem` 依次探测 `player.M` / `N` / `Q` / `P` / `O` 的 static `b(metadata)` | `M.b(Lz3/y;)LPlaybackItem;` | `N.b(...)` |
+| 通知刷新链 | `refreshTitleNotification` | `manager.a.b` → session（`J4.y1$b`），`session.a.f` → service，`service.y == session`，`session.c() == manager`，`J4.d3.g(J4.m2, boolean)` | `J4.b3` / `J4.k2` / `J4.z2` / `J4.x1` |
+| 播放页重绑定 | `applyTitleCorrectionFromState` | `q8.ma.q0(PlaybackItem)`（回退 `setItem`） | `q8.la.q0` |
+| 正在播放绑定自持的播放器引用 | `q8.ma.r0(Lcom/apple/android/music/player/b1;)V` | **不是** PlaybackItem setter，别拿它重绑定 | 同 |
 | 会话 extras 发布 | `publishSessionExtras` | `invokeRequired(sessionManager, "j", extras)` | 同 |
 | Application 获取 | `appleApplication` | `AppleMusicApplication$a.c()` / `a()` | 同 |
 | Catalog API 实例 | `findCatalogApi` | `MediaApiRepositoryHolder.Companion.getMediaApi()` | 同 |
-| Catalog 方法 | `CatalogQueryMethod` | 非 static `Object m(String, Map, Continuation)`，候选名 `F`，失败时 `findUnique` | 改名表 `s8.F→x`、`u8.E→v`、`w9.Q/w9.a→F` |
+| Catalog 方法 | `CatalogQueryMethod` | 非 static `Object F(String, Map, Continuation)`，失败时 `findUnique` | 同 |
 | Continuation 上下文 | `CatalogTitleResolver.emptyContext` | `kotlin.coroutines.EmptyCoroutineContext` | 回退 `fi.f` |
 | Result 失败类型 | `CatalogTitleResolver.failureOf` | `kotlin.Result$Failure` | 回退 `bi.q$a` |
 | 正在播放 StoreMediaItem | `writeCorrectedTrack` | `playback.model.StoreMediaItem`（`title` / `artistName`） | 同 |
 
-> 注意：1611 中 `player.O` 是**播放管理器**、`player.N` 才是 metadata → PlaybackItem 转换器。转换器探测会依次试 `N`、`Q`、`P`、`O`，只要它们
+> 注意：1614 中 `player.N` 是**播放管理器**（`implements Lz3/F;`，`getCurrentPosition`/`play`/`seekTo` 全在这里）、
+> `player.M` 才是 metadata → PlaybackItem 转换器。转换器探测依次试 `M`、`N`、`Q`、`P`、`O`，只要它们
 > 恰好也有一个参数兼容的 static `b(...)`，就会拿错对象。新版本要确认探测顺序，
 > 并校验返回类型是 `PlaybackItem`（helper 已强制这一点）。
->
+> 1614 里 `k0.b` 是 `J4.y1$b`（继承 `J4.m2`），`service.y` 也是同一个类型；`m2.c()` 返回 `z3.F`，
+> 而播放管理器本身就实现了 `z3.F`，所以 `session.c() == manager` 的恒等检查照旧成立。
+
 > 上表里能静态确认的条目已由 `cloud-patch/verify_reflection_names.py` 覆盖：
 > `apply.sh` 在打补丁前预检，`rebuild.sh` 在最终 APK 上再验一次，结果写入
 > `out/report/verified-reflection-names.txt`。名字变了 CI 会直接失败，而不是静默失效。
@@ -604,7 +611,7 @@ browser 才能连上、subscribe 才能到 `onLoadChildren`（r56 第一版只�
 **r57 修了 r56 仍然打不开的三层原因**：
 
 1. support_event 缺 bit 256，原子直接禁用列表页（见上表）。
-2. r56 在 `currentManager`（类 `O`）上找 `getAllQueueItems`，而 1611 的 `O` 没有任何队列方法，队列恒为 null。
+2. r56 在 `currentManager`（1611 的类 `O`，1614 是 `N`）上找 `getAllQueueItems`，而那一层没有任何队列方法，队列恒为 null。
    现在经 `O.a`（`k0`）`.h` 拿 `MediaPlayerController`，合并 `getAllQueueItems` / `getCurrentItem` /
    `getQueueItems` 并按 `getPlaybackQueueId` 去重；两个列表都有 100 条上限，当前曲超出首窗时从当前曲开始。
 3. 点歌是 `playFromMediaId(id, {"vivomusicmix_key_list": 列表名})`，经 media3 走到 `c0.d`（onSetMediaItems），

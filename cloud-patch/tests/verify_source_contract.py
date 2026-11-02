@@ -82,7 +82,7 @@ for body in (title_binding, artist_binding):
 assert "TITLE_STATE.currentArtist(" in artist_binding
 notification = method_body("private static void refreshTitleNotification(")
 for required in ("isCurrentTitle(state)", 'getFieldValue(service, "y") != session',
-                 'invokeOptional(session, "c") != state.manager', '"J4.b3"', '"J4.k2"'):
+                 'invokeOptional(session, "c") != state.manager', '"J4.d3"', '"J4.m2"'):
     assert required in notification, "Notification refresh must validate its exact owner: " + required
 assert "writeCorrectedTrack(" not in notification
 assert "getPersistentId" not in method_body("private static String titleCatalogId(")
@@ -261,6 +261,6 @@ for required in ("publishAtomicClear(", "publishAtomicExtras("):
 for forbidden in ("COVER_SETTLE_MS", "DeferredPublish", "trackChangeUptime"):
     assert forbidden not in text, f"The cover-settle deferral was removed in r47: {forbidden}"
 
-assert 'BUILD_MARKER = "vivo-car-cn-track-r57-1611-2026-10-30"' in text
+assert 'BUILD_MARKER = "vivo-car-cn-track-r58-1614-2026-11-02"' in text
 
 print("VivoCarLyrics source contract passed")

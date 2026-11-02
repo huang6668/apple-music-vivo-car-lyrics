@@ -102,7 +102,7 @@ HOOK_PLAY = (
     '    :L_vivo_play_stock'
 )
 
-SEAM_NORMALIZE = "    invoke-static {p3}, LC3/e0;->n(Landroid/os/Bundle;)Landroid/os/Bundle;"
+SEAM_NORMALIZE = "    invoke-static {p3}, LC3/g0;->n(Landroid/os/Bundle;)Landroid/os/Bundle;"
 
 CONNECTION = "com/apple/android/music/player/c0.smali"
 DEX = {CONNECTION: "smali_classes2"}
@@ -112,7 +112,7 @@ SPECS = (
      "public final onLoadChildren(Ljava/lang/String;"
      "Landroid/service/media/MediaBrowserService$Result;Landroid/os/Bundle;)V",
      SEAM_NORMALIZE,
-     "b1c583b50790562ecf797b347e5619b48765c6004d13ff7fe8796b580e155685",
+     "0bc7818dfacc5366c80ee445841ec2e8e5fdcad3e713ecc41f379e90cf164eb0",
      HOOK_CHILDREN,
      HELPER + "->vivoBrowseChildren(Ljava/lang/String;)Ljava/util/List;"),
     ("K4/g$d$a.smali",
@@ -126,13 +126,13 @@ SPECS = (
      "public final onGetRoot(Ljava/lang/String;ILandroid/os/Bundle;)"
      "Landroid/service/media/MediaBrowserService$BrowserRoot;",
      SEAM_NORMALIZE,
-     "cb1f48a895ab57866cf765f75e15789ec43d3e1daa2bf6253e789912a6e6d362",
+     "ca5379a7d4476e3c179f58452ce573f0be978f768e1cb8e05b977a25bb7dda6a",
      HOOK_ROOT,
      "const-string v1, \"vivomusicmix_current_list\""),
     (CONNECTION,
-     "public final d(LJ4/k2;LJ4/k2$e;LVf/l0;IJ)Lag/q;",
-     "    iget-object v0, p1, LJ4/k2;->a:LJ4/z2;",
-     "ec02f1eec9fe398a3cdc8d33a0d20a1f504c8d3b7a984fe9711302dab7da133d",
+     "public final d(LJ4/m2;LJ4/m2$e;LVf/l0;IJ)Lag/q;",
+     "    iget-object v0, p1, LJ4/m2;->a:LJ4/B2;",
+     "aa2efe595b8052e983c0a61fe430b7b1a1c13f77a9032b0e196f78ee88f51409",
      HOOK_PLAY,
      HELPER + "->onAtomicListPlay(Ljava/lang/Object;Ljava/lang/Object;)Z"),
 )

@@ -23,7 +23,7 @@ import re
 
 TARGET = "J4/t.smali"
 METHOD = "public static n(Lz3/y;Ljava/lang/String;Landroid/net/Uri;JLandroid/graphics/Bitmap;)LK4/z;"
-STOCK_SHA256 = "0bba3016802fe23977679ab36b768a06e5db412fd2e7a2781735b35c247dd7fe"
+STOCK_SHA256 = "c2d73314f71cb7982693039303a16c898323c34037bb6c8166b6200ce2764397"
 STOCK_CODE_SHA256 = "97e0740d04928e1ab862beabd7ec99c3a78a5ccb6f4b168f15c970fc42bf51bb"
 
 HOOK = (

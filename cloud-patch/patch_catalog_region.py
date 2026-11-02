@@ -10,8 +10,8 @@ METHOD = (
     "public final a(Ljava/lang/String;Ljava/lang/String;ZLjava/util/LinkedHashMap;"
     "Ljava/util/Map;Lkk/C;Lhi/c;)Ljava/lang/Object;"
 )
-STOCK_SHA256 = "fb6aa2f119ac7949a776f69f585cf3efab83d456ffc97a36b5e812c8e162a9a5"
-STOCK_CODE_SHA256 = "18a0f21237399ca30d5b23d74bbed2fd56359c7f7eb00f39e511601ea6a21d7b"
+STOCK_SHA256 = "7d5b48f0f70dbb9d89d8f4a444b9dfe3c222fd8bfb6bc8986ec393886c4ecd4b"
+STOCK_CODE_SHA256 = "545df8439228f7fa032d26f900ade0edbaa68e8d03eba16c95a80e9c91c49da7"
 HOOK = (
     "    # Fixed mainland localization is restricted to resolver-owned request tokens.\n"
     "    invoke-static {p1, p4, p5}, "

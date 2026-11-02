@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Apple Music 1611 title and artist data binding hooks."""
+"""Validate the Apple Music 1614 title and artist data binding hooks."""
 
 import argparse
 import hashlib
@@ -9,13 +9,13 @@ import re
 
 TARGET = "q8/na.smali"
 METHOD = "l()V"
-STOCK_CODE_SHA256 = "b54f26e3fd68f35f98711d838c543d6e454ec9a9a4bc404e806c32647b13aa14"
+STOCK_CODE_SHA256 = "9d094b81beeb20f776b68ff6a9cfe17bb099ddcdb10293178adebf8598a8daf3"
 HELPER = (
     "Lcom/apple/android/music/player/VivoCarLyrics;"
     "->correctPlayerTitle(Ljava/lang/Object;Ljava/lang/Object;"
     "Ljava/lang/CharSequence;)Ljava/lang/CharSequence;"
 )
-ITEM = "iget-object v8, v1, Lq8/la;->s0:Lcom/apple/android/music/model/PlaybackItem;"
+ITEM = "iget-object v8, v1, Lq8/ma;->r0:Lcom/apple/android/music/model/PlaybackItem;"
 RECEIVER = "move-object/from16 v1, p0"
 TITLE = (
     "invoke-interface {v8}, Lcom/apple/android/music/model/CollectionItemView;"
@@ -33,7 +33,8 @@ SEAM = (
     "move/from16 v41, v38",
     "move-object/from16 v42, v39",
 )
-VIEW = "iget-object v0, v1, Lq8/la;->p0:Lcom/apple/android/music/common/views/CustomTextView;"
+VIEW = "iget-object v0, v1, Lq8/ma;->o0:Lcom/apple/android/music/common/views/CustomTextView;"
+VIEW_COPY = "move-object/from16 v2, v42"
 ASSIGN = (
     "invoke-static {v0, v2}, LI2/e;"
     "->a(Landroid/widget/TextView;Ljava/lang/CharSequence;)V"
@@ -63,7 +64,8 @@ ARTIST_SEAM = (
     "move-object/from16 v54, v52",
     "goto :goto_27",
 )
-ARTIST_VIEW = "iget-object v0, v1, Lq8/la;->o0:Lcom/apple/android/music/common/views/CustomTextView;"
+ARTIST_VIEW = "iget-object v0, v1, Lq8/ma;->n0:Lcom/apple/android/music/common/views/CustomTextView;"
+ARTIST_VIEW_COPY = "move-object/from16 v3, v54"
 ARTIST_ASSIGN = (
     "invoke-static {v0, v3}, LI2/e;"
     "->a(Landroid/widget/TextView;Ljava/lang/CharSequence;)V"
@@ -100,7 +102,7 @@ def verify_text(text, unpatched=False):
     assert text.count(ARTIST_HELPER) == expected_hooks, "Unexpected artist helper count"
     body = methods[0]
     assert re.search(r"^\s*\.locals 58\s*$", body, re.MULTILINE), (
-        "1611 display hooks must preserve the original 58 locals"
+        "1614 display hooks must preserve the original 58 locals"
     )
     ops = instructions(body)
     assert ops.count(TITLE) == 1, "Expected one stock title computation"
@@ -113,11 +115,14 @@ def verify_text(text, unpatched=False):
     assert RECEIVER in ops[:start] and ITEM in ops[:start], (
         "Missing stock binding receiver or item identity load"
     )
-    assert VIEW in ops[start:], "Missing stock title TextView assignment"
-    view_start = ops.index(VIEW, start)
-    assert ops[view_start:view_start + 3] == [
-        VIEW, "move-object/from16 v2, v42", ASSIGN
-    ], "Corrected title must reach the stock title TextView adapter"
+    # 1614 assigns the corrected title through v42 into ma->o0; the same field is
+    # wired to a click listener earlier, so locate the copy + adapter triple.
+    view_start = next(
+        (i for i in range(start, len(ops) - 2)
+         if ops[i:i + 3] == [VIEW, VIEW_COPY, ASSIGN]),
+        None,
+    )
+    assert view_start is not None, "Missing stock title TextView assignment"
     assert EXPLICIT_ASSIGN in ops[view_start:], (
         "Explicit-title adapter must still receive the same corrected value"
     )
@@ -144,11 +149,12 @@ def verify_text(text, unpatched=False):
     assert next_artist_scratch == "and-long v52, v35, v28", (
         "Artist scratch v52/v53 must be overwritten before the next use"
     )
-    assert ARTIST_VIEW in ops[artist_start:], "Missing stock artist TextView assignment"
-    artist_view_start = ops.index(ARTIST_VIEW, artist_start)
-    assert ops[artist_view_start:artist_view_start + 3] == [
-        ARTIST_VIEW, "move-object/from16 v3, v54", ARTIST_ASSIGN
-    ], "Corrected artist must reach the stock subtitle TextView adapter"
+    artist_view_start = next(
+        (i for i in range(artist_start, len(ops) - 2)
+         if ops[i:i + 3] == [ARTIST_VIEW, ARTIST_VIEW_COPY, ARTIST_ASSIGN]),
+        None,
+    )
+    assert artist_view_start is not None, "Missing stock artist TextView assignment"
     canonical = code(text)
     if not unpatched:
         for seam_ops in (SEAM, ARTIST_SEAM):
@@ -173,7 +179,7 @@ def main():
     parser.add_argument("--unpatched", action="store_true", help="Validate original stock seam before patching")
     args = parser.parse_args()
     mode = "stock preflight" if args.unpatched else "patched hook"
-    print("1611 title/artist binding " + mode + " verified: "
+    print("1614 title/artist binding " + mode + " verified: "
           + str(verify_tree(args.decoded_root, unpatched=args.unpatched)))
 
 

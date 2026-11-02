@@ -24,7 +24,7 @@ def fixture():
         *("    " + op for op in hook.SEAM),
         "    cmp-long v40, v43, v22",
         "    " + hook.VIEW,
-        "    move-object/from16 v2, v42",
+        "    " + hook.VIEW_COPY,
         "    " + hook.ASSIGN,
         "    " + hook.EXPLICIT_ASSIGN,
         *("    " + op for op in hook.ARTIST_SEAM),
@@ -32,7 +32,7 @@ def fixture():
         "    :goto_27",
         "    and-long v52, v35, v28",
         "    " + hook.ARTIST_VIEW,
-        "    move-object/from16 v3, v54",
+        "    " + hook.ARTIST_VIEW_COPY,
         "    " + hook.ARTIST_ASSIGN,
         "    return-void",
         ".end method",
@@ -103,7 +103,7 @@ class TitleHookTest(unittest.TestCase):
 
     def test_preserve_title_assignment(self):
         with self.assertRaises(AssertionError):
-            hook.verify_text(fixture().replace(hook.VIEW, hook.VIEW.replace("->p0:", "->o0:")))
+            hook.verify_text(fixture().replace(hook.VIEW, hook.VIEW.replace("->o0:", "->p1:")))
 
     def test_scratch_register_must_be_dead(self):
         with self.assertRaises(AssertionError):
@@ -125,7 +125,7 @@ class TitleHookTest(unittest.TestCase):
                      fixture().replace("move-object/from16 v54, v52",
                                        "move-object/from16 v54, v31"),
                      fixture().replace(hook.ARTIST_VIEW,
-                                       hook.ARTIST_VIEW.replace("->o0:", "->p0:"))):
+                                       hook.ARTIST_VIEW.replace("->n0:", "->p1:"))):
             with self.assertRaises(AssertionError):
                 hook.verify_text(text)
 
@@ -144,50 +144,52 @@ class TitleHookTest(unittest.TestCase):
                 hook.verify_tree(root)
 
     def test_patch_seam_and_original_hooks(self):
-        patch = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
-        self.assertEqual(patch.count(hook.HELPER), 1)
-        self.assertEqual(patch.count(hook.ARTIST_HELPER), 1)
-        self.assertIn("+    " + hook.HOOK, patch)
-        self.assertIn("+    " + hook.ARTIST_HOOK, patch)
-        self.assertIn("     move-result-object v39", patch)
+        patch_text = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
+        self.assertEqual(patch_text.count(hook.HELPER), 1)
+        self.assertEqual(patch_text.count(hook.ARTIST_HELPER), 1)
+        self.assertIn("+    " + hook.HOOK, patch_text)
+        self.assertIn("+    " + hook.ARTIST_HOOK, patch_text)
+        self.assertIn("     move-result-object v39", patch_text)
         ui_header = "--- a/smali_classes2/" + hook.TARGET
-        self.assertGreater(patch.index(ui_header), patch.index("onAtomicControllerConnected"))
+        self.assertGreater(patch_text.index(ui_header),
+                           patch_text.index("onAtomicControllerConnected"))
         self.assertEqual(
-            hashlib.sha256(patch[:patch.index(ui_header)].encode("utf-8")).hexdigest(),
-            "a7e1724d76cdfc65933db8a13de368d3fc4325a2d16b35164ad3b266b3f61375",
-            "The six O/c0 lyrics hooks must remain pinned to the audited 1611 port",
+            hashlib.sha256(patch_text[:patch_text.index(ui_header)].encode("utf-8")).hexdigest(),
+            "b81a2ccbd8ade2c7a456a777fe663212ea8c018ff156f611a6fefb0a769e8205",
+            "The six N/c0 lyrics hooks must remain pinned to the audited 1614 port",
         )
-        self.assertEqual(patch.count("\n--- a/"), 2)
+        self.assertEqual(patch_text.count("\n--- a/"), 2)
         for name in ("onNativeMediaItem", "onCurrentItemChanged", "onMetadataUpdated",
                      "onPlaybackError", "onSeek", "onAtomicControllerConnected"):
-            self.assertEqual(patch.count("->" + name + "("), 1)
+            self.assertEqual(patch_text.count("->" + name + "("), 1)
+
+    def hunks_after(self, header):
+        patch_text = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
+        lines = patch_text.split("--- a/smali_classes2/" + header, 1)[1].splitlines()
+        starts = [index for index, line in enumerate(lines) if line.startswith("@@")]
+        for position, start in enumerate(starts):
+            end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+            yield lines[start + 1:end]
 
     def test_title_hunk_has_full_context_on_both_sides(self):
-        patch = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
-        title_hunk = patch.split("--- a/smali_classes2/" + hook.TARGET, 1)[1]
-        lines = title_hunk.splitlines()
-        start = next(index for index, line in enumerate(lines) if line.startswith("@@"))
-        end = next((index for index in range(start + 1, len(lines))
-                    if lines[index].startswith("@@")), len(lines))
-        changes = lines[start + 1:end]
+        changes = list(self.hunks_after(hook.TARGET))[0]
         leading = next(index for index, line in enumerate(changes) if not line.startswith(" "))
         trailing = next(index for index, line in enumerate(reversed(changes))
                         if not line.startswith(" "))
         self.assertGreaterEqual(leading, 3, "GNU patch --fuzz=0 needs full leading context")
         self.assertGreaterEqual(trailing, 3, "GNU patch --fuzz=0 needs full trailing context")
-        self.assertEqual(sum(not line.startswith("+") for line in changes), 10)
-        self.assertEqual(sum(not line.startswith("-") for line in changes), 19)
+        self.assertEqual(sum(line.startswith("+") for line in changes), 9)
+        self.assertEqual(sum(line.startswith("-") for line in changes), 0)
 
     def test_artist_hunk_has_full_context_on_both_sides(self):
-        patch_text = (ROOT / "apple-vivo-car-lyrics.patch").read_text(encoding="utf-8")
-        hunk = patch_text.split("@@ -3140,10 +3149,19 @@\n", 1)[1].splitlines()
-        leading = next(index for index, line in enumerate(hunk) if not line.startswith(" "))
-        trailing = next(index for index, line in enumerate(reversed(hunk))
+        changes = list(self.hunks_after(hook.TARGET))[1]
+        leading = next(index for index, line in enumerate(changes) if not line.startswith(" "))
+        trailing = next(index for index, line in enumerate(reversed(changes))
                         if not line.startswith(" "))
         self.assertGreaterEqual(leading, 3)
         self.assertGreaterEqual(trailing, 3)
-        self.assertEqual(sum(not line.startswith("+") for line in hunk), 10)
-        self.assertEqual(sum(not line.startswith("-") for line in hunk), 19)
+        self.assertEqual(sum(line.startswith("+") for line in changes), 9)
+        self.assertEqual(sum(line.startswith("-") for line in changes), 0)
 
 
 if __name__ == "__main__":

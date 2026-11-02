@@ -376,7 +376,7 @@ public final class VivoTitleIntegrationTest {
         Handler.reset();
         Fixture wrongSession = new Fixture("Wrong service session");
         wrongSession.request();
-        wrongSession.manager.service.y = new J4.k2(wrongSession.manager, wrongSession.manager.service);
+        wrongSession.manager.service.y = new J4.m2(wrongSession.manager, wrongSession.manager.service);
         wrongSession.catalog.succeed(0, "Corrected but not notified");
         Handler.drain();
         equal("Corrected but not notified", wrongSession.manager.media.d.a);
@@ -391,7 +391,7 @@ public final class VivoTitleIntegrationTest {
 
         Fixture wrongServiceType = new Fixture("Wrong service type");
         wrongServiceType.request();
-        J4.b3 impostor = new J4.b3();
+        J4.d3 impostor = new J4.d3();
         wrongServiceType.manager.a.b.a.f = impostor;
         wrongServiceType.catalog.succeed(0, "Corrected without service match");
         Handler.drain();
@@ -1079,7 +1079,7 @@ public final class VivoTitleIntegrationTest {
         int republishes;
         Manager(z3.w media) {
             this.media = media;
-            a = new SessionHolder(new J4.k2(this, service));
+            a = new SessionHolder(new J4.m2(this, service));
             service.y = a.b;
         }
         public z3.w c() { return media; }
@@ -1088,8 +1088,8 @@ public final class VivoTitleIntegrationTest {
     }
 
     public static final class SessionHolder {
-        public final J4.k2 b;
-        SessionHolder(J4.k2 session) { b = session; }
+        public final J4.m2 b;
+        SessionHolder(J4.m2 session) { b = session; }
     }
 
     public static final class Binding {

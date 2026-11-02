@@ -80,7 +80,7 @@ HELPER_MARKERS=(
   'com/apple/android/music/player/ChineseConverter' \
   'correctCatalogRequest' \
   'onAtomicListPlay' \
-  'vivo-car-cn-track-r57-1611-2026-10-30' \
+  'vivo-car-cn-track-r58-1614-2026-11-02' \
   'correctPlayerTitle' \
   'correctPlayerArtist' \
   'resolveItemTitle' \

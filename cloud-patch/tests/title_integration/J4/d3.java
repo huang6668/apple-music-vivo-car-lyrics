@@ -1,11 +1,11 @@
 package J4;
 
-public class b3 {
+public class d3 {
     public int notificationRefreshes;
-    public k2 lastSession;
+    public m2 lastSession;
     public boolean lastForeground;
 
-    public void g(k2 session, boolean foreground) {
+    public void g(m2 session, boolean foreground) {
         notificationRefreshes++;
         lastSession = session;
         lastForeground = foreground;

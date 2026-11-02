@@ -36,7 +36,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class VivoCarLyrics {
-    private static final String BUILD_MARKER = "vivo-car-cn-track-r57-1611-2026-10-30";
+    private static final String BUILD_MARKER = "vivo-car-cn-track-r58-1614-2026-11-02";
     private static final String TITLE_LOG_TAG = "VivoCarTitle";
     /** Per-track title/artist logging (IDs and names); release builds keep only errors. */
     private static final boolean TITLE_DEBUG = false;
@@ -1217,7 +1217,7 @@ public final class VivoCarLyrics {
             reboundArtist = artist;
             reboundTitleItem = new WeakReference<Object>(item);
             reboundTitleBinding = new WeakReference<Object>(binding);
-            // 1611 q8.la: q0(PlaybackItem) sets the now-playing item, s0 is the binding's
+            // 1614 q8.ma: q0(PlaybackItem) sets the now-playing item, r0 is the binding's
             // own PlaybackItem reference. Only rebind through a PlaybackItem-accepting setter.
             if (invokeOptional(binding, "q0", item) == null) {
                 invokeOptional(binding, "setItem", item);
@@ -1264,8 +1264,8 @@ public final class VivoCarLyrics {
             Method refresh = findCompatibleMethod(service.getClass(), "g",
                     new Object[]{session, Boolean.FALSE}, false);
             Class<?>[] parameters = refresh.getParameterTypes();
-            if (!"J4.b3".equals(refresh.getDeclaringClass().getName())
-                    || !"J4.k2".equals(parameters[0].getName())
+            if (!"J4.d3".equals(refresh.getDeclaringClass().getName())
+                    || !"J4.m2".equals(parameters[0].getName())
                     || parameters[1] != Boolean.TYPE || Modifier.isStatic(refresh.getModifiers())) return;
             refresh.invoke(service, session, Boolean.FALSE);
         } catch (Throwable error) {
@@ -2597,7 +2597,8 @@ public final class VivoCarLyrics {
             playbackItem = Class.forName("com.apple.android.music.model.PlaybackItem");
         } catch (ClassNotFoundException ignored) {
         }
-        for (String name : new String[]{"com.apple.android.music.player.N",
+        for (String name : new String[]{"com.apple.android.music.player.M",
+                "com.apple.android.music.player.N",
                 "com.apple.android.music.player.Q", "com.apple.android.music.player.P",
                 "com.apple.android.music.player.O"}) {
             Class<?> converter;
@@ -2607,8 +2608,8 @@ public final class VivoCarLyrics {
                 continue;
             }
             Method method = lookupMethod(converter, "b", new Object[]{metadata}, true);
-            // 1611 player.O is the playback manager; only a real metadata -> PlaybackItem
-            // converter (player.N) may run, never a same-named static helper with another result.
+            // 1614 player.N is the playback manager; only a real metadata -> PlaybackItem
+            // converter (player.M) may run, never a same-named static helper with another result.
             if (method == null || (playbackItem != null
                     ? !playbackItem.isAssignableFrom(method.getReturnType())
                     : method.getReturnType().isPrimitive())) continue;

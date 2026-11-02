@@ -1,10 +1,10 @@
 package J4;
 
-public final class k2 {
+public final class m2 {
     public final ServiceLink a;
     public Object manager;
 
-    public k2(Object manager, Object service) {
+    public m2(Object manager, Object service) {
         this.manager = manager;
         a = new ServiceLink(service);
     }
