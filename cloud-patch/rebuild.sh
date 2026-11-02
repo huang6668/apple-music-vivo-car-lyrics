@@ -287,7 +287,7 @@ grep -Fq -- '->onAtomicListPlay(Ljava/lang/Object;Ljava/lang/Object;)Z' \
 }
 python3 "$PATCH_ROOT/verify_reflection_names.py" "$FINAL_MANIFEST_DIR" \
   > out/report/verified-reflection-names.txt
-printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/O.smali' -print -quit)" \
+printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/N.smali' -print -quit)" \
   > out/report/final-manager-smali-path.txt
 printf '%s\n' "$(find "$FINAL_MANIFEST_DIR" -path '*/com/apple/android/music/player/c0.smali' -print -quit)" \
   > out/report/final-connection-smali-path.txt
