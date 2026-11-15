@@ -184,6 +184,8 @@ public final class CatalogTitleResolverTest {
         testBatchRegionalFallback();
         testBatchCompleteness();
         testRegionalFallbackSkipsMainland();
+        check(CatalogTitleResolver.emptyContext(fi.h.class) == fi.g.a,
+                "1614 obfuscated empty context singleton");
         check(CatalogTitleResolver.emptyContext(fi.e.class) == fi.f.a,
                 "obfuscated empty context singleton");
         try {
@@ -1003,7 +1005,7 @@ public final class CatalogTitleResolverTest {
         trackEquals("Resumed title", "Resumed artist", result.track);
 
         RuntimeException failure = new RuntimeException("host track failed");
-        for (Object value : new Object[]{failure, new kotlin.Result.Failure(failure), new bi.q.a(failure)}) {
+        for (Object value : new Object[]{failure, new kotlin.Result.Failure(failure), new bi.p.a(failure), new bi.q.a(failure)}) {
             catalog = new Catalog();
             catalog.result = Suspended.COROUTINE_SUSPENDED;
             result = new TrackRecorder();
@@ -1027,7 +1029,7 @@ public final class CatalogTitleResolverTest {
 
     private static void testFailuresAndDuplicates() {
         RuntimeException failure = new RuntimeException("host failed");
-        for (Object value : new Object[]{failure, new kotlin.Result.Failure(failure), new bi.q.a(failure)}) {
+        for (Object value : new Object[]{failure, new kotlin.Result.Failure(failure), new bi.p.a(failure), new bi.q.a(failure)}) {
             Catalog catalog = new Catalog();
             catalog.result = value;
             Recorder result = new Recorder();

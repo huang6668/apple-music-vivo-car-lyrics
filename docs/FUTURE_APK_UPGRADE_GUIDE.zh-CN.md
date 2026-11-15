@@ -8,14 +8,16 @@
 >
 > **当前适配目标**：Apple Music 7.0.0，versionCode **1614**（1607/1609/1611 为历史版本）。
 >
-> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r58-1614-2026-11-02`
+> **验证状态**：最新代码为 helper 标记 `vivo-car-cn-track-r59-1614-2026-11-15`
 > （r46–r48 在 1609 上依次去掉了旧车机 key、修正 LRC 行格式、把每行改为 CRLF 终结；r49 给出
 > 车机封面的车联侧根因并首次从 Apple Music 侧规避；r50 把全部注入点、反射名与 r49 的封面修复
 > 移植到 1611；r51 删掉逐句空 Bundle 心跳；r52 撤回 r50 的封面位图剥离（仪表封面回归，代价见 §8.1）；
 > r53 按 skill 规范把封面 URL 归一化成 480px 变体，见 §8.1 与 §9）。
 > r58 把整条注入链搬到 1614：混淆名整体位移，播放管理器 `O→N`、metadata→PlaybackItem 转换器
 > `N→M`、Media3 会话 `k2→m2` / `z2→B2` / `b3→d3` / `x1→y1`，正在播放页的绑定基类
-> `q8/la→q8/ma`（标题控件 `p0→o0`，歌手控件 `o0→n0`，PlaybackItem 字段 `s0→r0`）。
+> `q8/la→q8/ma`（标题控件 `p0→o0`，歌手控件 `o0→n0`，PlaybackItem 字段 `s0→r0`）；
+> r59 补上 1614 的 Kotlin 协程混淆名位移（`EmptyCoroutineContext`：`fi.f→fi.g`，`Result$Failure`：`bi.q$a→bi.p$a`），
+> 并将这三处 `classes4.dex` 协程契约纳入 `verify_reflection_names.py` 预检。
 > **1614 目前只有本地解码比对与 CI 校验，尚未实机验证。**
 > r58 的构建为 Build #185（Release `v1.0.0-build-185`）：CI 全绿，成品 helper DEX 里 marker 是 `r58-1614`、没有 r57 残留，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、目录地区 seam、
 > 歌名/歌手 getter、车机封面钩子与 vivo browse（`out/report/verified-*.txt`）。**1614 尚未实机验证。**
@@ -288,8 +290,8 @@ sequenceDiagram
 | Application 获取 | `appleApplication` | `AppleMusicApplication$a.c()` / `a()` | 同 |
 | Catalog API 实例 | `findCatalogApi` | `MediaApiRepositoryHolder.Companion.getMediaApi()` | 同 |
 | Catalog 方法 | `CatalogQueryMethod` | 非 static `Object F(String, Map, Continuation)`，失败时 `findUnique` | 同 |
-| Continuation 上下文 | `CatalogTitleResolver.emptyContext` | `kotlin.coroutines.EmptyCoroutineContext` | 回退 `fi.f` |
-| Result 失败类型 | `CatalogTitleResolver.failureOf` | `kotlin.Result$Failure` | 回退 `bi.q$a` |
+| Continuation 上下文 | `CatalogTitleResolver.emptyContext` | `kotlin.coroutines.EmptyCoroutineContext`（回退 `fi.g`） | 回退 `fi.f` |
+| Result 失败类型 | `CatalogTitleResolver.failureOf` | `kotlin.Result$Failure`（回退 `bi.p$a`） | 回退 `bi.q$a` |
 | 正在播放 StoreMediaItem | `writeCorrectedTrack` | `playback.model.StoreMediaItem`（`title` / `artistName`） | 同 |
 
 > 注意：1614 中 `player.N` 是**播放管理器**（`implements Lz3/F;`，`getCurrentPosition`/`play`/`seekTo` 全在这里）、

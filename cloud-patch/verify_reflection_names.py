@@ -167,6 +167,30 @@ SPECS = (
         (r"^\.method public abstract F\(Ljava/lang/String;Ljava/util/Map;Lkotlin/coroutines/Continuation;\)Ljava/lang/Object;$",),
         "CatalogQueryMethod has no F(String, Map, Continuation) to call",
     ),
+    (
+        "Continuation context type",
+        "smali_classes4/kotlin/coroutines/Continuation.smali",
+        (r"^\.method public abstract getContext\(\)Lfi/f;$",),
+        "CatalogTitleResolver.continuation cannot match the host CoroutineContext interface",
+    ),
+    (
+        "EmptyCoroutineContext singleton",
+        "smali_classes4/fi/g.smali",
+        (
+            r"^\.implements Lfi/f;$",
+            r"^\.field public static final a:Lfi/g;$",
+        ),
+        "CatalogTitleResolver.emptyContext throws ClassNotFoundException and every catalog query fails",
+    ),
+    (
+        "Result.Failure class",
+        "smali_classes4/bi/p$a.smali",
+        (
+            r"^\.class public final Lbi/p\$a;$",
+            r"^\.field public final a:Ljava/lang/Throwable;$",
+        ),
+        "CatalogTitleResolver.failureOf misses resumed coroutine failures",
+    ),
 )
 
 

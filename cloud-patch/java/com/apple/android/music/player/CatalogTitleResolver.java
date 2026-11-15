@@ -533,9 +533,9 @@ public final class CatalogTitleResolver {
                 });
     }
 
-    /** fi.f is the concrete EmptyCoroutineContext used by the 1607 host. Never fake its algebra. */
+    /** fi.g (1614) / fi.f (1607-1611) is the concrete EmptyCoroutineContext. Never fake its algebra. */
     static Object emptyContext(Class<?> contextType) throws ReflectiveOperationException {
-        for (String name : new String[]{"kotlin.coroutines.EmptyCoroutineContext", "fi.f"}) {
+        for (String name : new String[]{"kotlin.coroutines.EmptyCoroutineContext", "fi.g", "fi.f"}) {
             final Class<?> owner;
             try {
                 owner = Class.forName(name, true, contextType.getClassLoader());
@@ -587,7 +587,9 @@ public final class CatalogTitleResolver {
         if (value instanceof Throwable) return (Throwable) value;
         if (value == null) return null;
         String name = value.getClass().getName();
-        if (!"kotlin.Result$Failure".equals(name) && !"bi.q$a".equals(name)) return null;
+        if (!"kotlin.Result$Failure".equals(name)
+                && !"bi.p$a".equals(name)
+                && !"bi.q$a".equals(name)) return null;
         Field exception = null;
         for (Field field : value.getClass().getDeclaredFields()) {
             if (Modifier.isStatic(field.getModifiers())
