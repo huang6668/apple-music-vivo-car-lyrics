@@ -16,11 +16,9 @@
 > r58 把整条注入链搬到 1614：混淆名整体位移，播放管理器 `O→N`、metadata→PlaybackItem 转换器
 > `N→M`、Media3 会话 `k2→m2` / `z2→B2` / `b3→d3` / `x1→y1`，正在播放页的绑定基类
 > `q8/la→q8/ma`（标题控件 `p0→o0`，歌手控件 `o0→n0`，PlaybackItem 字段 `s0→r0`）；
-> r59 补上 1614 的 Kotlin 协程混淆名位移（`EmptyCoroutineContext`：`fi.f→fi.g`，`Result$Failure`：`bi.q$a→bi.p$a`），
-> 并将这三处 `classes4.dex` 协程契约纳入 `verify_reflection_names.py` 预检。
-> **1614 目前只有本地解码比对与 CI 校验，尚未实机验证。**
-> r58 的构建为 Build #185（Release `v1.0.0-build-185`）：CI 全绿，成品 helper DEX 里 marker 是 `r58-1614`、没有 r57 残留，并在签名后的 APK 上复核了六个歌词钩子、标题/歌手接缝、目录地区 seam、
-> 歌名/歌手 getter、车机封面钩子与 vivo browse（`out/report/verified-*.txt`）。**1614 尚未实机验证。**
+> r59（Build #186，Release `v1.0.0-build-186`）补上 r58 漏改的 1614 Kotlin 协程混淆名位移
+> （`EmptyCoroutineContext`：`fi.f→fi.g`，`Result$Failure`：`bi.q$a→bi.p$a`），
+> 并将这三处 `classes4.dex` 协程契约纳入 `verify_reflection_names.py` 预检；**已于 2026-11-15 实机确认歌名/歌手修正恢复正常**。
 > r55 曾误把 bit 64 当「列表入口」再加进 support_event——反编译 6.2.5.6 后确认 64 实为「收藏」
 > （`MusicControlPanelView.isFavoriteEnable()` / `f5.w0.t`），r56 保留该位但改名为收藏位；
 > 真正的「播放列表」走 MediaBrowser 的 browse 通道，r56 新增擦边实现；
@@ -290,8 +288,8 @@ sequenceDiagram
 | Application 获取 | `appleApplication` | `AppleMusicApplication$a.c()` / `a()` | 同 |
 | Catalog API 实例 | `findCatalogApi` | `MediaApiRepositoryHolder.Companion.getMediaApi()` | 同 |
 | Catalog 方法 | `CatalogQueryMethod` | 非 static `Object F(String, Map, Continuation)`，失败时 `findUnique` | 同 |
-| Continuation 上下文 | `CatalogTitleResolver.emptyContext` | `kotlin.coroutines.EmptyCoroutineContext`（回退 `fi.g`） | 回退 `fi.f` |
-| Result 失败类型 | `CatalogTitleResolver.failureOf` | `kotlin.Result$Failure`（回退 `bi.p$a`） | 回退 `bi.q$a` |
+| Continuation 上下文 | `CatalogTitleResolver.emptyContext` | **`fi.g`**（实现 `Lfi/f;`，单例 `a:Lfi/g;`；未混淆名 `EmptyCoroutineContext` 仅用于单元测试，发行包中不存在） | **`fi.f`**（实现 `Lfi/e;`） |
+| Result 失败类型 | `CatalogTitleResolver.failureOf` | **`bi.p$a`**（异常字段 `a:Ljava/lang/Throwable;`；未混淆名 `Result$Failure` 仅用于单元测试，发行包中不存在） | **`bi.q$a`** |
 | 正在播放 StoreMediaItem | `writeCorrectedTrack` | `playback.model.StoreMediaItem`（`title` / `artistName`） | 同 |
 
 > 注意：1614 中 `player.N` 是**播放管理器**（`implements Lz3/F;`，`getCurrentPosition`/`play`/`seekTo` 全在这里）、
@@ -300,6 +298,17 @@ sequenceDiagram
 > 并校验返回类型是 `PlaybackItem`（helper 已强制这一点）。
 > 1614 里 `k0.b` 是 `J4.y1$b`（继承 `J4.m2`），`service.y` 也是同一个类型；`m2.c()` 返回 `z3.F`，
 > 而播放管理器本身就实现了 `z3.F`，所以 `session.c() == manager` 的恒等检查照旧成立。
+>
+> **Kotlin 协程混淆名核对要点（r58 漏改复盘）**：正式版 APK（`smali_classes4/`）只保留了
+> `kotlin.coroutines.Continuation` 接口名，其余 Kotlin 标准库全部被 R8 混淆——也就是说真机运行时
+> **永远走混淆名**（未混淆名只在纯 JVM 单元测试里命中）。升级时必须先看
+> `smali_classes4/kotlin/coroutines/Continuation.smali` 里 `getContext()` 的返回类型（即混淆后的
+> `CoroutineContext` 接口，1611 为 `Lfi/e;`，1614 位移为 `Lfi/f;`），再找实现该接口且带
+> `public static final a:Lfi/<X>;` 的 `EmptyCoroutineContext` 单例类（1611 为 `fi.f`，1614 为 `fi.g`）。
+> 若漏改，旧名字 `fi.f` 在新包里恰好变成接口本身，不含静态单例字段，`emptyContext` 会直接抛
+> `ClassNotFoundException: Host EmptyCoroutineContext unavailable`，导致全部实时目录查询失效。同理，
+> `kotlin.Result$Failure`（`smali_classes4/bi/<X>$a.smali`，含 `public final a:Ljava/lang/Throwable;`）
+> 也必须同步核对。这两项自 r59 起已纳入 `verify_reflection_names.py` 静态预检。
 
 > 上表里能静态确认的条目已由 `cloud-patch/verify_reflection_names.py` 覆盖：
 > `apply.sh` 在打补丁前预检，`rebuild.sh` 在最终 APK 上再验一次，结果写入
@@ -415,6 +424,7 @@ adb logcat -s VivoCarTitle
 ```
 
 - [ ] 正常播放；无损/杜比全景声正常。
+- [ ] **必须测试未缓存的新歌并看 `adb logcat -s VivoCarTitle`**：`adb install -r` 覆盖安装会保留磁盘缓存 `vivo-car-title-cn-v1.properties`（TTL 30 天），已缓存的老歌即使实时目录查询彻底坏掉也能正常显示中文，只有播从未缓存过的新歌并确认 logcat 无 `catalog query failed` / `batch query failed` 才算通过。
 - [ ] 歌单、专辑页的歌名和**歌手**在预取后刷新为简体，滚动不卡顿。
 - [ ] 正在播放页的歌名和**歌手**（来自 `a1.y0` 副标题）正确；古典作曲者和
       contentType 9 的格式化副标题保持宿主样式。
